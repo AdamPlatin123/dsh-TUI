@@ -1022,7 +1022,19 @@ export function PromptInput({
         flexDirection="column"
         alignItems="flex-start"
         justifyContent="flex-start"
-        borderColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
+        // Prefix routing tint: a leading `!` runs locally (bashBorder — the
+        // same rose the transcript paints `!` lines with), `@` opens file
+        // mention (amber), `/` a slash command (suggestion blue). The prefix
+        // decides where THIS text goes, so it wins over the plan-mode tint;
+        // mid-message `@` mentions are already signaled by the completion
+        // overlay, leading-char only here.
+        borderColor={
+          value.startsWith('!') ? 'bashBorder'
+            : value.startsWith('@') ? 'warning'
+              : value.startsWith('/') ? 'suggestion'
+                : channel.mode.plan === true ? 'planMode'
+                  : 'promptBorder'
+        }
         borderStyle="round"
         borderLeft={false}
         borderRight={false}
