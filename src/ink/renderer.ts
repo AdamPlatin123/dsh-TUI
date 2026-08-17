@@ -4,8 +4,10 @@ import type { Frame } from './frame.js'
 import { consumeAbsoluteRemovedFlag } from './node-cache.js'
 import Output from './output.js'
 import renderNodeToOutput, {
+  didAbsoluteLayoutShift,
   getScrollDrainNode,
   getScrollHint,
+  resetAbsoluteRecomposePass,
   resetLayoutShifted,
   resetScrollDrainNode,
   resetScrollHint,
@@ -142,6 +144,18 @@ export default function createRenderer(
           ? undefined
           : prevScreen,
     })
+
+    // An absolute overlay can cover cells owned by unrelated clean subtrees.
+    // If that overlay moves or shrinks, the first pass clears its old rect but
+    // cannot recover the underlay from prevScreen: those cells still contain
+    // the previous overlay. Repeat only this transition frame without blits so
+    // normal-flow content and the overlay are composited in current tree order.
+    // Steady-state frames keep the cached O(changed cells) path above.
+    if (didAbsoluteLayoutShift()) {
+      output.reset(width, height, screen)
+      resetAbsoluteRecomposePass()
+      renderNodeToOutput(node, output, { prevScreen: undefined })
+    }
 
     const renderedScreen = output.get()
 

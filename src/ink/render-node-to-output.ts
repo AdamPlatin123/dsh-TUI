@@ -33,9 +33,17 @@ function isXtermJsHost(): boolean {
 // O(rows×cols).
 let layoutShifted = false
 
+// An absolute node paints over content that may belong to an unrelated
+// subtree. When its rect changes, clearing the old rect is not enough: clean
+// underlay nodes can only blit the previous screen, whose cells still contain
+// the old overlay. renderer.ts uses this flag to repeat the pass without a
+// prevScreen so the current underlay and overlay are composited from scratch.
+let absoluteLayoutShifted = false
+
 /** Reset the per-frame layout-shift flag. */
 export function resetLayoutShifted(): void {
   layoutShifted = false
+  absoluteLayoutShifted = false
 }
 
 /**
@@ -44,6 +52,11 @@ export function resetLayoutShifted(): void {
  */
 export function didLayoutShift(): boolean {
   return layoutShifted
+}
+
+/** Whether an absolute-positioned node changed position or size this frame. */
+export function didAbsoluteLayoutShift(): boolean {
+  return absoluteLayoutShifted
 }
 
 // DECSTBM scroll optimization hint. When a ScrollBox's scrollTop changes
@@ -73,6 +86,18 @@ let absoluteRectsCur: Rectangle[] = []
 export function resetScrollHint(): void {
   scrollHint = null
   absoluteRectsPrev = absoluteRectsCur
+  absoluteRectsCur = []
+}
+
+/**
+ * Discard first-pass bookkeeping before an absolute-layout recomposition.
+ * Do not rotate absoluteRectsPrev again: it still describes the preceding
+ * terminal frame. Follow-scroll and drain state are intentionally retained;
+ * the first pass may already have consumed a pending scroll delta.
+ */
+export function resetAbsoluteRecomposePass(): void {
+  absoluteLayoutShifted = false
+  scrollHint = null
   absoluteRectsCur = []
 }
 
@@ -539,6 +564,9 @@ function renderNodeToOutput(
         cached.height !== height)
     if (positionChanged) {
       layoutShifted = true
+      if (node.style.position === 'absolute') {
+        absoluteLayoutShifted = true
+      }
     }
     if (cached && (node.dirty || positionChanged)) {
       output.clear(
