@@ -131,7 +131,7 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   register(provider: TuiWorkspaceProvider): () => void {
-    const caller = requirePluginCaller(this.ctx, 'tuiWorkspaces.register')
+    const caller = requirePluginCaller(this.ctx, 'tuiWorkspaces.register', this)
     const state = workspaceStateFor(this)
     state.providers.add(provider)
     this.notifyProviderWaiters()

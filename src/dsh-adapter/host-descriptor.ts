@@ -90,7 +90,7 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
     : [...HOST_FACET_API_VERSIONS]
 
   if (data === undefined) {
-    warnings.push('admission profile unavailable (ecosystem-spec/); advertising an empty protocol surface')
+    warnings.push('admission profile unavailable (dsh-ecosystem-spec/); advertising an empty protocol surface')
   } else {
     const index = createContractIndex(data.registry, data.permissions)
     for (const coordinate of options.supported ?? HOST_SUPPORTED_CONTRACTS) {

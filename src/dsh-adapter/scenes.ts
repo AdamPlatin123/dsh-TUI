@@ -105,7 +105,7 @@ export class TuiSceneRuntime extends Service {
    */
   register(descriptor: TuiSceneDescriptor, identity?: Context): () => void {
     const state = sceneStateFor(this)
-    const caller = requirePluginCaller(this.ctx, 'tuiScenes.register')
+    const caller = requirePluginCaller(this.ctx, 'tuiScenes.register', this)
     const callerIdentity = componentIdentityOf(caller)
     const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
     if (identity !== undefined && callerIdentity !== undefined && suppliedIdentity !== callerIdentity) {
@@ -159,12 +159,12 @@ export class TuiSceneRuntime extends Service {
    * the log, not silently do nothing in the UI.
    */
   open(id: string): boolean {
-    const caller = requirePluginCaller(this.ctx, 'tuiScenes.open')
+    const caller = requirePluginCaller(this.ctx, 'tuiScenes.open', this)
     return openScene(this, id, caller)
   }
 
   close(): void {
-    const caller = requirePluginCaller(this.ctx, 'tuiScenes.close')
+    const caller = requirePluginCaller(this.ctx, 'tuiScenes.close', this)
     closeScene(this, caller)
   }
 
@@ -175,7 +175,7 @@ export class TuiSceneRuntime extends Service {
 
   /** UI-side change feed: fired after every open/close/dispose transition. */
   subscribe(listener: () => void): () => void {
-    const caller = requirePluginCaller(this.ctx, 'tuiScenes.subscribe')
+    const caller = requirePluginCaller(this.ctx, 'tuiScenes.subscribe', this)
     const dispose = subscribeScenes(this, listener)
     bindCallerEffect(caller, dispose)
     return dispose

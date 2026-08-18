@@ -40,10 +40,10 @@ const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const specDir = join(root, 'ecosystem-spec')
+const specDir = join(root, 'dsh-ecosystem-spec')
 const data = loadSpecData(specDir)
 if (!data) {
-  console.error('vendored spec data unreadable (ecosystem-spec/)')
+  console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
   process.exit(1)
 }
 const index = createContractIndex(data.registry, data.permissions)
@@ -443,10 +443,10 @@ check1('decision permission map is immutable',
   // D2. 篡改 contract 文件 → 剔除 + warn（fail closed），descriptor 仍过 schema。
   const tamperedRoot = mkdtempSync(join(tmpdir(), 'dsh-descriptor-tamper-'))
   cleanup.push(tamperedRoot)
-  cpSync(specDir, join(tamperedRoot, 'ecosystem-spec'), { recursive: true })
-  const target = join(tamperedRoot, 'ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
+  cpSync(specDir, join(tamperedRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  const target = join(tamperedRoot, 'dsh-ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
-  const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'ecosystem-spec') })
+  const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'dsh-ecosystem-spec') })
   check1('tampered private definition dropped',
     tampered.dropped.includes('x-ccch1mneyyy.tui/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
   check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
@@ -478,12 +478,12 @@ check1('decision permission map is immutable',
   // 绝不把 TypeError 留到 verify*/boot 自检里炸出来（fail-soft）。
   const malformedRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-'))
   cleanup.push(malformedRoot)
-  cpSync(specDir, join(malformedRoot, 'ecosystem-spec'), { recursive: true })
-  writeFileSync(join(malformedRoot, 'ecosystem-spec', 'registry', 'registry-0.15.json'),
+  cpSync(specDir, join(malformedRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  writeFileSync(join(malformedRoot, 'dsh-ecosystem-spec', 'registry', 'registry-0.15.json'),
     JSON.stringify({ profileVersion: 'tui-admission/0.15', std: {}, imports: null, definitions: [], facetApiVersions: [] }))
   check1('structurally malformed registry loads as unavailable',
-    loadSpecData(join(malformedRoot, 'ecosystem-spec')) === undefined)
-  const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'ecosystem-spec') })
+    loadSpecData(join(malformedRoot, 'dsh-ecosystem-spec')) === undefined)
+  const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'dsh-ecosystem-spec') })
   check1('malformed data degrades the descriptor to an empty surface (no throw)',
     malformedBuild.descriptor.contracts.length === 0 && malformedBuild.warnings.length > 0)
   // verify* 对手工构造的坏数据也只回违规字符串。
@@ -508,11 +508,11 @@ check1('decision permission map is immutable',
   // 权限注册表 malformed（permissions 不是数组）同样整体不可用。
   const malformedPermsRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-perms-'))
   cleanup.push(malformedPermsRoot)
-  cpSync(specDir, join(malformedPermsRoot, 'ecosystem-spec'), { recursive: true })
-  writeFileSync(join(malformedPermsRoot, 'ecosystem-spec', 'registry', 'permissions-0.1.json'),
+  cpSync(specDir, join(malformedPermsRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  writeFileSync(join(malformedPermsRoot, 'dsh-ecosystem-spec', 'registry', 'permissions-0.1.json'),
     JSON.stringify({ registryVersion: '0.1', permissions: 'nope' }))
   check1('structurally malformed permissions load as unavailable',
-    loadSpecData(join(malformedPermsRoot, 'ecosystem-spec')) === undefined)
+    loadSpecData(join(malformedPermsRoot, 'dsh-ecosystem-spec')) === undefined)
 }
 
 // ── E. patch 面与 exports 接线 ────────────────────────────────────────────

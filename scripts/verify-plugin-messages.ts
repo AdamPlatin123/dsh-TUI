@@ -50,9 +50,9 @@ const { validateMessageEvent } = await import('@dsh-std/messages')
 import type { MessagesObserveEnvelope } from '../src/dsh-adapter/message-observer.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const data = loadSpecData(join(root, 'ecosystem-spec'))
+const data = loadSpecData(join(root, 'dsh-ecosystem-spec'))
 if (!data) {
-  console.error('vendored spec data unreadable (ecosystem-spec/)')
+  console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
   process.exit(1)
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))

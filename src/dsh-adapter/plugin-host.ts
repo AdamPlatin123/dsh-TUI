@@ -247,7 +247,7 @@ hostContext: compositionRoot(ctx),
   ): () => boolean {
     const host = hostContextFor(this)
     assertActivationContext(host, pluginCtx)
-    assertCallerContext(this.ctx, pluginCtx, 'DecisionEvents.subscribe')
+    assertCallerContext(this.ctx, pluginCtx, 'DecisionEvents.subscribe', this)
     const identity = requireComponentIdentity(pluginCtx)
     if (!requiresDecisionEvents(identity)) {
       throw new Error(
@@ -316,7 +316,7 @@ hostContext: compositionRoot(ctx),
   ): () => void {
     const host = hostContextFor(this)
     assertActivationContext(host, pluginCtx)
-    assertCallerContext(this.ctx, pluginCtx, 'commands.register')
+    assertCallerContext(this.ctx, pluginCtx, 'commands.register', this)
     // Resolve through the registrant context so dsh-commands attaches the
     // registration to that agent's scoped layer rather than the host-global
     // layer. Its traceable service proxy carries this context into register().
@@ -412,7 +412,7 @@ hostContext: compositionRoot(ctx),
    */
   selfCheck(): string[] {
     const data = loadSpecData()
-    if (data === undefined) return ['vendored spec data unavailable (ecosystem-spec/)']
+    if (data === undefined) return ['vendored spec data unavailable (dsh-ecosystem-spec/)']
     return [...verifyRegistry(data), ...verifyContractProfiles(data)]
   }
 }

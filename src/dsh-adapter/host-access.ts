@@ -50,13 +50,31 @@ export function compositionRoot(ctx: Context): Context {
   }
 }
 
+/** Recover the composition root that owns a traceable service. Cordis stores
+ * the provider context on the concrete Service instance; callers may reach
+ * that instance through a proxy from another composition, so this must be
+ * resolved from the unwrapped service rather than from the call context. */
+export function serviceCompositionRoot(service: object): Context | undefined {
+  try {
+    const owner = (concreteService(service) as { ctx?: unknown }).ctx
+    return Context.is(owner) ? compositionRoot(owner) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Explicit context arguments on mediated APIs may be supplied by host code
  * running from the composition root, or may be the activation making the
  * service call.  A non-root plugin cannot nominate a different activation's
  * context and thereby borrow its verified identity/lifecycle. */
-export function assertCallerContext(caller: Context, target: Context, capability: string): void {
+export function assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void {
   if (!Context.is(caller) || !Context.is(target)) {
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
+  }
+  const ownerRoot = service === undefined ? undefined : serviceCompositionRoot(service)
+  if (ownerRoot !== undefined
+    && (compositionRoot(caller) !== ownerRoot || compositionRoot(target) !== ownerRoot)) {
+    throw new Error(`dsh-tui: ${capability} context belongs to a different composition`)
   }
   if (caller === target) return
   try {
@@ -80,7 +98,7 @@ export function assertCallerContext(caller: Context, target: Context, capability
  * code must use the module-local host accessor for controls it owns; the
  * public service surface only accepts a live non-root activation.
  */
-export function requirePluginCaller(caller: Context, capability: string): Context {
+export function requirePluginCaller(caller: Context, capability: string, service?: object): Context {
   if (!Context.is(caller)) {
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
   }
@@ -88,6 +106,10 @@ export function requirePluginCaller(caller: Context, capability: string): Contex
     const root = caller.root
     if (!Context.is(root) || caller === root || caller.fiber === root.fiber) {
       throw new Error(`dsh-tui: ${capability} requires a non-root calling activation`)
+    }
+    const ownerRoot = service === undefined ? undefined : serviceCompositionRoot(service)
+    if (ownerRoot !== undefined && compositionRoot(caller) !== ownerRoot) {
+      throw new Error(`dsh-tui: ${capability} context belongs to a different composition`)
     }
     return caller
   } catch (error) {

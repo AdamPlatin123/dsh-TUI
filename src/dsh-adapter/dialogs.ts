@@ -286,7 +286,7 @@ export class TuiDialogRuntime extends Service {
    * the explicit overloads below make ownership unambiguous for embedders and
    * tests that retain the service instance directly. */
   private callContext(value: unknown): Context {
-    const caller = requirePluginCaller(this.ctx, 'tuiDialogs')
+    const caller = requirePluginCaller(this.ctx, 'tuiDialogs', this)
     if (!Context.is(value)) return caller
     // An explicit owner is accepted only when it is the activation that made
     // the service call.  Otherwise a plugin could pass the root (or another

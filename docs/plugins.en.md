@@ -98,7 +98,7 @@ What lives in this repository:
 
 - `vendor/dsh-std/` — the pinned-revision official protocol packages
   (manifest parser, projection, ProtocolCatalog, and contract validators).
-- `ecosystem-spec/` — the pinned admission-profile registry, schemas, and
+- `dsh-ecosystem-spec/` — the pinned admission-profile submodule containing the registry, schemas, and
   conformance fixtures; `npm run verify:plugin-spec` checks profile hashes and
   fixture drift.
 - `src/plugin-spec/` — the validation/negotiation layer: the official parser

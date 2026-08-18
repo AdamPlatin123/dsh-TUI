@@ -128,7 +128,7 @@ export class TuiSettingsSectionsRuntime extends Service {
   }
 
   register(section: TuiSettingsSection): () => void {
-    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.register')
+    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.register', this)
     const dispose = registerSection(this, section)
     bindCallerEffect(caller, dispose)
     return dispose
@@ -149,7 +149,7 @@ export class TuiSettingsSectionsRuntime extends Service {
    * re-read the section list (a plugin (un)loading mid-session changes it).
    */
   subscribe(listener: () => void): () => void {
-    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.subscribe')
+    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.subscribe', this)
     const dispose = subscribeSections(this, listener)
     bindCallerEffect(caller, dispose)
     return dispose

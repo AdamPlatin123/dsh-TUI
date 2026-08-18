@@ -26,7 +26,7 @@ const REGISTRY_FILE = join('registry', 'registry-0.15.json')
 export function locateSpecDir(start: string = dirname(fileURLToPath(import.meta.url))): string | undefined {
   let dir = start
   for (let index = 0; index < 8; index++) {
-    if (existsSync(join(dir, 'ecosystem-spec', REGISTRY_FILE))) return join(dir, 'ecosystem-spec')
+    if (existsSync(join(dir, 'dsh-ecosystem-spec', REGISTRY_FILE))) return join(dir, 'dsh-ecosystem-spec')
     const parent = dirname(dir)
     if (parent === dir) return undefined
     dir = parent

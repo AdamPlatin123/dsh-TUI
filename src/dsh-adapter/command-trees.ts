@@ -29,7 +29,7 @@ export class TuiCommandTreeRuntime extends Service {
   }
 
   register(provider: TuiCommandTreeProvider): () => void {
-    const caller = requirePluginCaller(this.ctx, 'tuiCommandTrees.register')
+    const caller = requirePluginCaller(this.ctx, 'tuiCommandTrees.register', this)
     const state = commandTreeStateFor(this)
     const root = provider.root.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_-]*$/u.test(root)) throw new TypeError(`invalid TUI command-tree root: ${provider.root}`)

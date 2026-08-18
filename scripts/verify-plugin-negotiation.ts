@@ -40,7 +40,7 @@ const { createContractIndex, validatePlugin } = await import('../src/plugin-spec
 const { negotiate } = await import('../src/plugin-spec/negotiate.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const fixture = (name: string) => join(root, 'ecosystem-spec', 'conformance', 'fixtures', name)
+const fixture = (name: string) => join(root, 'dsh-ecosystem-spec', 'conformance', 'fixtures', name)
 const cleanup: string[] = [fakeHome]
 
 let checks = 0

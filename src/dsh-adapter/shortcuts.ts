@@ -268,7 +268,7 @@ export class TuiShortcutRuntime extends Service {
   register(combo: string, options: TuiShortcutOptions, identity?: Context): () => void {
     let caller: Context
     try {
-      caller = requirePluginCaller(this.ctx, 'tuiShortcuts.register')
+      caller = requirePluginCaller(this.ctx, 'tuiShortcuts.register', this)
     } catch {
       this.ctx.logger.warn('dsh-tui: tuiShortcuts.register requires a live non-root plugin activation')
       return () => {}

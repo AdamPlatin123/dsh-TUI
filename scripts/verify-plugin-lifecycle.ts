@@ -96,6 +96,65 @@ check('root workspace registration is rejected', rootWorkspaceRejected)
 check('root command-tree registration is rejected', rootTreeRejected)
 await rootProbe.dispose()
 
+// A traceable service proxy can be copied into another Cordis composition.
+// The receiving composition must not be able to use that proxy to mutate the
+// host registry or bind cleanup to its own fiber; otherwise an effect survives
+// the plugin that initiated the call.
+const foreignRoot = new Context()
+let foreignDialog: Promise<boolean> | undefined
+let foreignSceneRejected = false
+let foreignSettingsRejected = false
+let foreignWorkspaceRejected = false
+let foreignTreeRejected = false
+const foreignFiber = foreignRoot.plugin({
+  name: 'foreign-composition',
+  apply: (foreignCtx) => {
+    const trace = (name: string): any => foreignCtx.reflect.trace(root.get(name))
+    trace('tuiStatus')?.set('foreign-leak', 'must not persist')
+    trace('tuiShortcuts')?.register('alt+y', { description: 'foreign leak', handler: () => {} })
+    trace('tuiRenderers')?.register('foreign/leak', () => ({ lines: ['must not persist'] }))
+    foreignDialog = trace('tuiDialogs')?.confirm({ title: 'must not queue' })
+    try {
+      trace('tuiScenes')?.register({ id: 'foreign-leak', component: () => null })
+    } catch {
+      foreignSceneRejected = true
+    }
+    try {
+      trace('tuiSettingsSections')?.register({ ns: 'foreign-leak', title: 'Foreign leak', fields: [] })
+    } catch {
+      foreignSettingsRejected = true
+    }
+    try {
+      trace('tuiWorkspaces')?.register({
+        schemes: ['foreign-leak'],
+        list: () => [],
+        resolve: () => undefined,
+        describe: () => undefined,
+      })
+    } catch {
+      foreignWorkspaceRejected = true
+    }
+    try {
+      trace('tuiCommandTrees')?.register({ root: 'foreign-leak', children: () => [] })
+    } catch {
+      foreignTreeRejected = true
+    }
+  },
+})
+await foreignFiber
+check('cross-composition scene registration is rejected', foreignSceneRejected)
+check('cross-composition settings registration is rejected', foreignSettingsRejected)
+check('cross-composition workspace registration is rejected', foreignWorkspaceRejected)
+check('cross-composition command-tree registration is rejected', foreignTreeRejected)
+check('cross-composition proxy cannot leave UI effects',
+  status.getSnapshot().length === 0
+  && shortcuts.dispatch('y', { meta: true }) === false
+  && renderers.render('foreign/leak', {}) === undefined
+  && dialogs.getSnapshot() === null
+  && (await foreignDialog) === false)
+await foreignFiber.dispose()
+await foreignRoot.fiber.dispose()
+
 let pluginDialog: Promise<boolean> | undefined
 const pluginFiber = root.inject(
   ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],

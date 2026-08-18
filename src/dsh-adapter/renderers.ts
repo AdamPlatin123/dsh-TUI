@@ -95,7 +95,7 @@ export class TuiRendererRuntime extends Service {
   register(type: string, renderer: TuiEntryRenderer, identity?: Context): () => void {
     let caller: Context
     try {
-      caller = requirePluginCaller(this.ctx, 'tuiRenderers.register')
+      caller = requirePluginCaller(this.ctx, 'tuiRenderers.register', this)
     } catch {
       this.ctx.logger.warn('dsh-tui: tuiRenderers.register requires a live non-root plugin activation')
       return () => {}

@@ -284,7 +284,7 @@ hostContext: compositionRoot(ctx),
    * disposer); data is retained (contract cleanup rule).
    */
   open(pluginCtx: Context): TuiPluginStorage {
-    assertCallerContext(this.ctx, pluginCtx, 'storage.local.open')
+    assertCallerContext(this.ctx, pluginCtx, 'storage.local.open', this)
     const state = storageStateFor(this)
     const identity = requireComponentIdentity(pluginCtx)
     if (!requiresContract(identity, 'storage.dsh/v1alpha1', 'LocalStorage')) {

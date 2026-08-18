@@ -305,7 +305,7 @@ hostContext: compositionRoot(ctx),
    * unloads.
    */
   subscribe(pluginCtx: Context, listener: MessagesObserveListener, options: { scope: string }): () => void {
-    assertCallerContext(this.ctx, pluginCtx, 'messages.observe.subscribe')
+    assertCallerContext(this.ctx, pluginCtx, 'messages.observe.subscribe', this)
     const identity = requireComponentIdentity(pluginCtx)
     const plugin = identity.componentId
     if (!requiresContract(identity, 'messages.dsh/v1alpha1', 'MessageObserver')) {

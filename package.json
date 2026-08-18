@@ -69,8 +69,8 @@
     "lib",
     "cordis.patch.yml",
     "cordis.yml",
-    "ecosystem-spec/registry",
-    "ecosystem-spec/schemas",
+    "dsh-ecosystem-spec/registry",
+    "dsh-ecosystem-spec/schemas",
     "presets",
     "skills"
   ],

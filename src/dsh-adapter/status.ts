@@ -146,7 +146,7 @@ export class TuiStatusRuntime extends Service {
     const noop = (): void => {}
     let caller: Context
     try {
-      caller = requirePluginCaller(this.ctx, 'tuiStatus.set')
+      caller = requirePluginCaller(this.ctx, 'tuiStatus.set', this)
     } catch {
       this.ctx.logger.warn('dsh-tui: tuiStatus.set requires a live non-root plugin activation')
       return noop

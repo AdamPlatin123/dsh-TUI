@@ -88,7 +88,7 @@ v0.15。要点：
 
 - `vendor/dsh-std/` — 固定 revision 的官方协议包（manifest parser、
   projection、ProtocolCatalog 与各契约 validator）。
-- `ecosystem-spec/` — 固定 admission profile 的只读 registry / schema /
+- `dsh-ecosystem-spec/` — 通过 submodule 固定 admission profile 的只读 registry / schema /
   conformance fixtures；`npm run verify:plugin-spec` 检查 profile hash 与
   fixtures 漂移。
 - `src/plugin-spec/` — 校验/协商纯库：官方 parser 负责 manifest 形状，
