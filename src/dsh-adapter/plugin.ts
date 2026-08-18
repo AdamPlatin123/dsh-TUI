@@ -35,6 +35,7 @@ import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
@@ -987,7 +988,7 @@ function resumeCommand(profile: string | undefined, sessionId: string): string {
 function disposeRootAndThen(ctx: Context, done: () => void, fallbackCode = 1): void {
   const timer = setTimeout(() => process.exit(fallbackCode), 5000)
   timer.unref()
-  void ctx.root.fiber.dispose().then(
+  void withHostRootCapability(() => ctx.root.fiber.dispose()).then(
     () => {
       clearTimeout(timer)
       done()

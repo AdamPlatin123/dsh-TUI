@@ -10,7 +10,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
 
 /** One rendered contribution. */
@@ -24,6 +24,7 @@ export interface TuiStatusEntry {
 const KEY_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/u
 const TEXT_CELLS = 200
 const MAX_ENTRIES = 20
+const HOST_STATUS_OWNER = Object.freeze({ kind: 'host-status-owner' })
 
 /** Cordis-free keyed-text store. Render order is first-set order (Map
  *  insertion order), so a plugin's line never jumps around on updates. */
@@ -33,13 +34,13 @@ export class TuiStatusStore {
   // value comparison has an ABA hole (set 'x', set 'x' again, the first
   // disposer would wipe the second write, e.g. a hot reload restoring the
   // same status text).
-  private readonly entries = new Map<string, { text: string; token: number; owner: string }>()
+  private readonly entries = new Map<string, { text: string; token: number; owner: object }>()
   // useSyncExternalStore requires a referentially stable snapshot between
   // emits — a fresh array per call would re-render in an infinite loop.
   private snapshot: readonly TuiStatusEntry[] = []
 
   /** Set or clear (undefined/empty) one key. */
-  set(key: string, text: string | undefined, token = 0, owner = 'host'): void {
+  set(key: string, text: string | undefined, token = 0, owner: object = HOST_STATUS_OWNER): void {
     const had = this.entries.has(key)
     if (text === undefined || text === '') {
       if (!had) return
@@ -65,14 +66,14 @@ export class TuiStatusStore {
 
   /** Host runtime uses this to enforce that one activation cannot rewrite or
    * clear another activation's keyed contribution. */
-  ownerOf(key: string): string | undefined {
+  ownerOf(key: string): object | undefined {
     return this.entries.get(key)?.owner
   }
 
   /** Clear `key` only while it still holds the write tagged `token` — a
    *  stale disposer must not wipe a newer contribution (even one with
    *  identical text). Returns true when this call actually cleared. */
-  clearIf(key: string, token: number, owner?: string): boolean {
+  clearIf(key: string, token: number, owner?: object): boolean {
     if (owner !== undefined && this.entries.get(key)?.owner !== owner) return false
     if (this.entries.get(key)?.token !== token) return false
     this.entries.delete(key)
@@ -164,9 +165,11 @@ export class TuiStatusRuntime extends Service {
         return noop
       }
     }
-    const owner = suppliedIdentity === undefined
-      ? 'host'
-      : `${suppliedIdentity.componentId}\0${suppliedIdentity.activationId}`
+    const owner = activationFiber(caller)
+    if (owner === undefined) {
+      caller.logger.warn('dsh-tui: tuiStatus.set requires a live activation owner')
+      return noop
+    }
     let normalized: string
     try {
       normalized = String(key ?? '').trim().toLowerCase()

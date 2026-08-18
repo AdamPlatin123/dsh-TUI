@@ -3,7 +3,7 @@
 import type React from 'react'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Channel } from './channel.js'
-import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
 
 /**
@@ -107,14 +107,13 @@ export class TuiSceneRuntime extends Service {
   register(descriptor: TuiSceneDescriptor, identity?: Context): () => void {
     const state = sceneStateFor(this)
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.register', this)
+    const activationOwner = activationFiber(caller)
+    if (activationOwner === undefined) throw new Error('dsh-tui: tuiScenes.register requires a live activation')
     const callerIdentity = componentIdentityOf(caller)
     const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
     if (identity !== undefined && callerIdentity !== undefined && suppliedIdentity !== callerIdentity) {
       throw new Error('dsh-tui: tuiScenes.register identity belongs to another activation')
     }
-    const owner = suppliedIdentity === undefined
-      ? 'host'
-      : `${suppliedIdentity.componentId}\0${suppliedIdentity.activationId}`
     const id = descriptor.id.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_-]*$/u.test(id)) throw new TypeError(`invalid TUI scene id: ${descriptor.id}`)
     if (state.scenes.has(id)) {
@@ -131,7 +130,7 @@ export class TuiSceneRuntime extends Service {
     }
     const normalized = Object.freeze({ ...descriptor, id })
     state.scenes.set(id, normalized)
-    state.owners.set(id, owner)
+    state.owners.set(id, activationOwner)
     caller.get('tuiEffectLedger')?.record(
       { operation: 'create', resource: { kind: 'scene', id }, result: 'applied' },
       identity,
@@ -147,7 +146,7 @@ export class TuiSceneRuntime extends Service {
       // Disposing the open scene must not strand the user on a dead screen.
       if (state.current === normalized) {
         state.current = undefined
-        notifyScenes(state)
+        notifyScenes(state, activationOwner)
       }
     }
     bindCallerEffect(caller, dispose)
@@ -161,23 +160,32 @@ export class TuiSceneRuntime extends Service {
    */
   open(id: string): boolean {
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.open', this)
-    return openScene(this, id, caller)
+    const owner = activationFiber(caller)
+    return owner === undefined ? false : openScene(this, id, caller, owner)
   }
 
   close(): void {
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.close', this)
-    closeScene(this, caller)
+    const owner = activationFiber(caller)
+    if (owner !== undefined) closeScene(this, caller, owner)
   }
 
   /** The scene currently replacing the conversation, if any. */
   get active(): TuiSceneDescriptor | undefined {
-    return sceneStateFor(this).current
+    const caller = requirePluginCaller(this.ctx, 'tuiScenes.active', this)
+    const owner = activationFiber(caller)
+    const state = sceneStateFor(this)
+    return owner !== undefined && state.current !== undefined && state.owners.get(state.current.id) === owner
+      ? state.current
+      : undefined
   }
 
   /** UI-side change feed: fired after every open/close/dispose transition. */
   subscribe(listener: () => void): () => void {
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.subscribe', this)
-    const dispose = subscribeScenes(this, listener)
+    const owner = activationFiber(caller)
+    if (owner === undefined) return () => {}
+    const dispose = subscribeScenes(this, listener, owner)
     bindCallerEffect(caller, dispose)
     return dispose
   }
@@ -186,8 +194,8 @@ export class TuiSceneRuntime extends Service {
 
 interface SceneState {
   readonly scenes: Map<string, TuiSceneDescriptor>
-  readonly owners: Map<string, string>
-  readonly listeners: Set<() => void>
+  readonly owners: Map<string, object>
+  readonly listeners: Set<{ owner: object | undefined; listener: () => void }>
   current: TuiSceneDescriptor | undefined
   host: TuiSceneHost | undefined
   readonly logger: Context['logger']
@@ -201,56 +209,51 @@ function sceneStateFor(runtime: TuiSceneRuntime): SceneState {
   return state
 }
 
-function openScene(runtime: TuiSceneRuntime, id: string, caller?: Context): boolean {
+function openScene(runtime: TuiSceneRuntime, id: string, caller?: Context, owner?: object): boolean {
   const state = sceneStateFor(runtime)
   const scene = state.scenes.get(id.trim().toLowerCase())
   if (scene === undefined) {
     ;(caller?.logger ?? state.logger).warn(`dsh-tui: no TUI scene registered as "${id}"`)
     return false
   }
-  if (caller !== undefined) {
-    const callerIdentity = componentIdentityOf(caller)
-    if (callerIdentity !== undefined) {
-      const owner = `${callerIdentity.componentId}\0${callerIdentity.activationId}`
-      if (state.owners.get(scene.id) !== owner) {
-        caller.logger.warn(`dsh-tui: scene "${scene.id}" belongs to another activation`)
-        return false
-      }
-    }
+  if (owner !== undefined && state.owners.get(scene.id) !== owner) {
+    caller?.logger.warn(`dsh-tui: scene "${scene.id}" belongs to another activation`)
+    return false
   }
   if (scene === state.current) return true
+  const previousOwner = state.current === undefined ? undefined : state.owners.get(state.current.id)
   state.current = scene
-  notifyScenes(state)
+  notifyScenes(state, previousOwner)
   return true
 }
 
-function closeScene(runtime: TuiSceneRuntime, caller?: Context): void {
+function closeScene(runtime: TuiSceneRuntime, caller?: Context, owner?: object): void {
   const state = sceneStateFor(runtime)
   if (state.current === undefined) return
-  if (caller !== undefined) {
-    const callerIdentity = componentIdentityOf(caller)
-    if (callerIdentity !== undefined) {
-      const owner = `${callerIdentity.componentId}\0${callerIdentity.activationId}`
-      if (state.owners.get(state.current.id) !== owner) {
-        caller.logger.warn(`dsh-tui: scene "${state.current.id}" belongs to another activation`)
-        return
-      }
-    }
+  if (owner !== undefined && state.owners.get(state.current.id) !== owner) {
+    caller?.logger.warn(`dsh-tui: scene "${state.current.id}" belongs to another activation`)
+    return
   }
+  const previousOwner = state.owners.get(state.current.id)
   state.current = undefined
-  notifyScenes(state)
+  notifyScenes(state, previousOwner)
 }
 
-function subscribeScenes(runtime: TuiSceneRuntime, listener: () => void): () => void {
+function subscribeScenes(runtime: TuiSceneRuntime, listener: () => void, owner?: object): () => void {
   const state = sceneStateFor(runtime)
-  state.listeners.add(listener)
+  const entry = { owner, listener }
+  state.listeners.add(entry)
   return () => {
-    state.listeners.delete(listener)
+    state.listeners.delete(entry)
   }
 }
 
-function notifyScenes(state: SceneState): void {
-  for (const listener of state.listeners) listener()
+function notifyScenes(state: SceneState, previousOwner?: object): void {
+  const currentOwner = state.current === undefined ? undefined : state.owners.get(state.current.id)
+  for (const entry of state.listeners) {
+    if (entry.owner !== undefined && entry.owner !== currentOwner && entry.owner !== previousOwner) continue
+    entry.listener()
+  }
 }
 
 export function getHostSceneRuntime(runtime: TuiSceneRuntime | undefined): TuiSceneHost | undefined {

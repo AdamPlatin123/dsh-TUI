@@ -22,7 +22,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Minimal shape of the ink Key flags the matcher reads (kept structurally
  *  compatible with `Key` from the ui kit without importing React-facing
@@ -236,6 +236,7 @@ export class TuiShortcutRuntime extends Service {
     const runtime = this
     const state: ShortcutState = {
       shortcuts: new Map(),
+      owners: new Map(),
       onError: undefined,
       host: undefined,
       logger: ctx.logger,
@@ -275,6 +276,11 @@ export class TuiShortcutRuntime extends Service {
       return () => {}
     }
     const state = shortcutStateFor(this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) {
+      this.ctx.logger.warn('dsh-tui: tuiShortcuts.register requires a live activation')
+      return () => {}
+    }
     let parsed: ParsedCombo | undefined
     try {
       parsed = parseShortcutCombo(combo)
@@ -326,6 +332,7 @@ export class TuiShortcutRuntime extends Service {
     }
     const entry: RegisteredShortcut = { combo: parsed, description, handler }
     state.shortcuts.set(key, entry)
+    state.owners.set(key, owner)
     this.ctx.get('tuiEffectLedger')?.record(
       { operation: 'bind', resource: { kind: 'shortcut', id: key }, result: 'applied' },
       identity,
@@ -333,6 +340,7 @@ export class TuiShortcutRuntime extends Service {
     const dispose = (): void => {
       if (state.shortcuts.get(key) !== entry) return
       state.shortcuts.delete(key)
+      state.owners.delete(key)
       this.ctx.get('tuiEffectLedger')?.record(
         { operation: 'release', resource: { kind: 'shortcut', id: key }, result: 'applied' },
         identity,
@@ -344,8 +352,13 @@ export class TuiShortcutRuntime extends Service {
 
   /** Registered combos with descriptions (diagnostics / future /help). */
   list(): readonly { combo: string; description: string }[] {
-    return [...shortcutStateFor(this).shortcuts.values()]
-      .map(entry => ({ combo: entry.combo.raw, description: entry.description }))
+    const caller = requirePluginCaller(this.ctx, 'tuiShortcuts.list', this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) return []
+    const state = shortcutStateFor(this)
+    return [...state.shortcuts.entries()]
+      .filter(([key]) => state.owners.get(key) === owner)
+      .map(([, entry]) => ({ combo: entry.combo.raw, description: entry.description }))
   }
 }
 
@@ -353,6 +366,7 @@ export class TuiShortcutRuntime extends Service {
  * exports, while the Cordis capability remains register/list only. */
 interface ShortcutState {
   readonly shortcuts: Map<string, RegisteredShortcut>
+  readonly owners: Map<string, object>
   onError: ((combo: string, error: unknown) => void) | undefined
   host: TuiShortcutHost | undefined
   readonly logger: Context['logger']

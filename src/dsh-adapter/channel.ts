@@ -52,7 +52,7 @@ import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
-import type { TuiCommandTreeRuntime } from './command-trees.js'
+import { getHostCommandTrees } from './command-trees.js'
 import { getHostSettingsSections, type TuiSettingsSection, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
 import { getHostSceneRuntime, type TuiSceneDescriptor, type TuiSceneRuntime } from './scenes.js'
@@ -1250,7 +1250,7 @@ export function createChannel(
   // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
   // the degraded-boot warning for profile launches.
   const workspaceService = getHostWorkspaceRuntime(ctx.get('tuiWorkspaces')) ?? createLocalWorkspaceRuntime()
-  const commandTrees = ctx.get('tuiCommandTrees') as TuiCommandTreeRuntime | undefined
+  const commandTrees = getHostCommandTrees(ctx.get('tuiCommandTrees'))
   // The `/settings` screen reads its host on EVERY render, so the host must
   // be a stable object: a fresh literal per call would re-fire the screen's
   // host-keyed effects endlessly (render → new host → effect → state →

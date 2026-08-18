@@ -13,7 +13,7 @@ import { TuiRendererRuntime, getHostRenderers } from '../src/dsh-adapter/rendere
 import TuiSceneRuntime, { getHostSceneRuntime } from '../src/dsh-adapter/scenes.js'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections } from '../src/dsh-adapter/settings-sections.js'
 import TuiWorkspaceRuntime, { getHostWorkspaceRuntime } from '../src/dsh-adapter/workspaces.js'
-import TuiCommandTreeRuntime from '../src/dsh-adapter/command-trees.js'
+import TuiCommandTreeRuntime, { getHostCommandTrees } from '../src/dsh-adapter/command-trees.js'
 
 let failures = 0
 let checks = 0
@@ -40,7 +40,8 @@ const renderers = getHostRenderers(root.get('tuiRenderers'))
 const scenes = getHostSceneRuntime(root.get('tuiScenes'))
 const sections = getHostSettingsSections(root.get('tuiSettingsSections'))
 const workspaces = getHostWorkspaceRuntime(root.get('tuiWorkspaces'))
-if (dialogs === undefined || status === undefined || shortcuts === undefined || renderers === undefined || scenes === undefined || sections === undefined || workspaces === undefined) {
+const commandTrees = getHostCommandTrees(root.get('tuiCommandTrees'))
+if (dialogs === undefined || status === undefined || shortcuts === undefined || renderers === undefined || scenes === undefined || sections === undefined || workspaces === undefined || commandTrees === undefined) {
   throw new Error('lifecycle battery could not resolve host accessors')
 }
 
@@ -50,11 +51,17 @@ let rootSceneRejected = false
 let rootSettingsRejected = false
 let rootWorkspaceRejected = false
 let rootTreeRejected = false
+let rootChildRejected = false
+let rootRegistryRejected = false
 let rootDialog: Promise<boolean> | undefined
 let retainedStatus: any
 let retainedWorkspace: any
 let foreignWorkspaceCommands: readonly { name: string }[] | undefined
 let foreignWorkspaceRun: Promise<unknown> | undefined
+let foreignTreeChildren: readonly { name: string }[] | undefined
+let foreignTreeDescription: unknown
+let foreignSceneOpened = false
+let foreignSceneActive: unknown
 const rootProbe = root.inject(
   ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],
   (pluginCtx) => {
@@ -70,7 +77,17 @@ const rootProbe = root.inject(
     } finally {
       rootCtx.root = canonicalRoot
     }
-    rootDialog = rootCtx.get('tuiDialogs')?.confirm({ title: 'must not queue' })
+    rootDialog = rootCtx.get('tuiDialogs')?.confirm(rootCtx, { title: 'must not queue' })
+    try {
+      rootCtx.inject(['tuiStatus'], (childCtx) => childCtx.tuiStatus.set('root-child-leak', 'must not persist'))
+    } catch {
+      rootChildRejected = true
+    }
+    try {
+      rootCtx.registry.delete(() => {})
+    } catch {
+      rootRegistryRejected = true
+    }
     try {
       rootCtx.get('tuiScenes')?.register({ id: 'root-leak', component: () => null })
     } catch {
@@ -107,6 +124,8 @@ check('root scene registration is rejected', rootSceneRejected)
 check('root settings registration is rejected', rootSettingsRejected)
 check('root workspace registration is rejected', rootWorkspaceRejected)
 check('root command-tree registration is rejected', rootTreeRejected)
+check('root inject cannot create a child activation', rootChildRejected)
+check('root registry deletion is rejected', rootRegistryRejected)
 await rootProbe.dispose()
 
 // A traceable service proxy can be copied into another Cordis composition.
@@ -119,9 +138,15 @@ let foreignSceneRejected = false
 let foreignSettingsRejected = false
 let foreignWorkspaceRejected = false
 let foreignTreeRejected = false
+let foreignRootRejected = false
 const foreignFiber = foreignRoot.plugin({
   name: 'foreign-composition',
   apply: (foreignCtx) => {
+    try {
+      root.inject([], () => {})
+    } catch {
+      foreignRootRejected = true
+    }
     const trace = (name: string): any => foreignCtx.reflect.trace(root.get(name))
     trace('tuiStatus')?.set('foreign-leak', 'must not persist')
     trace('tuiShortcuts')?.register('alt+y', { description: 'foreign leak', handler: () => {} })
@@ -155,6 +180,7 @@ const foreignFiber = foreignRoot.plugin({
   },
 })
 await foreignFiber
+check('cross-composition plugin cannot create a child on the host root', foreignRootRejected)
 check('cross-composition scene registration is rejected', foreignSceneRejected)
 check('cross-composition settings registration is rejected', foreignSettingsRejected)
 check('cross-composition workspace registration is rejected', foreignWorkspaceRejected)
@@ -199,7 +225,7 @@ check('live plugin effects are visible before dispose',
   && shortcuts.dispatch('x', { meta: true })
   && renderers.render('lifecycle/note', {})?.lines[0] === 'active'
   && workspaces.commands().some(command => command.name === 'lifecycle') === true
-  && root.get('tuiCommandTrees')?.children(['lifecycle']).length === 1
+  && commandTrees.children(['lifecycle']).length === 1
   && dialogs.getSnapshot()?.kind === 'confirm')
 
 // Provider commands are activation-owned. A second plugin can use its own
@@ -214,6 +240,36 @@ check('foreign plugin cannot discover another activation workspace commands', fo
 check('foreign plugin cannot invoke another activation workspace command', (await foreignWorkspaceRun) === undefined)
 await foreignWorkspaceFiber.dispose()
 
+// Command-tree completion is also activation-owned. The TUI reads the
+// host-only facade; a plugin may inspect only its own tree metadata.
+const foreignTreeFiber = root.inject(['tuiCommandTrees'], (pluginCtx) => {
+  foreignTreeChildren = pluginCtx.tuiCommandTrees.children(['lifecycle'])
+  foreignTreeDescription = pluginCtx.tuiCommandTrees.descriptions('lifecycle')
+})
+await foreignTreeFiber
+check('foreign plugin cannot discover another activation command-tree children', foreignTreeChildren?.length === 0)
+check('foreign plugin cannot discover another activation command-tree description', foreignTreeDescription === undefined)
+await foreignTreeFiber.dispose()
+
+const foreignSceneFiber = root.inject(['tuiScenes'], (pluginCtx) => {
+  foreignSceneActive = pluginCtx.tuiScenes.active
+  foreignSceneOpened = pluginCtx.tuiScenes.open('lifecycle')
+  pluginCtx.tuiScenes.close()
+})
+await foreignSceneFiber
+check('foreign plugin cannot inspect another activation scene', foreignSceneActive === undefined)
+check('foreign plugin cannot open another activation scene', foreignSceneOpened === false && scenes.active?.id === 'lifecycle')
+check('foreign plugin cannot close another activation scene', scenes.active?.id === 'lifecycle')
+await foreignSceneFiber.dispose()
+
+const foreignStatusFiber = root.inject(['tuiStatus'], (pluginCtx) => {
+  pluginCtx.tuiStatus.set('lifecycle', 'foreign')
+})
+await foreignStatusFiber
+check('foreign plugin cannot overwrite another activation status',
+  status.getSnapshot().find(entry => entry.key === 'lifecycle')?.text === 'active')
+await foreignStatusFiber.dispose()
+
 await pluginFiber.dispose()
 check('plugin dialog is cancelled on its fiber dispose', (await pluginDialog) === false)
 retainedStatus?.set('retained-after-dispose', 'must not persist')
@@ -224,7 +280,7 @@ check('fiber dispose releases every registered extension effect',
   && shortcuts.dispatch('x', { meta: true }) === false
   && renderers.render('lifecycle/note', {}) === undefined
   && workspaces.commands().some(command => command.name === 'lifecycle') === false
-  && root.get('tuiCommandTrees')?.children(['lifecycle']).length === 0
+  && commandTrees.children(['lifecycle']).length === 0
   && dialogs.getSnapshot() === null)
 
 let retainedWorkspaceCommandsRejected = false
@@ -293,6 +349,28 @@ check('forged workspace caller is rejected', forgedWorkspaceRejected)
 check('forged command-tree caller is rejected', forgedTreeRejected)
 await forgedFiber.dispose()
 
+let fakeEventStatus: any
+const fakeEventFiber = root.inject(['tuiStatus'], (pluginCtx) => {
+  const fakeFiber: any = { uid: 999, state: 2, runtime: null, ctx: undefined, effect: (execute: () => unknown) => execute() }
+  const fakeContext = pluginCtx.extend({ fiber: fakeFiber })
+  fakeFiber.ctx = fakeContext
+  pluginCtx.emit('internal/plugin', fakeFiber)
+  fakeEventStatus = fakeContext.reflect.trace(root.get('tuiStatus'))?.set('fake-event', 'must not persist')
+})
+await fakeEventFiber
+check('forged internal/plugin event leaves no status', status.getSnapshot().every(entry => entry.key !== 'fake-event'))
+await fakeEventFiber.dispose()
+
+const mutatedContextFiber = root.inject(['tuiStatus'], (pluginCtx) => {
+  const canonical = pluginCtx.fiber.ctx
+  pluginCtx.fiber.ctx = root
+  pluginCtx.tuiStatus.set('mutated-context', 'must not persist')
+  pluginCtx.fiber.ctx = canonical
+})
+await mutatedContextFiber
+check('mutated Fiber.ctx leaves no status', status.getSnapshot().every(entry => entry.key !== 'mutated-context'))
+await mutatedContextFiber.dispose()
+
 // `Fiber.restart()` invalidates effects before its public wrapper settles. A
 // retained context must not register into the next activation during that
 // unload window.
@@ -301,7 +379,11 @@ let restartRuns = 0
 const restartFiber = root.inject(['tuiStatus'], (pluginCtx) => {
   restartContext = pluginCtx
   restartRuns += 1
-  if (restartRuns === 1) pluginCtx.tuiStatus.set('restart-normal', 'first')
+  if (restartRuns === 1) {
+    pluginCtx.tuiStatus.set('restart-normal', 'first')
+    const staleContext = pluginCtx
+    setTimeout(() => staleContext.tuiStatus.set('restart-stale-timer', 'stale'), 80)
+  }
   else pluginCtx.tuiStatus.set('restart-normal-2', 'second')
 })
 await restartFiber
@@ -314,6 +396,8 @@ await restart
 check('restart window rejects retained caller effects',
   status.getSnapshot().some(entry => entry.key === 'restart-normal-2')
   && !status.getSnapshot().some(entry => entry.key.startsWith('restart-late-')))
+await new Promise(resolve => setTimeout(resolve, 120))
+check('old async callback after restart cannot write', !status.getSnapshot().some(entry => entry.key === 'restart-stale-timer'))
 await restartFiber.dispose()
 
 // Capturing the original fiber effect also prevents a plugin from replacing
