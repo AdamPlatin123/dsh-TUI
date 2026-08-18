@@ -951,11 +951,26 @@ function preview(text: string, limit: number): string {
  * a loadOlder() restore is not instantly undone. Returns the number of rows
  * folded.
  */
-function foldRows(rows: ChatRow[], cap: number): number {
+function foldRows(
+  rows: ChatRow[],
+  cap: number,
+  cursor?: { rows: unknown; index: number },
+): number {
   const excess = rows.length - cap
-  if (excess <= 0) return 0
+  if (excess <= 0) {
+    if (cursor !== undefined) cursor.index = 0
+    return 0
+  }
+  // Incremental pass: rows only ever append past the fold line and the
+  // folded/restored exemptions are permanent, so everything below a cursor
+  // over the SAME array identity needs no re-inspection. emit/emitStream
+  // fold on every frame during streaming — a full rescan of a long window
+  // there was the O(rows) per-frame term of long-session streaming.
+  const from = cursor === undefined ? 0 : cursor.rows === rows ? cursor.index : 0
+  if (cursor !== undefined) cursor.rows = rows
+  if (excess <= from) return 0
   let folded = 0
-  for (const row of rows.slice(0, excess)) {
+  for (const row of rows.slice(from, excess)) {
     if (row.folded || row.restored) continue
     if (row.kind !== 'user' && row.kind !== 'assistant' && row.kind !== 'reasoning' && row.kind !== 'tool') continue
     row.folded = true
@@ -974,6 +989,7 @@ function foldRows(rows: ChatRow[], cap: number): number {
       row.text = preview(row.text, 200)
     }
   }
+  if (cursor !== undefined) cursor.index = excess
   return folded
 }
 
@@ -1274,6 +1290,9 @@ export function createChannel(
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
+  // foldRows incremental cursor (see foldRows): rows only append past the
+  // fold line, so each pass touches only newly-eligible rows.
+  const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
   let nextNotificationId = 1
   /** One-shot context-low warning per session (CC's TokenWarning). */
   let contextWarned = false
@@ -1892,7 +1911,7 @@ export function createChannel(
       }
     },
     emit() {
-      foldRows(state.rows, MAX_ROWS)
+      foldRows(state.rows, MAX_ROWS, foldCursor)
       state.version += 1
       for (const listener of listeners) listener()
     },
@@ -1908,7 +1927,7 @@ export function createChannel(
       streamNotifyScheduled = true
       const timer = setTimeout(() => {
         streamNotifyScheduled = false
-        foldRows(state.rows, MAX_ROWS)
+        foldRows(state.rows, MAX_ROWS, foldCursor)
         for (const listener of listeners) listener()
       }, 16)
       // Never hold the process open for a pending UI wakeup.
