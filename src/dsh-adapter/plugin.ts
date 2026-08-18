@@ -25,7 +25,7 @@ import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
+import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
 import { isLang, resolveStartupLang, setLang, t } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
@@ -510,6 +510,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         if (target.kind === 'unknown') {
           channel.notify(t('update-check-failed'))
         } else {
+          // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
+          // an older global launcher patch (no service row) that is a
+          // permanent boot deadlock (issues #183/#307, the exact report
+          // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
+          // pinning /update onto that range must be refused, not installed.
+          if (isBootDeadlockTarget(target.latest)) {
+            channel.notify(t('update-refused-deadlock', {
+              latest: target.latest,
+              authoritative: target.authoritative ?? target.latest,
+            }), { color: 'warning' })
+            return
+          }
+          if (target.authoritative !== undefined) {
+            channel.notify(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+          }
           updateTargetVersion = target.latest
         }
         channel.notify(t('update-starting'))
@@ -729,6 +744,12 @@ export function isExitResumable(deps: {
 
 type InkShutdownState = {
   detachForShutdown?: () => void
+  /**
+   * Full stdin detach for the /update child handoff (issues #284/#307):
+   * removes the readable/data listeners and pauses the pump so the
+   * lingering parent stops racing the restarted TUI for keypresses.
+   */
+  detachStdinForHandoff?: () => void
   frontFrame?: { cursor?: { x: number; y: number } }
   displayCursor?: { x: number; y: number } | null
 }
@@ -751,6 +772,11 @@ async function finishExit(
 
     try {
       runtime?.detachForShutdown?.()
+      // The /update continuation spawns children that inherit this stdin;
+      // strip the readable pump so the parent cannot swallow their input
+      // (issues #284/#307). Harmless on plain exits — the process exits
+      // right after this cleanup anyway.
+      runtime?.detachStdinForHandoff?.()
     } catch {
       ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
     }
@@ -782,6 +808,7 @@ function readInkShutdownState(value: unknown): InkShutdownState | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const candidate = value as Record<string, unknown>
   if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
+  if (candidate.detachStdinForHandoff !== undefined && typeof candidate.detachStdinForHandoff !== 'function') return undefined
   if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
   if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
   return value as InkShutdownState

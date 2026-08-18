@@ -1038,6 +1038,37 @@ export default class Ink {
     }
   }
 
+  /**
+   * Fully detach stdin before handing the terminal to a child process that
+   * inherits it (the /update restart). `detachForShutdown()` restores
+   * cooked mode but leaves the App's 'readable' pump attached — ordinary
+   * exits don't care because the process dies right after, but a parent
+   * that lingers waiting on the child keeps a libuv read pending on the
+   * console and races the child for every keypress: the restarted TUI
+   * sees dropped or entirely swallowed input (issues #284/#307). Remove
+   * the listeners and pause the pump so the child is the sole reader.
+   */
+  detachStdinForHandoff(): void {
+    const stdin = this.options.stdin as NodeJS.ReadStream;
+    try {
+      this.drainStdin();
+    } catch {
+      // A destroyed stream must not block the handoff.
+    }
+    stdin.removeAllListeners('readable');
+    stdin.removeAllListeners('data');
+    try {
+      stdin.pause();
+    } catch {
+      // Same destroyed-stream tolerance as above.
+    }
+    try {
+      stdin.unref();
+    } catch {
+      // unref on a closed stream can throw on some Node versions.
+    }
+  }
+
   /** @see drainStdin */
   drainStdin(): void {
     drainStdin(this.options.stdin);
