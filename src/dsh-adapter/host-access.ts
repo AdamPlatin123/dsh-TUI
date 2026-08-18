@@ -9,6 +9,7 @@ import { Context } from '@deepseek-ai/cordis'
  * concrete service instance and unwrap only here.
  */
 const CORDIS_ORIGINAL = Symbol.for('cordis.original')
+const compositionRoots = new WeakMap<object, Context>()
 
 export function concreteService<T extends object>(service: T): T {
   let current: object = service
@@ -43,11 +44,48 @@ export function bindCallerEffect(ctx: Context, disposer: () => unknown): void {
  * resolving sibling services through an attacker-provided caller shadow. */
 export function compositionRoot(ctx: Context): Context {
   try {
-    const root = ctx.root
-    return Context.is(root) ? root : ctx
+    const cached = compositionRoots.get(ctx as object)
+    if (cached !== undefined) return cached
   } catch {
-    return ctx
+    // Fall through to the fiber walk for degraded contexts.
   }
+  try {
+    let current = ctx
+    const seen = new Set<object>()
+    for (let depth = 0; depth < 64; depth += 1) {
+      const currentFiber = current.fiber
+      if (typeof currentFiber !== 'object' || currentFiber === null || seen.has(currentFiber)) break
+      seen.add(currentFiber)
+      const cached = compositionRoots.get(current as object)
+      if (cached !== undefined) {
+        compositionRoots.set(ctx as object, cached)
+        return cached
+      }
+      if (currentFiber.runtime === null) {
+        const root = Context.is(currentFiber.ctx) ? currentFiber.ctx : current
+        compositionRoots.set(current as object, root)
+        compositionRoots.set(ctx as object, root)
+        compositionRoots.set(root as object, root)
+        return root
+      }
+      const parent = currentFiber.parent
+      if (!Context.is(parent)) break
+      current = parent
+    }
+  } catch {
+    // Fall through to the conservative self-root fallback below.
+  }
+  compositionRoots.set(ctx as object, ctx)
+  return ctx
+}
+
+function assertLiveContext(ctx: Context, capability: string): void {
+  try {
+    if (ctx.fiber.uid !== null) return
+  } catch {
+    // Fall through to the stable public error below.
+  }
+  throw new Error(`dsh-tui: ${capability} requires a live Cordis activation context`)
 }
 
 /** Recover the composition root that owns a traceable service. Cordis stores
@@ -71,6 +109,8 @@ export function assertCallerContext(caller: Context, target: Context, capability
   if (!Context.is(caller) || !Context.is(target)) {
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
   }
+  assertLiveContext(caller, capability)
+  assertLiveContext(target, capability)
   const ownerRoot = service === undefined ? undefined : serviceCompositionRoot(service)
   if (ownerRoot !== undefined
     && (compositionRoot(caller) !== ownerRoot || compositionRoot(target) !== ownerRoot)) {
@@ -103,8 +143,9 @@ export function requirePluginCaller(caller: Context, capability: string, service
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
   }
   try {
-    const root = caller.root
-    if (!Context.is(root) || caller === root || caller.fiber === root.fiber) {
+    assertLiveContext(caller, capability)
+    const root = compositionRoot(caller)
+    if (caller === root || caller.fiber === root.fiber) {
       throw new Error(`dsh-tui: ${capability} requires a non-root calling activation`)
     }
     const ownerRoot = service === undefined ? undefined : serviceCompositionRoot(service)

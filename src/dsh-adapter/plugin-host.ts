@@ -472,8 +472,12 @@ export function getHostAdmission(runtime: TuiPluginHost | TuiPluginHostRuntime |
  * plugin fiber unloads. */
 function assertActivationContext(hostCtx: Context, pluginCtx: Context): void {
   try {
-    const root = hostCtx.root
-    if (!Context.is(pluginCtx) || pluginCtx.root !== root || pluginCtx === root || pluginCtx.fiber === root.fiber) {
+    const root = compositionRoot(hostCtx)
+    if (!Context.is(pluginCtx)
+      || compositionRoot(pluginCtx) !== root
+      || pluginCtx === root
+      || pluginCtx.fiber === root.fiber
+      || pluginCtx.fiber.uid === null) {
       throw new Error('dsh-tui: mediated capability requires a non-root activation context from the host composition')
     }
   } catch (error) {

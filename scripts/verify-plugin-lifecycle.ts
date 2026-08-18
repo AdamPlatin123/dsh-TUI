@@ -50,6 +50,7 @@ let rootSettingsRejected = false
 let rootWorkspaceRejected = false
 let rootTreeRejected = false
 let rootDialog: Promise<boolean> | undefined
+let retainedStatus: any
 const rootProbe = root.inject(
   ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],
   (pluginCtx) => {
@@ -57,6 +58,14 @@ const rootProbe = root.inject(
     rootCtx.get('tuiStatus')?.set('root-leak', 'must not persist')
     rootCtx.get('tuiShortcuts')?.register('alt+z', { description: 'root leak', handler: () => {} })
     rootCtx.get('tuiRenderers')?.register('root/leak', () => ({ lines: ['must not persist'] }))
+    const canonicalRoot = rootCtx.root
+    const rootBoundStatus = rootCtx.get('tuiStatus')
+    rootCtx.root = new Context()
+    try {
+      rootBoundStatus?.set('root-mutate-leak', 'must not persist')
+    } finally {
+      rootCtx.root = canonicalRoot
+    }
     rootDialog = rootCtx.get('tuiDialogs')?.confirm({ title: 'must not queue' })
     try {
       rootCtx.get('tuiScenes')?.register({ id: 'root-leak', component: () => null })
@@ -159,6 +168,7 @@ let pluginDialog: Promise<boolean> | undefined
 const pluginFiber = root.inject(
   ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],
   (pluginCtx) => {
+    retainedStatus = pluginCtx.get('tuiStatus')
     pluginCtx.tuiStatus.set('lifecycle', 'active')
     pluginCtx.tuiShortcuts.register('alt+x', { description: 'lifecycle', handler: () => {} })
     pluginCtx.tuiRenderers.register('lifecycle/note', () => ({ lines: ['active'] }))
@@ -189,6 +199,7 @@ check('live plugin effects are visible before dispose',
 
 await pluginFiber.dispose()
 check('plugin dialog is cancelled on its fiber dispose', (await pluginDialog) === false)
+retainedStatus?.set('retained-after-dispose', 'must not persist')
 check('fiber dispose releases every registered extension effect',
   status.getSnapshot().length === 0
   && scenes.active === undefined

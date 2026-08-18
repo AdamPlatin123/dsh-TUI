@@ -217,11 +217,10 @@ await subscribeAs('alpha')
     knownPermissions: () => ['messages.observe.read'],
     corrupt: false,
   }
-  const freshCtx = new Context()
-  const freshWarnings: string[] = []
-  freshCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
-    freshWarnings.push([format, ...params].map(String).join(' '))
-  }
+  // Keep the isolated broker in the host composition so the explicit
+  // activation context remains valid while the test swaps its grant source.
+  const freshCtx = hostCtx.isolate('tuiMessageObserver')
+  const freshWarningsBefore = hostWarnings.length
   const runtime = new TuiMessageObserverRuntime(freshCtx, { grants: mutableGrants })
   const envelopes: MessagesObserveEnvelope[] = []
   runtime.subscribe(admittedContexts.get('alpha')!, envelope => { envelopes.push(envelope) }, { scope: 'session:sess-1' })
@@ -233,7 +232,7 @@ await subscribeAs('alpha')
   await sleep(20)
   check1('deliver-time: revoked subscription delivers nothing more', envelopes.length === 1)
   check1('deliver-time: revocation releases with a warning',
-    freshWarnings.some(line => line.includes('released') && line.includes('revoked')))
+    hostWarnings.slice(freshWarningsBefore).some(line => line.includes('released') && line.includes('revoked')))
   // 释放后再授予也不再投递（release 是终态，contract cleanup）。
   granted = true
   publish(runtime, session('sess-1'), userEvent(3, 're-granted'))
@@ -342,11 +341,8 @@ await subscribeAs('alpha')
 // ── I. schema 缺失 fail-closed / 畸形 schema 丢 envelope ──────────────────
 {
   // schema 不可用：suppress + warn once。
-  const noSchemaCtx = new Context()
-  const noSchemaWarnings: string[] = []
-  noSchemaCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
-    noSchemaWarnings.push([format, ...params].map(String).join(' '))
-  }
+  const noSchemaCtx = hostCtx.isolate('tuiMessageObserver')
+  const noSchemaWarningsBefore = hostWarnings.length
   const blind = new TuiMessageObserverRuntime(noSchemaCtx, {
     envelopeSchema: undefined,
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
@@ -357,14 +353,11 @@ await subscribeAs('alpha')
   publish(blind, session('sess-1'), userEvent(2, 'still suppressed'))
   await sleep(20)
   check1('missing schema suppresses all envelopes (fail closed)', blindEnvelopes.length === 0)
-  check1('missing schema warns once', noSchemaWarnings.filter(line => line.includes('fail-closed')).length === 1)
+  check1('missing schema warns once', hostWarnings.slice(noSchemaWarningsBefore).filter(line => line.includes('fail-closed')).length === 1)
 
   // 畸形 schema（永败）：envelope 产出后被丢弃 + warn。
-  const strictCtx = new Context()
-  const strictWarnings: string[] = []
-  strictCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
-    strictWarnings.push([format, ...params].map(String).join(' '))
-  }
+  const strictCtx = hostCtx.isolate('tuiMessageObserver')
+  const strictWarningsBefore = hostWarnings.length
   const strict = new TuiMessageObserverRuntime(strictCtx, {
     envelopeSchema: { type: 'object', required: ['never-present'] },
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
@@ -374,7 +367,7 @@ await subscribeAs('alpha')
   publish(strict, session('sess-1'), userEvent(1, 'dropped by self-check'))
   await sleep(20)
   check1('failing self-check drops the envelope', strictEnvelopes.length === 0)
-  check1('self-check drop warns', strictWarnings.some(line => line.includes('standard validator')))
+  check1('self-check drop warns', hostWarnings.slice(strictWarningsBefore).some(line => line.includes('standard validator')))
 }
 
 // ── J. 零持久化 / disposer 幂等 ───────────────────────────────────────────
