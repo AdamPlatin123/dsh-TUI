@@ -9,7 +9,7 @@ import { register as registerStorage } from '@dsh-std/storage'
 import { tuiChannelDefinition } from '#dsh-ecosystem-spec/tui-channel'
 import type { ContractCoordinate } from './types.js'
 
-export const TUI_EXTENSION_API_VERSION = 'x-ccch1mneyyy.tui/v1alpha1'
+export const TUI_EXTENSION_API_VERSION = 'tui.dsh/v1alpha1'
 
 export const DECISION_EVENTS_COORDINATE: Readonly<ContractCoordinate> = Object.freeze({
   apiVersion: TUI_EXTENSION_API_VERSION,

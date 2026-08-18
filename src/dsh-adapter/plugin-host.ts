@@ -255,7 +255,7 @@ hostContext: compositionRoot(ctx),
     const identity = requireComponentIdentity(caller)
     if (!requiresDecisionEvents(identity)) {
       throw new Error(
-        `dsh-tui: Component "${identity.componentId}" must require x-ccch1mneyyy.tui/v1alpha1#DecisionEvents before subscribing`,
+        `dsh-tui: Component "${identity.componentId}" must require tui.dsh/v1alpha1#DecisionEvents before subscribing`,
       )
     }
     const previousMetadata = decisionHandlerMetadataOf(listener)

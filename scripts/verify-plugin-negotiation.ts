@@ -212,7 +212,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
   check1('a host without DecisionEvents rejects the required private protocol',
     unavailable.some(line => line.includes('rejected')
       && line.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
-      && line.includes('x-ccch1mneyyy.tui/v1alpha1#DecisionEvents')), unavailable.join(' | '))
+      && line.includes('tui.dsh/v1alpha1#DecisionEvents')), unavailable.join(' | '))
   // 遵循文档的插件：声明 session.input.intercept 并订阅 tui/input——
   // vendored 核心面答不出（schema 枚举仅 4 个核心权限名、registry 无
   // tui/* 条目），必须走 TUI 扩展覆盖层，且输出要如实声明这一点。
@@ -224,7 +224,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
     version: '0.1.0',
     manifestVersion: '0.15',
     facets: { host: { entry: 'dist/main.js', apiVersion: 'v1alpha1' } },
-    requires: { contracts: [{ apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' }] },
+    requires: { contracts: [{ apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' }] },
     permissions: [{ name: 'session.input.intercept', scope: 'tui/input', reason: 'guard user input' }],
     contributes: { commands: [] },
     subscriptions: [],
@@ -256,7 +256,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
     version: '0.1.0',
     manifestVersion: '0.15',
     facets: { host: { entry: 'dist/main.js', apiVersion: 'v1alpha1' } },
-    requires: { contracts: [{ apiVersion: 'x-ccch1mneyyy.tui/v2beta1', kind: 'DecisionEvents' }] },
+    requires: { contracts: [{ apiVersion: 'tui.dsh/v2beta1', kind: 'DecisionEvents' }] },
     permissions: [{ name: 'session.input.intercept', scope: 'tui/input', reason: 'guard user input' }],
     contributes: { commands: [] },
     subscriptions: [],
@@ -280,7 +280,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
   check1('unknown DecisionEvents version negotiates UNKNOWN_PROTOCOL_VERSION',
     futureDecision.decision === 'unknown'
     && futureDecision.reasonCode === 'UNKNOWN_PROTOCOL_VERSION'
-    && futureDecision.unknownContracts.includes('x-ccch1mneyyy.tui/v2beta1#DecisionEvents'),
+    && futureDecision.unknownContracts.includes('tui.dsh/v2beta1#DecisionEvents'),
     JSON.stringify(futureDecision))
 
   // 还原足迹布景

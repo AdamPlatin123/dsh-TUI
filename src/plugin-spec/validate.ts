@@ -84,16 +84,16 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
   const commandIds = new Set(manifest.contributes.commands.map(command => command.id))
   const requiresDecisionEvents = manifest.requires.contracts.some(requirement =>
     requirement.kind === 'DecisionEvents'
-    && groupOf(requirement.apiVersion) === groupOf('x-ccch1mneyyy.tui/v1alpha1'))
+    && groupOf(requirement.apiVersion) === groupOf('tui.dsh/v1alpha1'))
   const capabilityForPermission: Readonly<Record<string, { apiVersion: string; kind: string }>> = {
     'commands.invoke': { apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' },
     'storage.local.read': { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' },
     'storage.local.write': { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' },
     'messages.observe.read': { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' },
-    'session.input.intercept': { apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' },
-    'session.rewind.intercept': { apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' },
-    'session.switch.intercept': { apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' },
-    'session.compact.intercept': { apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' },
+    'session.input.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+    'session.rewind.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+    'session.switch.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+    'session.compact.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
   }
   for (const permission of manifest.permissions) {
     if (!knownPermissions.has(permission.name)) {
@@ -106,7 +106,7 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
       throw new Error(`commands.invoke scope is not a declared command: ${permission.scope}`)
     }
     if (INTERCEPT_PERMISSIONS.has(permission.name) && !requiresDecisionEvents) {
-      throw new Error(`${permission.name} requires x-ccch1mneyyy.tui/v1alpha1#DecisionEvents`)
+      throw new Error(`${permission.name} requires tui.dsh/v1alpha1#DecisionEvents`)
     }
     const capability = capabilityForPermission[permission.name]
     // An otherwise valid contract reference may use an unregistered version

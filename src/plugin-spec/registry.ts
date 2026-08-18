@@ -8,7 +8,7 @@ import { createAdmissionCatalog } from './tui-extension.js'
 import type { ContractRegistry, PermissionEntry, PermissionRegistry, RegistryEntry } from './types.js'
 
 export const DSH_STD_REVISION = '614dfa1ac168db79fcf4577cf0ebb34e2e3b944b'
-export const ECOSYSTEM_SPEC_REVISION = 'd41ab903f27ed8225731fbfa27cd1b35c501c5ab'
+export const ECOSYSTEM_SPEC_REVISION = 'e1b902b0f95f4280a8e68d414ec7a4d25d6ce106'
 
 export interface SpecData {
   dir: string
@@ -103,7 +103,7 @@ function structurallySound(data: { registry: unknown; permissions: unknown; sche
     const key = `${entry.coordinates.apiVersion}#${entry.coordinates.kind}`
     if (coordinates.has(key)) return false
     coordinates.add(key)
-    if ('authority' in entry && !entry.coordinates.apiVersion.startsWith('x-ccch1mneyyy.tui/')) return false
+    if ('authority' in entry && !entry.coordinates.apiVersion.startsWith('tui.dsh/')) return false
   }
   if (!isRecord(data.permissions)
     || data.permissions.registryVersion !== EXPECTED_PERMISSION_REGISTRY_VERSION
@@ -185,7 +185,7 @@ export function verifyRegistry(data: SpecData): string[] {
     names.add(entry.name)
     if (coordinates.has(key)) failures.push(`${key}: duplicate registry coordinate`)
     coordinates.add(key)
-    if ('authority' in entry && !entry.coordinates.apiVersion.startsWith('x-ccch1mneyyy.tui/')) {
+    if ('authority' in entry && !entry.coordinates.apiVersion.startsWith('tui.dsh/')) {
       failures.push(`${key}: dsh-tui definition must use the private protocol group`)
     }
     if (!protocols.understands(entry.coordinates)) failures.push(`${key}: ProtocolCatalog definition unavailable`)
