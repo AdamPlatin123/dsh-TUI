@@ -308,25 +308,33 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 // ── H. 非破坏签名（不传 identity 照旧可用）──────────────────────────────────
 {
   const ctx = new Context()
-  const shortcuts = new TuiShortcutRuntime(ctx)
-  const disposeShortcut = shortcuts.register('ctrl+shift+q', { description: '无 identity', handler: () => {} })
-  check1('tuiShortcuts.register without identity returns a disposer', typeof disposeShortcut === 'function')
-  disposeShortcut()
+  new TuiShortcutRuntime(ctx)
+  new TuiSceneRuntime(ctx)
+  new TuiStatusRuntime(ctx)
+  new TuiRendererRuntime(ctx)
+  let activation: import('@deepseek-ai/cordis').Context | undefined
+  const fiber = ctx.inject(['tuiShortcuts', 'tuiScenes', 'tuiStatus', 'tuiRenderers'], (pluginCtx) => {
+    activation = pluginCtx
+    const disposeShortcut = pluginCtx.tuiShortcuts.register('ctrl+shift+q', { description: '无 identity', handler: () => {} })
+    check1('tuiShortcuts.register without identity returns a disposer', typeof disposeShortcut === 'function')
+    disposeShortcut()
 
-  const scenes = new TuiSceneRuntime(ctx)
-  const disposeScene = scenes.register({ id: 'demo-scene', component: () => null })
-  check1('tuiScenes.register without identity returns a disposer', typeof disposeScene === 'function')
-  disposeScene()
+    const disposeScene = pluginCtx.tuiScenes.register({ id: 'demo-scene', component: () => null })
+    check1('tuiScenes.register without identity returns a disposer', typeof disposeScene === 'function')
+    disposeScene()
 
-  const status = new TuiStatusRuntime(ctx)
-  const disposeStatus = status.set('demo-key', 'text')
-  check1('tuiStatus.set without identity returns a disposer', typeof disposeStatus === 'function')
-  disposeStatus()
+    const disposeStatus = pluginCtx.tuiStatus.set('demo-key', 'text')
+    check1('tuiStatus.set without identity returns a disposer', typeof disposeStatus === 'function')
+    disposeStatus()
 
-  const renderers = new TuiRendererRuntime(ctx)
-  const disposeRenderer = renderers.register('demo-plugin/note', () => undefined)
-  check1('tuiRenderers.register without identity returns a disposer', typeof disposeRenderer === 'function')
-  disposeRenderer()
+    const disposeRenderer = pluginCtx.tuiRenderers.register('demo-plugin/note', () => undefined)
+    check1('tuiRenderers.register without identity returns a disposer', typeof disposeRenderer === 'function')
+    disposeRenderer()
+  })
+  await fiber
+  if (activation === undefined) throw new Error('non-breaking signature probe did not activate')
+  await fiber.dispose()
+  await ctx.fiber.dispose()
 }
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────

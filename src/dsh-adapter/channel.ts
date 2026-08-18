@@ -53,9 +53,9 @@ import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
 import type { TuiCommandTreeRuntime } from './command-trees.js'
-import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { getHostSettingsSections, type TuiSettingsSection, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
-import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
+import { getHostSceneRuntime, type TuiSceneDescriptor, type TuiSceneRuntime } from './scenes.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
@@ -1261,7 +1261,10 @@ export function createChannel(
   // Plugin scene runtime (optional service, same degradation rule as
   // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
   // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
-  const sceneRuntime = ctx.get('tuiScenes') as TuiSceneRuntime | undefined
+  const sceneRuntime = getHostSceneRuntime(ctx.get('tuiScenes') as TuiSceneRuntime | undefined)
+  const settingsSectionsRuntime = getHostSettingsSections(
+    ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
+  )
   // Custom-entry text renderers (optional service, dsh-tui-extensions row):
   // absent the row, unknown plugin event types stay invisible in the
   // transcript, exactly as before the seam existed.
@@ -2977,12 +2980,10 @@ export function createChannel(
       return settingsHostCache
     },
     settingsSections(): readonly TuiSettingsSection[] {
-      const sections = ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined
-      return sections?.list() ?? []
+      return settingsSectionsRuntime?.list() ?? []
     },
     subscribeSettingsSections(listener: () => void): () => void {
-      const sections = ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined
-      return sections?.subscribe(listener) ?? (() => {})
+      return settingsSectionsRuntime?.subscribe(listener) ?? (() => {})
     },
     providerSetup(): ProviderSetupHost | undefined {
       // The `/provider` wizard's runtime surface, over the dsh-base seams:

@@ -235,11 +235,13 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
     checks += 1 // 拒绝成立（PERMISSION_NOT_GRANTED 由 storage 电池覆盖）
   }
 
-  const shortcuts = new TuiShortcutRuntime(ctx)
+  new TuiShortcutRuntime(ctx)
+  const shortcuts = alpha.get('tuiShortcuts') as InstanceType<typeof TuiShortcutRuntime>
   const disposeShortcut = shortcuts.register('ctrl+shift+z', { description: '电池快捷键', handler: () => {} }, alpha)
   disposeShortcut()
 
-  const status = new TuiStatusRuntime(ctx)
+  new TuiStatusRuntime(ctx)
+  const status = alpha.get('tuiStatus') as InstanceType<typeof TuiStatusRuntime>
   const disposeStatus = status.set('alpha-line', 'v1', alpha)
   status.set('alpha-line', 'v2', alpha)
   disposeStatus() // v1 的 disposer 已被 v2 取代 → 不得再落 release

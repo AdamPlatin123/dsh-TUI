@@ -25,7 +25,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import { cleanRenderText } from './sanitize.js'
-import { bindCallerEffect, concreteService } from './host-access.js'
+import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
 
 /** What a renderer returns: an optional title row plus body lines. */
 export interface TuiEntryRenderResult {
@@ -93,6 +93,13 @@ export class TuiRendererRuntime extends Service {
    * pluginId — omitting it records `undeclared` (C-060).
    */
   register(type: string, renderer: TuiEntryRenderer, identity?: Context): () => void {
+    let caller: Context
+    try {
+      caller = requirePluginCaller(this.ctx, 'tuiRenderers.register')
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiRenderers.register requires a live non-root plugin activation')
+      return () => {}
+    }
     const state = rendererStateFor(this)
     let normalized: string
     try {
@@ -144,7 +151,7 @@ export class TuiRendererRuntime extends Service {
         identity,
       )
     }
-    bindCallerEffect(this.ctx, dispose)
+    bindCallerEffect(caller, dispose)
     return dispose
   }
 }

@@ -72,3 +72,26 @@ export function assertCallerContext(caller: Context, target: Context, capability
   }
   throw new Error(`dsh-tui: ${capability} context must be the calling activation`)
 }
+
+/**
+ * Resolve the caller for a plugin-owned effect. A plugin can read
+ * `ctx.root`, but using its root-bound service proxy would attach cleanup to
+ * the host fiber and leave the effect alive after the plugin unloads. Host
+ * code must use the module-local host accessor for controls it owns; the
+ * public service surface only accepts a live non-root activation.
+ */
+export function requirePluginCaller(caller: Context, capability: string): Context {
+  if (!Context.is(caller)) {
+    throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
+  }
+  try {
+    const root = caller.root
+    if (!Context.is(root) || caller === root || caller.fiber === root.fiber) {
+      throw new Error(`dsh-tui: ${capability} requires a non-root calling activation`)
+    }
+    return caller
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('dsh-tui:')) throw error
+    throw new Error(`dsh-tui: ${capability} requires a live non-root calling activation`)
+  }
+}

@@ -2,7 +2,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { CommandCompletionNode, LocalizedDescriptions } from '../commands.js'
-import { bindCallerEffect, concreteService } from './host-access.js'
+import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
 
 export interface TuiCommandTreeProvider {
   /** Root command name without `/`. Must match the command registry entry. */
@@ -29,6 +29,7 @@ export class TuiCommandTreeRuntime extends Service {
   }
 
   register(provider: TuiCommandTreeProvider): () => void {
+    const caller = requirePluginCaller(this.ctx, 'tuiCommandTrees.register')
     const state = commandTreeStateFor(this)
     const root = provider.root.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_-]*$/u.test(root)) throw new TypeError(`invalid TUI command-tree root: ${provider.root}`)
@@ -38,7 +39,7 @@ export class TuiCommandTreeRuntime extends Service {
     const dispose = () => {
       if (state.providers.get(root) === normalized) state.providers.delete(root)
     }
-    bindCallerEffect(this.ctx, dispose)
+    bindCallerEffect(caller, dispose)
     return dispose
   }
 

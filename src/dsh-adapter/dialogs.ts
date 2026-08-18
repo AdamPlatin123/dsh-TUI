@@ -21,7 +21,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { concreteService } from './host-access.js'
+import { concreteService, requirePluginCaller } from './host-access.js'
 
 /** Option of a select dialog. `id` is what the promise resolves with. */
 export interface TuiDialogSelectOption {
@@ -286,7 +286,7 @@ export class TuiDialogRuntime extends Service {
    * the explicit overloads below make ownership unambiguous for embedders and
    * tests that retain the service instance directly. */
   private callContext(value: unknown): Context {
-    const caller = this.ctx
+    const caller = requirePluginCaller(this.ctx, 'tuiDialogs')
     if (!Context.is(value)) return caller
     // An explicit owner is accepted only when it is the activation that made
     // the service call.  Otherwise a plugin could pass the root (or another

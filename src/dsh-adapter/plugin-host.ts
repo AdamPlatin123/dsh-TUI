@@ -65,14 +65,33 @@ import {
 } from './component-identity.js'
 import { assertCallerContext, compositionRoot, concreteService } from './host-access.js'
 
+/** Public, mediated plugin-host capability. Loader-only admission remains
+ * behind getHostAdmission(), which is deliberately omitted from the package
+ * export surface. */
+export interface TuiPluginHost {
+  readonly generationId: string
+  readonly grants: GrantStore
+  hostDescriptor(): HostDescriptor
+  describe(): HostDescriptorBuild
+  subscribeDecision(
+    pluginCtx: Context,
+    event: string,
+    listener: (payload: Record<string, unknown>) => unknown,
+    options?: { scope?: string; order?: string },
+  ): () => boolean
+  registerCommand(pluginCtx: Context, definition: CommandDefinition): () => void
+  registerCommand(pluginCtx: Context, contributionId: string, definition: CommandDefinition): () => void
+  selfCheck(): string[]
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    tuiPluginHost: TuiPluginHostRuntime
+    tuiPluginHost: TuiPluginHost
   }
 }
 
 /** `ctx.tuiPluginHost` — plugin-interop anchor (generation, grants, descriptor). */
-export class TuiPluginHostRuntime extends Service {
+export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
   /** Runtime generation id (C-050): fresh per activation of this row. */
   get generationId(): string { return hostStateFor(this).generationId }
   /** Live scoped grant store; every operation observes the current file. */
@@ -232,7 +251,7 @@ hostContext: compositionRoot(ctx),
     const identity = requireComponentIdentity(pluginCtx)
     if (!requiresDecisionEvents(identity)) {
       throw new Error(
-        `dsh-tui: Component "${identity.componentId}" must require tui.dsh/v1alpha1#DecisionEvents before subscribing`,
+        `dsh-tui: Component "${identity.componentId}" must require x-ccch1mneyyy.tui/v1alpha1#DecisionEvents before subscribing`,
       )
     }
     const previousMetadata = decisionHandlerMetadataOf(listener)
@@ -435,10 +454,10 @@ export interface HostAdmission {
   ): VerifiedComponentIdentity
 }
 
-export function getHostAdmission(runtime: TuiPluginHostRuntime | undefined): HostAdmission | undefined {
+export function getHostAdmission(runtime: TuiPluginHost | TuiPluginHostRuntime | undefined): HostAdmission | undefined {
   if (runtime === undefined) return undefined
   try {
-    const concrete = concreteService(runtime)
+    const concrete = concreteService(runtime) as TuiPluginHostRuntime
     return {
       admit: (pluginCtx, source, options = {}) => concrete.admitInternal(pluginCtx, source, options, HOST_ADMISSION_TOKEN),
     }

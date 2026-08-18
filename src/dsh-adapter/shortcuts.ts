@@ -22,7 +22,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { bindCallerEffect, concreteService } from './host-access.js'
+import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Minimal shape of the ink Key flags the matcher reads (kept structurally
  *  compatible with `Key` from the ui kit without importing React-facing
@@ -266,6 +266,13 @@ export class TuiShortcutRuntime extends Service {
    * effect ledger's pluginId — omitting it records `undeclared` (C-060).
    */
   register(combo: string, options: TuiShortcutOptions, identity?: Context): () => void {
+    let caller: Context
+    try {
+      caller = requirePluginCaller(this.ctx, 'tuiShortcuts.register')
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiShortcuts.register requires a live non-root plugin activation')
+      return () => {}
+    }
     const state = shortcutStateFor(this)
     let parsed: ParsedCombo | undefined
     try {
@@ -330,7 +337,7 @@ export class TuiShortcutRuntime extends Service {
         identity,
       )
     }
-    bindCallerEffect(this.ctx, dispose)
+    bindCallerEffect(caller, dispose)
     return dispose
   }
 

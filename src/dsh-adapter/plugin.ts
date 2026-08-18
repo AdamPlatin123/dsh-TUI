@@ -34,6 +34,7 @@ import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime } from './workspaces.js'
+import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
@@ -385,14 +386,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the settings registration above, and the declared selects write `lang`
   // and `diffLayout` back through the settings service's revision-fenced
   // mutate (the watch applies both live).
-  const settingsSections = ctx.get('tuiSettingsSections') as
-    | { register(section: {
-        ns: string
-        title: string
-        descriptions?: Record<string, string>
-        fields: readonly unknown[]
-      }): () => void }
-    | undefined
+  const settingsSections = getHostSettingsSections(
+    ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
+  )
   if (settingsSections !== undefined) {
     const unregister = settingsSections.register({
       ns: 'dsh-tui',

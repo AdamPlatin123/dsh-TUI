@@ -10,7 +10,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { bindCallerEffect, concreteService } from './host-access.js'
+import { assertCallerContext, bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
 
 /** One rendered contribution. */
@@ -144,13 +144,24 @@ export class TuiStatusRuntime extends Service {
    */
   set(key: string, text: string | number | boolean | undefined, identity?: Context): () => void {
     const noop = (): void => {}
+    let caller: Context
+    try {
+      caller = requirePluginCaller(this.ctx, 'tuiStatus.set')
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiStatus.set requires a live non-root plugin activation')
+      return noop
+    }
     const state = statusStateFor(this)
     const store = state.store
-    const callerIdentity = componentIdentityOf(this.ctx)
+    const callerIdentity = componentIdentityOf(caller)
     const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
-    if (identity !== undefined && callerIdentity !== undefined && suppliedIdentity !== callerIdentity) {
-      this.ctx.logger.warn('dsh-tui: tuiStatus.set rejected an identity belonging to another activation')
-      return noop
+    if (identity !== undefined) {
+      try {
+        assertCallerContext(caller, identity, 'tuiStatus.set')
+      } catch {
+        caller.logger.warn('dsh-tui: tuiStatus.set rejected an identity belonging to another activation')
+        return noop
+      }
     }
     const owner = suppliedIdentity === undefined
       ? 'host'
@@ -159,18 +170,18 @@ export class TuiStatusRuntime extends Service {
     try {
       normalized = String(key ?? '').trim().toLowerCase()
     } catch {
-      this.ctx.logger.warn('dsh-tui: tuiStatus.set rejected an uncoercible key')
+      caller.logger.warn('dsh-tui: tuiStatus.set rejected an uncoercible key')
       return noop
     }
     if (!KEY_PATTERN.test(normalized)) {
-      this.ctx.logger.warn('dsh-tui: tuiStatus.set rejected an invalid key')
+      caller.logger.warn('dsh-tui: tuiStatus.set rejected an invalid key')
       return noop
     }
     if (text !== undefined && !store.getSnapshot().some(e => e.key === normalized)) {
       // New key beyond the cap: the line is one row of terminal — an
       // unbounded count would push the prompt off screen.
       if (store.getSnapshot().length >= MAX_ENTRIES) {
-        this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}": ${MAX_ENTRIES} contributions already shown`)
+        caller.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}": ${MAX_ENTRIES} contributions already shown`)
         return noop
       }
     }
@@ -180,7 +191,7 @@ export class TuiStatusRuntime extends Service {
       // object would otherwise render as "[object Object]") is REFUSED with
       // a warning — it must not silently become a clear, either.
       if (typeof text !== 'string' && typeof text !== 'number' && typeof text !== 'boolean') {
-        this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected non-scalar text for "${normalized}"`)
+        caller.logger.warn(`dsh-tui: tuiStatus.set rejected non-scalar text for "${normalized}"`)
         return noop
       }
       cleaned = cleanScalarText(text, TEXT_CELLS)
@@ -188,11 +199,11 @@ export class TuiStatusRuntime extends Service {
     const token = state.nextToken++
     const had = store.getSnapshot().some(entry => entry.key === normalized)
     if (store.ownerOf(normalized) !== undefined && store.ownerOf(normalized) !== owner) {
-      this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}" — the contribution belongs to another activation`)
+      caller.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}" — the contribution belongs to another activation`)
       return noop
     }
     store.set(normalized, cleaned, token, owner)
-    const ledger = this.ctx.get('tuiEffectLedger')
+    const ledger = caller.get('tuiEffectLedger')
     if (cleaned === undefined) {
       if (had) ledger?.record({ operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' }, identity)
     } else {
@@ -208,13 +219,13 @@ export class TuiStatusRuntime extends Service {
     }
     const dispose = () => {
       if (store.clearIf(normalized, token, owner)) {
-        this.ctx.get('tuiEffectLedger')?.record(
+        caller.get('tuiEffectLedger')?.record(
           { operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' },
           identity,
         )
       }
     }
-    bindCallerEffect(this.ctx, dispose)
+    bindCallerEffect(caller, dispose)
     return dispose
   }
 }

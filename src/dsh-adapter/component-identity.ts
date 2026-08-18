@@ -135,7 +135,7 @@ export function declaresObserverScope(identity: VerifiedComponentIdentity, actua
 }
 
 export function requiresDecisionEvents(identity: VerifiedComponentIdentity): boolean {
-  return requiresContract(identity, 'tui.dsh/v1alpha1', 'DecisionEvents')
+  return requiresContract(identity, 'x-ccch1mneyyy.tui/v1alpha1', 'DecisionEvents')
 }
 
 /** Whether admission negotiated the protocol that backs a mediated runtime

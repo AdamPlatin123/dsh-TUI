@@ -448,7 +448,7 @@ check1('decision permission map is immutable',
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
   const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'ecosystem-spec') })
   check1('tampered private definition dropped',
-    tampered.dropped.includes('tui.dsh/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
+    tampered.dropped.includes('x-ccch1mneyyy.tui/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
   check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
   check1('tampered surface keeps only the untampered contracts',
     tampered.descriptor.contracts.length === HOST_SUPPORTED_CONTRACTS.length - 1
@@ -527,6 +527,12 @@ check1('decision permission map is immutable',
   check1('exports exposes ./plugin-host',
     manifest.exports?.['./plugin-host']?.import === './lib/types/plugin-host.js')
   check1('compiled entry exists after build', existsSync(join(root, 'lib/types/plugin-host.js')))
+  const publicHostShim = readFileSync(join(root, 'src/plugin-host.ts'), 'utf8')
+  check1('public plugin-host shim exports the narrowed capability type',
+    publicHostShim.includes('TuiPluginHost') && !publicHostShim.includes('TuiPluginHostRuntime'))
+  const publicHostDeclaration = readFileSync(join(root, 'lib/types/plugin-host.d.ts'), 'utf8')
+  check1('public plugin-host declaration hides loader-only admitInternal',
+    !publicHostDeclaration.includes('admitInternal') && !publicHostDeclaration.includes('TuiPluginHostRuntime'))
   const snapshot = JSON.parse(readFileSync(join(root, 'patch-surface.snapshot.json'), 'utf8'))
   check1('snapshot records the insert before extensions',
     snapshot.inserts.indexOf('dsh-tui-plugin-host') !== -1

@@ -4,7 +4,7 @@
 // attribution registries remain adapter-internal. Type-only runtime exports
 // still load the adapter declarations so Context augmentation is available.
 export { name, apply } from './dsh-adapter/plugin-host.js'
-export type { TuiPluginHostRuntime } from './dsh-adapter/plugin-host.js'
+export type { TuiPluginHost } from './dsh-adapter/plugin-host.js'
 export type { GrantPrincipal, GrantStore } from './dsh-adapter/grants.js'
 export type { HostContract, HostDescriptor, ContractCoordinate, ContractRef, NegotiationDecision, PermissionEntry, PermissionRegistry } from './plugin-spec/types.js'
 export type { TuiPluginStorage, PluginStorageErrorCode, TuiPluginStorageRuntime } from './dsh-adapter/plugin-storage.js'

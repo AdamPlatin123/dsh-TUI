@@ -8,7 +8,7 @@
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { basename, isAbsolute, resolve } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
-import { bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 export type TuiWorkspaceKind = 'local' | 'provider'
 
@@ -131,6 +131,7 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   register(provider: TuiWorkspaceProvider): () => void {
+    const caller = requirePluginCaller(this.ctx, 'tuiWorkspaces.register')
     const state = workspaceStateFor(this)
     state.providers.add(provider)
     this.notifyProviderWaiters()
@@ -138,7 +139,7 @@ export class TuiWorkspaceRuntime extends Service {
       state.providers.delete(provider)
       this.notifyProviderWaiters()
     }
-    bindCallerEffect(this.ctx, dispose)
+    bindCallerEffect(caller, dispose)
     return dispose
   }
 
