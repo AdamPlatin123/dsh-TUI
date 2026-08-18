@@ -1024,16 +1024,20 @@ export function PromptInput({
         justifyContent="flex-start"
         // Prefix routing tint: a leading `!` runs locally (bashBorder — the
         // same rose the transcript paints `!` lines with), `@` opens file
-        // mention (amber), `/` a slash command (suggestion blue). The prefix
-        // decides where THIS text goes, so it wins over the plan-mode tint;
+        // mention (amber), `/` a slash command (claude - the saturated
+        // brand blue; `suggestion` reads too pale on dark). The prefix
+        // decides where THIS text goes, so it wins over the mode tints;
         // mid-message `@` mentions are already signaled by the completion
-        // overlay, leading-char only here.
+        // overlay, leading-char only here. Below the prefixes, a
+        // danger-full-access session paints the border error-red - the mode
+        // needs a louder warning than planMode's calm sage.
         borderColor={
           value.startsWith('!') ? 'bashBorder'
             : value.startsWith('@') ? 'warning'
-              : value.startsWith('/') ? 'suggestion'
-                : channel.mode.plan === true ? 'planMode'
-                  : 'promptBorder'
+              : value.startsWith('/') ? 'claude'
+                : channel.mode.sandbox === 'danger-full-access' ? 'error'
+                  : channel.mode.plan === true ? 'planMode'
+                    : 'promptBorder'
         }
         borderStyle="round"
         borderLeft={false}
