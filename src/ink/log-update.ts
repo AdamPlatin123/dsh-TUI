@@ -31,6 +31,7 @@ import {
 } from './termio/csi.js'
 import { isJetBrainsIdeTerminal } from './terminal.js'
 import { LINK_END, link as oscLink } from './termio/osc.js'
+import { needsConhostWidthCompensation } from './stringWidth.js'
 
 type State = {
   previousOutput: string
@@ -1026,8 +1027,12 @@ function moveCursorTo(screen: VirtualScreen, targetX: number, targetY: number) {
  * 2. Text-by-default emoji + VS16 (U+FE0F): the base codepoint is width 1
  *    in wcwidth, but VS16 triggers emoji presentation making it width 2.
  *    Examples: ⚔️ (U+2694), ☠️ (U+2620), ❤️ (U+2764).
+ * 3. East Asian Ambiguous glyphs in classic conhost, where the active font
+ *    decides whether the physical glyph occupies one or two cells.
  */
 function needsWidthCompensation(char: string): boolean {
+  if (needsConhostWidthCompensation(char)) return true
+
   const cp = char.codePointAt(0)
   if (cp === undefined) return false
   // U+1FA70-U+1FAFF: Symbols and Pictographs Extended-A (Unicode 12.0-15.0)
