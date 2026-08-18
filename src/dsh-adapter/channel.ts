@@ -56,6 +56,112 @@ import type { TuiCommandTreeRuntime } from './command-trees.js'
 import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
+import type { TuiRendererRuntime } from './renderers.js'
+import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
+import { installDecisionGuard } from './decision-guard.js'
+import { commandOwner } from './command-attribution.js'
+import { readGrantStore } from './grants.js'
+import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
+import { pluginsInfoLines } from './plugins-info.js'
+import { cleanRenderText, cleanScalarText } from './sanitize.js'
+import type {
+  TuiInputDecision,
+  TuiRewindMode,
+  TuiRewindPromptDecision,
+} from './extension-events.js'
+
+/** `tui/input` return normalization: transform/handled/cancel or no opinion.
+ *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
+ *  continues so a later veto listener still runs. */
+function normalizeInputDecision(
+  result: unknown,
+  warn: (what: string) => void,
+): TuiInputDecision | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result !== 'object') {
+    warn(`a non-object (${typeof result})`)
+    return undefined
+  }
+  const record = result as Record<string, unknown>
+  if (record.cancel === true) {
+    const reason = cleanScalarText(record.reason, NOTICE_CELLS)
+    return { cancel: true, ...(reason === '' ? {} : { reason }) }
+  }
+  if (record.handled === true) {
+    const notice = cleanScalarText(record.notice, NOTICE_CELLS)
+    return { handled: true, ...(notice === '' ? {} : { notice }) }
+  }
+  if (typeof record.text === 'string') {
+    if (record.text.trim() === '') {
+      warn('a blank {text} rewrite')
+      return undefined
+    }
+    return { text: record.text }
+  }
+  warn('an unrecognized decision shape')
+  return undefined
+}
+
+/** `tui/rewind-prompt` return normalization: cancel/modes or no opinion.
+ *  Modes are COPIED with only validated, sanitized scalar fields — the raw
+ *  plugin object must never reach the render path (a `description: {}` would
+ *  crash ListItem's `.replace`, and control chars would corrupt the pane).
+ *  Notices/reasons are toast-bound plugin text: sanitized too (see
+ *  ./sanitize.js — the one implementation of the render-path contract). */
+function normalizeRewindPromptDecision(
+  result: unknown,
+  warn: (what: string) => void,
+): TuiRewindPromptDecision | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result !== 'object') {
+    warn(`a non-object (${typeof result})`)
+    return undefined
+  }
+  const record = result as Record<string, unknown>
+  if (record.cancel === true) {
+    const reason = cleanScalarText(record.reason, NOTICE_CELLS)
+    return { cancel: true, ...(reason === '' ? {} : { reason }) }
+  }
+  if (Array.isArray(record.modes)) {
+    const modes: TuiRewindMode[] = []
+    for (const raw of record.modes as unknown[]) {
+      if (modes.length >= 8) break
+      if (raw === null || typeof raw !== 'object') continue
+      const candidate = raw as Record<string, unknown>
+      if (typeof candidate.id !== 'string' || candidate.id.trim() === '') continue
+      const label = typeof candidate.label === 'string' ? cleanRenderText(candidate.label, 120) : ''
+      if (label === '') continue
+      const description =
+        typeof candidate.description === 'string' && candidate.description.trim() !== ''
+          ? cleanRenderText(candidate.description, 400)
+          : undefined
+      modes.push({ id: candidate.id, label, ...(description === undefined ? {} : { description }) })
+    }
+    if (modes.length === 0) {
+      warn('an empty or invalid {modes} list')
+      return undefined
+    }
+    return { modes }
+  }
+  warn('an unrecognized decision shape')
+  return undefined
+}
+
+/** Toast-bound plugin text (veto reasons, handled notices, rewind summaries)
+ *  is render-path data too: same sanitization, toast-width cap. */
+const NOTICE_CELLS = 200
+
+/** `tui/rewind-done` return normalization: the first non-empty STRING is the
+ *  summary; anything else is not a decision. */
+function normalizeRewindDoneSummary(result: unknown, warn: (what: string) => void): string | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result === 'string') {
+    const summary = cleanRenderText(result, NOTICE_CELLS)
+    return summary === '' ? undefined : summary
+  }
+  warn('a non-string summary')
+  return undefined
+}
 
 type ChannelImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType']
@@ -196,7 +302,8 @@ export interface NotificationItem {
   text: string
   /** Theme color key; defaults to dim. */
   color?: 'error' | 'warning' | 'success'
-  /** Auto-dismiss after this many ms (default 4000). */
+  /** Auto-dismiss after this many ms (default 4000); 0 = sticky, removed
+   *  only through the early-dismiss handle. */
   timeoutMs: number
 }
 
@@ -444,8 +551,17 @@ export interface Channel {
   interruptAndDeliver(texts: readonly string[]): number
   /** Rewind the conversation to a past user message (CC's double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
-   *  returns the message text for re-editing — or `null` when unwritable. */
-  rewindTo(row: ChatRow): Promise<string | null>
+   *  returns the message text for re-editing — or `null` when unwritable.
+   *  `mode` is the plugin-offered rewind mode the user picked (the
+   *  tui/rewind-prompt seam), null for the plain conversation rewind. */
+  rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
+  /**
+   * The rewind decision prompt (tui/rewind-prompt event): asked when the
+   * picker confirms a message, before the confirm pane renders. 'cancel'
+   * vetoes the rewind (reason already toasted), `{ modes }` adds plugin
+   * choices to the confirm pane, null means no opinion (plain confirm).
+   */
+  promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
   /** Start a fresh conversation (`/new`): a brand-new agent + session, the
@@ -500,8 +616,9 @@ export interface Channel {
    * the whole log is already materialized.
    */
   loadOlder(): number
-  /** Push a transient notification above the prompt input. */
-  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
+  /** Push a transient notification above the prompt input. Returns an
+   *  early-dismiss handle (the auto-timeout still runs as the backstop). */
+  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): () => void
   /** Switch the working-activity indicator preset (`/activity`): validates
    *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
    *  re-renders the indicator immediately; false when the name is unknown
@@ -567,6 +684,9 @@ export interface Channel {
   initWorkspace(): string | null
   /** Environment diagnostics for `/doctor`. */
   doctorInfo(): string[]
+  /** Plugin contract/grant/ledger diagnostics for `/plugins` (C-070 trust
+   *  banner first line; `check <path>` runs validatePlugin + negotiate). */
+  pluginsInfo(args: string): string[]
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
    *  the service is absent). */
   listSubagents(): Promise<string[]>
@@ -717,7 +837,9 @@ export interface ChannelState {
   cancel(): void
   /** @internal interrupt-and-deliver (see the public Channel type). */
   interruptAndDeliver(texts: readonly string[]): number
-  rewindTo(row: ChatRow): Promise<string | null>
+  rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
+  /** @internal rewind decision prompt (see the public Channel.promptRewind). */
+  promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
   /** Start a fresh conversation (`/new`). */
@@ -749,7 +871,7 @@ export interface ChannelState {
   clear(): void
   /** @internal older-row restoration (see the public Channel.loadOlder). */
   loadOlder(): number
-  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
+  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): () => void
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
@@ -788,6 +910,8 @@ export interface ChannelState {
   initWorkspace(): string | null
   /** Environment diagnostics (CC's /doctor). */
   doctorInfo(): string[]
+  /** Plugin diagnostics (/plugins); see the public Channel type. */
+  pluginsInfo(args: string): string[]
   /** Subagent rows (CC's /agents). */
   listSubagents(): Promise<string[]>
   /** See {@link Channel.releaseContributions}. */
@@ -1094,12 +1218,30 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  // D-7 backstop: the extensions row installs the decision-subscription
+  // gate, but the channel IS the dispatch path — a stale patch without that
+  // row (or a bare embed mounting neither) would otherwise leave tui/input
+  // & friends subscribable by default, silently voiding the default-deny
+  // posture. Idempotent per cordis root, so the full-patch path installs
+  // exactly once whichever side runs first. One store instance serves both
+  // the gate and the invoke checkpoint below.
+  // Keep a private fallback for bare embedders, but resolve the host-owned
+  // store on every operation so a plugin-host row mounted later (or a custom
+  // live GrantStore) is not shadowed by an early snapshot.
+  const fallbackGrantStore = readGrantStore()
+  const currentGrantStore = (): ReturnType<typeof readGrantStore> =>
+    ctx.get('tuiPluginHost')?.grants ?? fallbackGrantStore
+  installDecisionGuard(ctx, currentGrantStore())
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
   const commandService: CommandRuntime | undefined = ctx.get('commands')
+  // messages.observe broker (optional service, C-042): mounted by the
+  // dsh-tui-plugin-host row; absent the row, publish is a no-op and nothing
+  // else changes (soft degradation, #183).
+  const messageObserver = ctx.get('tuiMessageObserver')
   // Workspace registry runtime (optional service, issue #183): mounted by
   // the bundle patch's dsh-tui-workspaces row; absent the row (stale patch
   // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
@@ -1117,6 +1259,10 @@ export function createChannel(
   // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
   // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
   const sceneRuntime = ctx.get('tuiScenes') as TuiSceneRuntime | undefined
+  // Custom-entry text renderers (optional service, dsh-tui-extensions row):
+  // absent the row, unknown plugin event types stay invisible in the
+  // transcript, exactly as before the seam existed.
+  const rendererRuntime = ctx.get('tuiRenderers') as TuiRendererRuntime | undefined
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
@@ -1218,6 +1364,146 @@ export function createChannel(
       logForDebugging(`submit: delivery failed (${message})`)
       state.notify(t('send-failed', { err: message }), { color: 'error' })
     })
+  }
+  /**
+   * RFC 0005 D-8: a flow parked on a plugin decision must be user-observable.
+   * Decisions normally resolve in milliseconds, so the notice only fires
+   * once the wait crosses a threshold — a slow plugin (e.g. one showing a
+   * managed dialog) then explains the pause instead of looking like the TUI
+   * ate the input.
+   */
+  const DECISION_PENDING_MS = 400
+  const withDecisionPending = <T>(name: string, pending: Promise<T>): Promise<T> => {
+    let dismiss: (() => void) | undefined
+    const timer = setTimeout(() => {
+      // Sticky (timeoutMs 0), D-8: the indicator must cover the WHOLE wait —
+      // an auto-expiring notice would vanish after ~4s while the decision,
+      // the delivery and every queued FIFO task behind them stay parked,
+      // leaving the user with no sign the flow is still waiting. It comes
+      // down only when the decision settles (finally below); a decision
+      // that never settles keeps its indicator up, which is the truthful
+      // state.
+      dismiss = state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 0 })
+    }, DECISION_PENDING_MS)
+    // Both exits are covered: a fast decision clears the timer before it
+    // fires; a slow one dismisses the indicator it raised.
+    return pending.finally(() => {
+      clearTimeout(timer)
+      dismiss?.()
+    })
+  }
+  /**
+   * The `tui/input` decision event (pi's `input` seam): the FIRST plugin
+   * returning a valid decision wins — transform the text, mark it handled,
+   * or cancel it. No listeners (or only crashing/malformed ones) means
+   * delivery proceeds unchanged, so a broken plugin can never wedge the
+   * input path — and can never skip a later veto listener either
+   * (dispatchTuiDecision isolates crashes and normalizes returns per
+   * listener instead of bailing on the first object).
+   *
+   * Decision AND delivery enter one FIFO chain in submission order: a slow
+   * listener on A parks A's delivery AND any later submissions behind it —
+   * without the chain, B's decision could resolve first and the model would
+   * receive B before A. Each submission binds its origin agent AT ENQUEUE,
+   * so a session switch landing before OR during its decision drops the
+   * stale text with a notice instead of sending the old conversation's
+   * words to the new session.
+   */
+  let inputChain: Promise<void> = Promise.resolve()
+  const runUserTextDecision = async (
+    text: string,
+    placement: PendingMessage['placement'],
+    originAgent: Agent,
+    originAgentId: string,
+  ): Promise<void> => {
+    // Stale detection compares the AGENT REFERENCE, not the id: session ids
+    // are reusable (A → /new → /resume A lands back on the same id with a
+    // fresh agent), so an id check has an ABA hole. Both origin values are
+    // ENQUEUE-time captures (see dispatchUserText): a decision parked behind
+    // a slow predecessor must still be judged against the session its text
+    // was typed in, not whichever session is live when it finally runs.
+    const decision = await withDecisionPending('tui/input', dispatchTuiDecision(ctx, 'tui/input', {
+      text,
+      delivery: placement === 'steer' ? 'steer' : 'followup',
+      sessionId: originAgentId,
+      cwd: state.cwd,
+    }, normalizeInputDecision))
+    if (decision !== undefined) {
+      // Both intercepts toast — a bare {cancel}/{handled} must not make the
+      // typed line vanish silently (the host-localized fallback mirrors the
+      // other decision events' ext-action-cancelled handling).
+      if ('cancel' in decision) {
+        state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
+      if ('handled' in decision) {
+        state.notify(decision.notice ?? t('ext-action-handled'), { timeoutMs: 4000 })
+        return
+      }
+      text = decision.text.trim()
+    }
+    if (agent !== originAgent) {
+      state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return
+    }
+    deliverUserText(text, placement)
+  }
+  const dispatchUserText = (text: string, placement: PendingMessage['placement']): void => {
+    // D-6: bind the submission to the session it was typed in AT ENQUEUE
+    // TIME. The FIFO chain may park this task behind a slow predecessor
+    // while the user /new's away — capturing the agent at run time would
+    // adopt the NEW session as this text's origin and deliver the old
+    // conversation's words into it.
+    const originAgent = agent
+    const originAgentId = state.agentId
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement, originAgent, originAgentId)).catch((error: unknown) => {
+      // The chain must survive a failed decision: log, then continue with
+      // the next queued submission.
+      ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
+    })
+  }
+  /**
+   * The `tui/session-switch` decision event (pi's `session_before_switch`),
+   * fired before `/new` or `/resume` replaces the live session (rewind has
+   * its own prompt event). The first answering plugin may veto the switch;
+   * the reason is toasted here so the fallback string stays host-localized.
+   */
+  const sessionSwitchVetoed = async (kind: 'new' | 'resume', targetSessionId?: string): Promise<boolean> => {
+    // D-6 stale detection captures the AGENT REFERENCE (session ids are
+    // reusable — ABA): a slow decision must not let an older /resume roll
+    // over a newer session the user already switched to mid-await.
+    const originAgent = agent
+    const decision = await withDecisionPending('tui/session-switch', dispatchTuiDecision(ctx, 'tui/session-switch', {
+      kind,
+      ...(targetSessionId === undefined ? {} : { targetSessionId }),
+      sessionId: state.agentId,
+      cwd: state.cwd,
+    }, normalizeCancelDecision))
+    if (agent !== originAgent) {
+      // The world changed while the decision parked: drop the pending
+      // switch instead of replacing the user's newer session.
+      state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return true
+    }
+    if (decision !== undefined) {
+      state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
+      return true
+    }
+    return false
+  }
+  /** Fire-and-forget `tui/session-switched` (parallel): per-session plugin
+   *  state rebinds here. Listener failures are logged, never propagated —
+   *  the switch itself already succeeded. */
+  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind', sessionId: string, previousSessionId: string): void => {
+      try {
+        void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }).catch((error: unknown) => {
+          ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
+        })
+    } catch (error) {
+      // A bare embedder's context may lack the event bus entirely; the
+      // switch itself already succeeded, so this stays a log line.
+      ctx.logger.warn('dsh-tui: tui/session-switched dispatch failed: %o', error)
+    }
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
@@ -1354,6 +1640,61 @@ export function createChannel(
    *  command is not registered, and the error message when it throws. */
   const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
     if (!commandService) return undefined
+    // Resolve the exact definition that execute() will select for this agent.
+    // Same names may exist in distinct agent scopes, so a name-only lookup can
+    // apply another scope's owner policy.
+    const definition = commandService.find(agent, name)
+    const owner = commandOwner(ctx, definition)
+    // The root checkpoint covers host/direct registrations.  A built-in name
+    // is not necessarily a namespaced contribution id, so use a deterministic
+    // host scope for that case; legacy unscoped denies still conservatively
+    // revoke every valid command scope.
+    const rootScope = owner?.commandId
+      ?? (/^[a-z][a-z0-9]*(?:[.-][a-z0-9][a-z0-9-]*)+$/u.test(name)
+        ? name
+        : `dsh-tui.${name.toLowerCase().replace(/[^a-z0-9-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'command'}`)
+    if (!currentGrantStore().allows(
+      { componentId: 'root' },
+      'commands.invoke',
+      rootScope,
+    )) {
+      ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
+      ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'bind',
+          resource: { kind: 'permission', id: `root:commands.invoke:${rootScope}` },
+          result: 'failed',
+          errorCode: 'PERMISSION_NOT_GRANTED',
+        },
+        ctx,
+      )
+      return t('command-invoke-denied')
+    }
+    // Per-owner gate (C-041): a command REGISTERED BY A PLUGIN through the
+    // plugin-host row's mediated registerCommand (see command-attribution.js)
+    // is additionally gated on the OWNER's grant, so a denies entry for the
+    // plugin closes the host-mediated invocation of ITS commands.
+    // Unattributed host/direct registrations remain inside the documented
+    // trusted-in-process boundary and have no plugin grant to evaluate.
+    if (owner !== undefined && !currentGrantStore().allows(
+      { componentId: owner.componentId, activationId: owner.activationId },
+      'commands.invoke',
+      owner.commandId,
+    )) {
+      ctx.logger.warn(
+        `dsh-tui: registry command "/${name}" invocation denied — owner Component "${owner.componentId}" lost commands.invoke for "${owner.commandId}"`,
+      )
+      ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'bind',
+          resource: { kind: 'permission', id: `${owner.componentId}:commands.invoke:${owner.commandId}` },
+          result: 'failed',
+          errorCode: 'PERMISSION_NOT_GRANTED',
+        },
+        ctx,
+      )
+      return t('command-invoke-denied-owner', { name, owner: owner.componentId })
+    }
     try {
       const execution = await commandService.execute(
         agent,
@@ -1621,7 +1962,7 @@ export function createChannel(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      deliverUserText(trimmed, 'followup')
+      void dispatchUserText(trimmed, 'followup')
     },
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
@@ -1630,11 +1971,13 @@ export function createChannel(
       const trimmed = text.trim()
       if (!trimmed) return
       touchSession(state.agentId)
-      // Official dsh-agent rc.6: steer() is synchronous void — the message
-      // enters the next-step inbox. A rejected step leaves it parked for the
-      // next wake; the inbox events below retire the preview (claimed →
-      // turn boundary, discarded → cancel).
-      deliverUserText(trimmed, 'steer')
+      // Same tui/input decision pass as submit; the delivery re-validates
+      // the live agent after the await. Official dsh-agent rc.6: steer() is
+      // synchronous void — the message enters the next-step inbox; a
+      // rejected step leaves it parked for the next wake, and the inbox
+      // events retire the preview (claimed → turn boundary, discarded →
+      // cancel).
+      void dispatchUserText(trimmed, 'steer')
     },
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
      *  the input for editing instead of being delivered. */
@@ -1676,7 +2019,10 @@ export function createChannel(
         if (interruptSeq !== token) return
         for (const text of queued) {
           touchSession(state.agentId)
-          deliverUserText(text, 'followup')
+          // Same tui/input decision pass as a typed submit: Ctrl+Enter must
+          // not bypass a plugin's cancel/transform policy, and re-queued
+          // texts keep submission order through the one FIFO chain.
+          dispatchUserText(text, 'followup')
         }
       }
       if (typeof whenIdle === 'function') {
@@ -1688,7 +2034,41 @@ export function createChannel(
       }
       return queued.length
     },
-    async rewindTo(row: ChatRow): Promise<string | null> {
+    /**
+     * The `tui/rewind-prompt` decision event (pi's `session_before_fork`):
+     * fired when the rewind picker confirms a message, before any fork
+     * work. The first answering plugin may cancel the rewind (the picker
+     * stays open; the reason is toasted here so the UI string stays
+     * host-localized when absent) or offer extra modes rendered in the
+     * confirm pane. Returns 'cancel', the modes, or null for "no opinion".
+     */
+    async promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null> {
+      if (row.seq === undefined) return null
+      // D-6, same as the other decision points: a slow /new or /resume can
+      // replace the agent while this decision parks. Without the identity
+      // check the picker would go on to show the OLD session's row in the
+      // confirm pane and rewindTo would cut the NEW session at the old
+      // seq — a wrong rewind or a fork failure. Compare agent REFERENCES
+      // (session ids are reusable — ABA) and stale-cancel.
+      const originAgent = agent
+      const decision = await withDecisionPending('tui/rewind-prompt', dispatchTuiDecision(ctx, 'tui/rewind-prompt', {
+        text: row.text,
+        seq: row.seq,
+        sessionId: state.agentId,
+        cwd: state.cwd,
+      }, normalizeRewindPromptDecision))
+      if (agent !== originAgent) {
+        state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+        return 'cancel'
+      }
+      if (decision === undefined) return null
+      if ('cancel' in decision) {
+        state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
+        return 'cancel'
+      }
+      return { modes: decision.modes }
+    },
+    async rewindTo(row: ChatRow, mode: string | null = null): Promise<string | null> {
       if (row.seq === undefined) return null
       const sessions = ctx.get('sessions') as
         | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
@@ -1820,6 +2200,7 @@ export function createChannel(
       for (const event of coalesceReplayEvents(seed)) renderEvent(event)
       // Rebind subscriptions to the new agent, then free the old one.
       const oldHandle = currentHandle
+      const sourceSessionId = String(agent.session.id)
       agent = handle.agent
       currentHandle = handle
       bindAgent()
@@ -1830,6 +2211,41 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      // Decision-event pair around the completed rewind: `tui/rewind-done`
+      // (the first non-empty string is toasted as the post-rewind summary,
+      // e.g. a plugin reporting restored files) and the generic
+      // `tui/session-switched` notification. Listener failures are logged,
+      // never surfaced — the rewind itself already succeeded.
+      //
+      // rewind-done is a post-hoc summary, NOT a gate, so it is dispatched
+      // DECOUPLED from the return value: the picker is already closed and
+      // PromptInput is live — awaiting a slow listener here would delay the
+      // picked text's return to the draft, letting its late arrival
+      // overwrite whatever the user typed meanwhile, and a listener that
+      // never settles would park tui/session-switched forever. The summary
+      // toasts whenever it lands.
+      try {
+        void dispatchTuiDecision(ctx, 'tui/rewind-done', {
+          text: row.text,
+          mode,
+          boundarySeq: boundary,
+          sourceSessionId,
+          childSessionId: String(childId),
+          sessionId: String(childId),
+          cwd: state.cwd,
+        }, normalizeRewindDoneSummary)
+          .then(summary => {
+            if (summary !== undefined) state.notify(summary, { timeoutMs: 6000 })
+          })
+          .catch((error: unknown) => {
+            ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
+          })
+      } catch (error) {
+        // A bare embedder's context may lack the event bus entirely; the
+        // rewind itself already succeeded, so this stays a log line.
+        ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
+      }
+      notifySessionSwitched('rewind', String(childId), sourceSessionId)
       return row.text
     },
     async resumeTo(sessionId: string): Promise<boolean> {
@@ -1853,6 +2269,10 @@ export function createChannel(
         state.notify(t('resume-unavailable'), { color: 'error' })
         return false
       }
+      // Plugin veto point (tui/session-switch): before any read of the
+      // target — a veto leaves the live session and its transcript
+      // untouched.
+      if (await sessionSwitchVetoed('resume', sessionId)) return false
       let handle: AgentHandle
       // Compat boundary: register vouched-for legacy event types (e.g.
       // activity/status from pre-#143 logs) in every reachable dsh-session
@@ -1958,6 +2378,7 @@ export function createChannel(
       settleStreaming()
       // Rebind subscriptions to the resumed agent, then free the old one.
       const oldHandle = currentHandle
+      const previousSessionId = String(agent.session.id)
       agent = handle.agent
       currentHandle = handle
       bindAgent()
@@ -1971,6 +2392,7 @@ export function createChannel(
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       clearStagedImages()
+      notifySessionSwitched('resume', sessionId, previousSessionId)
       return true
     },
     async newSession(): Promise<boolean> {
@@ -1992,6 +2414,9 @@ export function createChannel(
         })
         return false
       }
+      // Plugin veto point (tui/session-switch): no side effects have
+      // happened yet — the session id below is not even allocated.
+      if (await sessionSwitchVetoed('new')) return false
       const sessionId = SessionId(randomUUID())
       let handle: AgentHandle
       // A fresh session composes the caller's DEFAULT preset: the cordis.yml
@@ -2093,6 +2518,7 @@ export function createChannel(
         tools: 0,
       }
       const oldHandle = currentHandle
+      const previousSessionId = String(agent.session.id)
       agent = handle.agent
       currentHandle = handle
       bindAgent()
@@ -2104,6 +2530,7 @@ export function createChannel(
       touchSession(handle.agent.id)
       void oldHandle?.dispose().catch(() => {})
       clearStagedImages()
+      notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
       return true
     },
     listWorkspaces() {
@@ -2318,13 +2745,23 @@ export function createChannel(
       }
       state.notifications.push(item)
       state.emit()
-      setTimeout(() => {
+      const remove = (): void => {
         const index = state.notifications.indexOf(item)
         if (index >= 0) {
           state.notifications.splice(index, 1)
           state.emit()
         }
-      }, item.timeoutMs)
+      }
+      // timeoutMs 0 = sticky: no expiry timer, the dismiss handle is the
+      // only way out (a decision-parked indicator must outlive the wait it
+      // describes — auto-expiring it would hide a still-parked flow, D-8).
+      const expire = item.timeoutMs > 0 ? setTimeout(remove, item.timeoutMs) : undefined
+      // Early-dismiss handle for flows that know their notice went stale
+      // (e.g. a decision-parked indicator whose decision just landed).
+      return () => {
+        if (expire !== undefined) clearTimeout(expire)
+        remove()
+      }
     },
     setDiffLayout(layout) {
       if (layout === state.diffLayout) return
@@ -2772,19 +3209,52 @@ export function createChannel(
         state.notify(t('compact-while-working'), { color: 'warning' })
         return
       }
-      const signal = new AbortController().signal
-      state.notify(t('compact-working'))
-      void compactService
-        .compactNow(agent, signal)
-        .then((result) => {
-          state.notify(result ? t('compact-done') : t('compact-nothing'))
-        })
-        .catch((error: unknown) => {
-          state.notify(
-            t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
-            { color: 'error', timeoutMs: 8000 },
-          )
-        })
+      // Plugin veto point (tui/compact): the first answering plugin may
+      // cancel the compaction before anything runs.
+      const originAgentId = state.agentId
+      // Compare the AGENT REFERENCE after the await, not the id — session
+      // ids are reusable (A → /new → /resume A returns the same id on a new
+      // agent), so an id comparison has an ABA hole that would hand the new
+      // agent to the OLD scope's compaction service.
+      const originAgent = agent
+      void (async () => {
+        const decision = await withDecisionPending('tui/compact', dispatchTuiDecision(ctx, 'tui/compact', {
+          sessionId: originAgentId,
+          cwd: state.cwd,
+        }, normalizeCancelDecision))
+        if (decision !== undefined) {
+          state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
+          return
+        }
+        // Stale-drop (same rule as tui/input): the await parked us while the
+        // user switched sessions — `compactService` was resolved through the
+        // OLD agent's scope chain, and the mutable `agent` now points at the
+        // new session. Running now would hand the new agent to the old
+        // service (or call into an unloaded one).
+        if (agent !== originAgent) {
+          state.notify(t('ext-compact-stale'), { color: 'warning', timeoutMs: 4000 })
+          return
+        }
+        if (state.working) {
+          // The await above gave a queued turn time to start; compacting
+          // mid-turn now would be the same race the check upfront avoided.
+          state.notify(t('compact-while-working'), { color: 'warning' })
+          return
+        }
+        const signal = new AbortController().signal
+        state.notify(t('compact-working'))
+        void compactService
+          .compactNow(agent, signal)
+          .then((result) => {
+            state.notify(result ? t('compact-done') : t('compact-nothing'))
+          })
+          .catch((error: unknown) => {
+            state.notify(
+              t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
+              { color: 'error', timeoutMs: 8000 },
+            )
+          })
+      })()
     },
     runExternalCommand(name, rawInput) {
       return executeRegistryCommand(name, rawInput)
@@ -2947,7 +3417,22 @@ export function createChannel(
       if (existsSync(LEGACY_DATA_DIR)) {
         lines.push(t('doctor-legacy-dir'))
       }
+      // Plugin-spec diagnostics (v0.15): the runtime generation and the
+      // vendored registry self-check, both soft-probed (#183 discipline).
+      const pluginHost = ctx.get('tuiPluginHost')
+      lines.push(t('doctor-plugin-generation', { id: pluginHost?.generationId ?? t('doctor-plugin-host-missing') }))
+      const violations = pluginHost?.selfCheck()
+      lines.push(t('doctor-plugin-registry', {
+        state: violations === undefined ? t('doctor-plugin-host-missing') : violations.length === 0 ? '✓' : `✗ ${violations.length}`,
+      }))
       return lines
+    },
+    pluginsInfo(args: string) {
+      const host = ctx.get('tuiPluginHost')
+      return pluginsInfoLines(args, {
+        grants: host?.grants ?? currentGrantStore(),
+        host: host?.describe(),
+      })
     },
     async listSubagents() {
       const subagents = ctx.get('subagents') as
@@ -3320,9 +3805,30 @@ export function createChannel(
           },
         })
         skillCommands.set(name, { dispose, description })
+        ctx.get('tuiEffectLedger')?.record(
+          { operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' },
+          ctx,
+        )
       } catch (error) {
+        // C-041: a duplicate registration arrives as a plain-message Error
+        // from dsh-commands; map it onto the contract code before handling
+        // (the refusal path itself is unchanged).
+        const mapped = mapCommandError(error)
         skillCommandsRefused.add(name)
-        ctx.logger.warn(`skill commands: "${name}" not registrable: %o`, error)
+        ctx.logger.warn(
+          `skill commands: "${name}" not registrable%s: %o`,
+          hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? ' (DUPLICATE_CONTRIBUTION_ID)' : '',
+          mapped,
+        )
+        ctx.get('tuiEffectLedger')?.record(
+          {
+            operation: 'create',
+            resource: { kind: 'command', id: name },
+            result: 'failed',
+            errorCode: hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED',
+          },
+          ctx,
+        )
       }
     }
   }
@@ -3968,6 +4474,33 @@ ${output}
             text: t('agent-preset-switched', { preset: data.agentPreset ?? 'unknown' }),
           })
           nextRowId += 1
+          break
+        }
+        // Custom plugin events (tuiRenderers seam): a registered renderer
+        // maps the payload to text rows — title as a local row, body as
+        // preview-clipped local-output rows, same shape pushLocal uses.
+        // Runs on the live stream AND on replay (resume/rewind), so the
+        // projection must stay total; the runtime isolates renderer
+        // crashes per type.
+        if (rendererRuntime !== undefined) {
+          const rendered = rendererRuntime.render(
+            (event as { type: string }).type,
+            (event as { data?: unknown }).data,
+          )
+          if (rendered !== undefined) {
+            if (rendered.title !== undefined && rendered.title !== '') {
+              state.rows.push({ id: nextRowId, kind: 'local', text: rendered.title })
+              nextRowId += 1
+            }
+            for (const line of rendered.lines) {
+              state.rows.push({
+                id: nextRowId,
+                kind: 'local-output',
+                text: preview(String(line), LOCAL_OUTPUT_LIMIT),
+              })
+              nextRowId += 1
+            }
+          }
         }
         break
     }
@@ -4101,6 +4634,10 @@ ${output}
       })(),
       ctx.on('session/event', (session, event) => {
         if (session !== agent.session) return
+        // Observation broker (C-042): maps user/message + assistant/message
+        // into grant-gated envelopes; every other event type is a no-op, and
+        // publish never throws into this arm.
+        messageObserver?.publish(session, event)
         activityTracker.onSessionEvent(event)
         renderWorkingActivity()
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the

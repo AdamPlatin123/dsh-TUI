@@ -149,7 +149,7 @@ so keep using `Ctrl`.
 | Group | Commands |
 |---|---|
 | Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline |
-| Status | `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md |
+| Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md |
 | Model | `/model` picker · `/thinking` thinking display · `/tokens` token details · `/theme` theme picker · `/lang` zh/en UI switch |
 | Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr_comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
@@ -296,9 +296,11 @@ Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
 - **Reference implementation**: `dsh-working-activity` (live working-status
   line with dual outlets: TUI prompt slot + `activity/status` session events)
 
-The core repository is never migrated; community plugins live in their own
-repos. The organization only curates and endorses — plugin authors keep full
-ownership of their repositories.
+The core repository remains independent; community plugins live in their own
+repos. The organization only maintains the listing and admission rules — it
+does not endorse or warrant the functionality, quality, or safety of community
+plugins. Plugin authors keep full ownership of their repositories and are
+responsible for their maintenance and security.
 
 ## Community
 
