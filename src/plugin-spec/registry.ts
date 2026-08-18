@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { createAdmissionCatalog } from './tui-extension.js'
 import type { ContractRegistry, PermissionEntry, PermissionRegistry, RegistryEntry } from './types.js'
 
-export const DSH_STD_REVISION = 'a2faa86243a5693ee4970e3d8b3aaf361edea298'
-export const ECOSYSTEM_SPEC_REVISION = 'be1e9a219bd01decf79d825e0c3ac1685bde2be4'
+export const DSH_STD_REVISION = '614dfa1ac168db79fcf4577cf0ebb34e2e3b944b'
+export const ECOSYSTEM_SPEC_REVISION = 'd41ab903f27ed8225731fbfa27cd1b35c501c5ab'
 
 export interface SpecData {
   dir: string
