@@ -133,13 +133,25 @@ const cleanup: string[] = [fakeHome]
   check1('corrupt store denies deny-default', !corrupt.allows(principal('root'), 'session.input.intercept', 'tui/input'))
   check1('corrupt store denies allow-default too', !corrupt.allows(principal('root'), 'commands.invoke', 'root.command'))
 
-  // A7. wrong-shape 不算 corrupt——只是没有条目，走 registry 默认。
+  // A7. JSON 语法正确但结构错误仍必须 fail closed。静默丢弃坏 section/
+  // rule 会让 commands.invoke 回落 allow-default，等价于撤销失效。
   const wrongShape = parseGrantStore(JSON.stringify({ grants: [1, 2, 3], denies: 'nope' }))
-  check1('wrong-shape is not corrupt', !wrongShape.corrupt)
-  check1('wrong-shape falls back to defaults (invoke allow)',
-    wrongShape.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
-  check1('wrong-shape falls back to defaults (intercept deny)',
-    !wrongShape.allows(principal('anyone'), 'session.input.intercept', 'tui/input'))
+  check1('wrong-shaped sections are corrupt', wrongShape.corrupt)
+  check1('wrong-shaped sections deny allow-default too',
+    !wrongShape.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
+  const malformedRule = parseGrantStore(JSON.stringify({
+    grants: { anyone: [{ name: 'commands.invoke' }] },
+  }))
+  check1('a malformed rule makes the whole file corrupt', malformedRule.corrupt)
+  check1('a malformed rule cannot restore invoke defaults',
+    !malformedRule.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
+  const malformedComponent = parseGrantStore(JSON.stringify({ grants: { anyone: {} } }))
+  check1('a non-array Component rule list is corrupt', malformedComponent.corrupt)
+  const unknownRootField = parseGrantStore(JSON.stringify({ grants: {}, typo: {} }))
+  check1('an unknown top-level grant-store field is corrupt', unknownRootField.corrupt)
+  const emptyObject = parseGrantStore('{}')
+  check1('an empty object is a valid default-only store',
+    !emptyObject.corrupt && emptyObject.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
 
   // A8. 注入 registry 证明 store 完全 registry 驱动（无硬编码权限名）。
   const custom = parseGrantStore('', {
@@ -327,6 +339,22 @@ const cleanup: string[] = [fakeHome]
     check1('Command advertised when the commands service is mounted',
       descriptor?.contracts.some(contract => contract.kind === 'Command') === true)
     check1('no boot warnings with commands mounted', withCommandsWarnings.length === 0, withCommandsWarnings.join(' | '))
+  }
+
+  // Partial embed: mounting only the host anchor does not magically provide
+  // the sibling storage/observer services. The descriptor must reflect that
+  // live topology instead of advertising registry entries as implementations.
+  {
+    const partialCtx = new Context()
+    partialCtx.logger.warn = () => undefined
+    partialCtx.plugin(pluginHostRow.TuiPluginHostRuntime)
+    await sleep(30)
+    const descriptor = partialCtx.get('tuiPluginHost')?.hostDescriptor()
+    check1('partial host excludes unmounted storage and observer contracts',
+      descriptor !== undefined
+      && !descriptor.contracts.some(contract => contract.kind === 'LocalStorage')
+      && !descriptor.contracts.some(contract => contract.kind === 'MessageObserver')
+      && descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'))
   }
 
   // A lazy descriptor must also follow services that appear or disappear

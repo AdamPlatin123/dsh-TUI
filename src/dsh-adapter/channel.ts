@@ -56,7 +56,8 @@ import type { TuiCommandTreeRuntime } from './command-trees.js'
 import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
-import type { TuiRendererRuntime } from './renderers.js'
+import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
+import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
@@ -1241,7 +1242,9 @@ export function createChannel(
   // messages.observe broker (optional service, C-042): mounted by the
   // dsh-tui-plugin-host row; absent the row, publish is a no-op and nothing
   // else changes (soft degradation, #183).
-  const messageObserver = ctx.get('tuiMessageObserver')
+  const messageObserver = getHostMessageObserver(
+    ctx.get('tuiMessageObserver') as TuiMessageObserverRuntime | undefined,
+  )
   // Workspace registry runtime (optional service, issue #183): mounted by
   // the bundle patch's dsh-tui-workspaces row; absent the row (stale patch
   // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
@@ -1262,7 +1265,7 @@ export function createChannel(
   // Custom-entry text renderers (optional service, dsh-tui-extensions row):
   // absent the row, unknown plugin event types stay invisible in the
   // transcript, exactly as before the seam existed.
-  const rendererRuntime = ctx.get('tuiRenderers') as TuiRendererRuntime | undefined
+  const rendererRuntime = getHostRenderers(ctx.get('tuiRenderers') as TuiRendererRuntime | undefined)
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)

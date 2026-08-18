@@ -135,6 +135,18 @@ export function declaresObserverScope(identity: VerifiedComponentIdentity, actua
 }
 
 export function requiresDecisionEvents(identity: VerifiedComponentIdentity): boolean {
+  return requiresContract(identity, 'tui.dsh/v1alpha1', 'DecisionEvents')
+}
+
+/** Whether admission negotiated the protocol that backs a mediated runtime
+ * capability.  Permissions alone are not a capability grant: a plugin must
+ * explicitly require the corresponding contract before the host can expose
+ * its calls. */
+export function requiresContract(
+  identity: VerifiedComponentIdentity,
+  apiVersion: string,
+  kind: string,
+): boolean {
   return identity.manifest.requires.contracts.some(requirement =>
-    requirement.apiVersion === 'tui.dsh/v1alpha1' && requirement.kind === 'DecisionEvents')
+    requirement.apiVersion === apiVersion && requirement.kind === kind)
 }

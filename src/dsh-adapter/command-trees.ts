@@ -2,6 +2,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { CommandCompletionNode, LocalizedDescriptions } from '../commands.js'
+import { bindCallerEffect, concreteService } from './host-access.js'
 
 export interface TuiCommandTreeProvider {
   /** Root command name without `/`. Must match the command registry entry. */
@@ -22,27 +23,30 @@ export const name = 'dsh-tui-command-trees'
 
 /** Small host-only registry; command execution remains owned by dsh-commands. */
 export class TuiCommandTreeRuntime extends Service {
-  private readonly providers = new Map<string, TuiCommandTreeProvider>()
-
   constructor(ctx: Context) {
     super(ctx, 'tuiCommandTrees')
+    commandTreeStates.set(this, { providers: new Map() })
   }
 
   register(provider: TuiCommandTreeProvider): () => void {
+    const state = commandTreeStateFor(this)
     const root = provider.root.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_-]*$/u.test(root)) throw new TypeError(`invalid TUI command-tree root: ${provider.root}`)
-    if (this.providers.has(root)) throw new Error(`TUI command-tree root "${root}" is already registered`)
+    if (state.providers.has(root)) throw new Error(`TUI command-tree root "${root}" is already registered`)
     const normalized = { ...provider, root }
-    this.providers.set(root, normalized)
-    return () => {
-      if (this.providers.get(root) === normalized) this.providers.delete(root)
+    state.providers.set(root, normalized)
+    const dispose = () => {
+      if (state.providers.get(root) === normalized) state.providers.delete(root)
     }
+    bindCallerEffect(this.ctx, dispose)
+    return dispose
   }
 
   children(canonicalPath: readonly string[]): readonly CommandCompletionNode[] {
+    const state = commandTreeStateFor(this)
     const root = canonicalPath[0]?.toLowerCase()
     if (root === undefined) return []
-    const provider = this.providers.get(root)
+    const provider = state.providers.get(root)
     if (provider === undefined) return []
     try {
       return provider.children(canonicalPath)
@@ -53,8 +57,20 @@ export class TuiCommandTreeRuntime extends Service {
   }
 
   descriptions(root: string): LocalizedDescriptions | undefined {
-    return this.providers.get(root.trim().toLowerCase())?.descriptions
+    return commandTreeStateFor(this).providers.get(root.trim().toLowerCase())?.descriptions
   }
+}
+
+interface CommandTreeState {
+  readonly providers: Map<string, TuiCommandTreeProvider>
+}
+
+const commandTreeStates = new WeakMap<TuiCommandTreeRuntime, CommandTreeState>()
+
+function commandTreeStateFor(runtime: TuiCommandTreeRuntime): CommandTreeState {
+  const state = commandTreeStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiCommandTrees host state is unavailable')
+  return state
 }
 
 export default TuiCommandTreeRuntime

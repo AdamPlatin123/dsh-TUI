@@ -8,6 +8,7 @@
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { basename, isAbsolute, resolve } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
 
 export type TuiWorkspaceKind = 'local' | 'provider'
 
@@ -101,31 +102,55 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export const name = 'dsh-tui-workspaces'
+/** Bound every provider promise so one plugin cannot park workspace flows. */
+export const WORKSPACE_PROVIDER_TIMEOUT_MS = 2000
+
+async function providerWithBudget<T>(
+  task: () => T | Promise<T>,
+  signal: AbortSignal | undefined,
+  timeoutMs = WORKSPACE_PROVIDER_TIMEOUT_MS,
+): Promise<T | undefined> {
+  signal?.throwIfAborted()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const work = Promise.resolve().then(task)
+  const timeout = new Promise<undefined>(resolveTimeout => {
+    timer = setTimeout(() => resolveTimeout(undefined), timeoutMs)
+  })
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 /** Registry and local fallback shared by the TUI and workspace plugins. */
 export class TuiWorkspaceRuntime extends Service {
-  private readonly providers = new Set<TuiWorkspaceProvider>()
-  private readonly providerWaiters = new Set<() => void>()
-
   constructor(ctx: Context) {
     super(ctx, 'tuiWorkspaces')
+    workspaceStates.set(this, { hostContext: compositionRoot(ctx), providers: new Set(), providerWaiters: new Set() })
   }
 
   register(provider: TuiWorkspaceProvider): () => void {
-    this.providers.add(provider)
+    const state = workspaceStateFor(this)
+    state.providers.add(provider)
     this.notifyProviderWaiters()
-    return () => {
-      this.providers.delete(provider)
+    const dispose = () => {
+      state.providers.delete(provider)
       this.notifyProviderWaiters()
     }
+    bindCallerEffect(this.ctx, dispose)
+    return dispose
   }
 
   async list(currentCwd: string, signal?: AbortSignal): Promise<readonly TuiWorkspaceTarget[]> {
     signal?.throwIfAborted()
     const targets = new Map<string, TuiWorkspaceTarget>()
-    for (const provider of this.providers) {
+    const state = workspaceStateFor(this)
+    for (const provider of state.providers) {
       try {
-        for (const target of await provider.list(signal)) targets.set(target.uri, this.withStoredTitle(target))
+        const listed = await providerWithBudget(() => provider.list(signal), signal)
+        if (listed === undefined) continue
+        for (const target of listed) targets.set(target.uri, this.withStoredTitle(target))
       } catch (error) {
         this.ctx.logger.warn(`dsh-tui: workspace provider list failed: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -157,18 +182,23 @@ export class TuiWorkspaceRuntime extends Service {
 
   /** Resolve a URI, briefly allowing concurrently mounted providers to register. */
   async resolve(reference: string, currentCwd = process.cwd(), signal?: AbortSignal): Promise<TuiWorkspaceTarget | undefined> {
+    const state = workspaceStateFor(this)
     if (isAbsolute(reference)) return localWorkspaceTarget(reference)
     const deadline = Date.now() + 5000
     const scheme = uriScheme(reference)
     if (scheme === undefined) {
-      const owner = [...this.providers].find((provider) => {
+      const owner = [...state.providers].find((provider) => {
         try {
           return provider.describe(currentCwd) !== undefined
         } catch {
           return false
         }
       })
-      if (owner !== undefined) return owner.resolvePath?.(reference, currentCwd, signal)
+      if (owner !== undefined) {
+        return owner.resolvePath === undefined
+          ? undefined
+          : providerWithBudget(() => owner.resolvePath!(reference, currentCwd, signal), signal)
+      }
       return localWorkspaceTarget(resolve(currentCwd, reference))
     }
 
@@ -176,10 +206,14 @@ export class TuiWorkspaceRuntime extends Service {
     if (local !== undefined) return local
     for (;;) {
       signal?.throwIfAborted()
-      const owners = [...this.providers].filter(provider =>
+      const owners = [...state.providers].filter(provider =>
         provider.schemes.some(candidate => candidate.toLowerCase() === scheme))
       for (const provider of owners) {
-        const target = await provider.resolve(reference, signal)
+        const target = await providerWithBudget(
+          () => provider.resolve(reference, signal),
+          signal,
+          Math.max(1, deadline - Date.now()),
+        )
         if (target !== undefined) return target
       }
       if (owners.length > 0) return undefined
@@ -189,7 +223,8 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   describe(cwd: string): TuiWorkspaceTarget {
-    for (const provider of this.providers) {
+    const state = workspaceStateFor(this)
+    for (const provider of state.providers) {
       let target: TuiWorkspaceTarget | undefined
       try {
         target = provider.describe(cwd)
@@ -203,10 +238,11 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   async commandShell(cwd: string): Promise<TuiCommandShell | undefined> {
-    for (const provider of this.providers) {
+    const state = workspaceStateFor(this)
+    for (const provider of state.providers) {
       let shell: TuiCommandShell | undefined
       try {
-        shell = await provider.commandShell?.(cwd)
+        shell = await providerWithBudget(() => provider.commandShell?.(cwd), undefined)
       } catch (error) {
         this.ctx.logger.warn(`dsh-tui: workspace provider commandShell failed: ${error instanceof Error ? error.message : String(error)}`)
         continue
@@ -219,7 +255,8 @@ export class TuiWorkspaceRuntime extends Service {
   async rename(cwd: string, title: string): Promise<TuiWorkspaceTarget> {
     const normalizedTitle = title.trim()
     if (normalizedTitle.length === 0) throw new Error('workspace title must not be empty')
-    for (const provider of this.providers) {
+    const state = workspaceStateFor(this)
+    for (const provider of state.providers) {
       let owned = false
       try {
         owned = provider.describe(cwd) !== undefined
@@ -231,7 +268,7 @@ export class TuiWorkspaceRuntime extends Service {
       // the local durable ledger below — the title stays visible everywhere
       // this runtime runs. A rename that THROWS propagates to the caller's
       // failure notification instead of silently writing a local record.
-      const renamed = await provider.rename?.(cwd, normalizedTitle)
+      const renamed = await providerWithBudget(() => provider.rename?.(cwd, normalizedTitle), undefined)
       if (renamed !== undefined) return this.withStoredTitle(renamed)
       break
     }
@@ -244,7 +281,7 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   commands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[] {
-    return [...this.providers].flatMap(provider => provider.commands ?? []).map(command => ({
+    return [...workspaceStateFor(this).providers].flatMap(provider => provider.commands ?? []).map(command => ({
       name: command.name,
       aliases: command.aliases,
       description: command.description,
@@ -253,17 +290,18 @@ export class TuiWorkspaceRuntime extends Service {
 
   async runCommand(name: string, input: string, cwd: string, signal?: AbortSignal): Promise<TuiWorkspaceCommandResult | undefined> {
     const normalized = name.toLowerCase()
-    for (const provider of this.providers) {
+    const state = workspaceStateFor(this)
+    for (const provider of state.providers) {
       const command = provider.commands?.find(candidate =>
         candidate.name.toLowerCase() === normalized
         || candidate.aliases?.some(alias => alias.toLowerCase() === normalized))
-      if (command !== undefined) return command.run(input, { cwd }, signal)
+      if (command !== undefined) return providerWithBudget(() => command.run(input, { cwd }, signal), signal)
     }
     return undefined
   }
 
   private workspaceRegistry(): WorkspaceRegistryLike | undefined {
-    return this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+    return workspaceStateFor(this).hostContext.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
   }
 
   private withStoredTitle(target: TuiWorkspaceTarget): TuiWorkspaceTarget {
@@ -272,8 +310,9 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   private notifyProviderWaiters(): void {
-    for (const waiter of this.providerWaiters) waiter()
-    this.providerWaiters.clear()
+    const state = workspaceStateFor(this)
+    for (const waiter of state.providerWaiters) waiter()
+    state.providerWaiters.clear()
   }
 
   private waitForProvider(timeoutMs: number, signal?: AbortSignal): Promise<void> {
@@ -285,21 +324,35 @@ export class TuiWorkspaceRuntime extends Service {
         settled = true
         clearTimeout(timer)
         signal?.removeEventListener('abort', abort)
-        this.providerWaiters.delete(finish)
+        workspaceStateFor(this).providerWaiters.delete(finish)
         resolveWait()
       }
       const abort = (): void => {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        this.providerWaiters.delete(finish)
+        workspaceStateFor(this).providerWaiters.delete(finish)
         reject(signal?.reason instanceof Error ? signal.reason : new Error('workspace resolution aborted'))
       }
       const timer = setTimeout(finish, timeoutMs)
-      this.providerWaiters.add(finish)
+      workspaceStateFor(this).providerWaiters.add(finish)
       signal?.addEventListener('abort', abort, { once: true })
     })
   }
+}
+
+interface WorkspaceState {
+  readonly hostContext: Context
+  readonly providers: Set<TuiWorkspaceProvider>
+  readonly providerWaiters: Set<() => void>
+}
+
+const workspaceStates = new WeakMap<TuiWorkspaceRuntime, WorkspaceState>()
+
+function workspaceStateFor(runtime: TuiWorkspaceRuntime): WorkspaceState {
+  const state = workspaceStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiWorkspaces host state is unavailable')
+  return state
 }
 
 /** Local-only fallback for direct embedders that call createChannel() without

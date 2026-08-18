@@ -287,7 +287,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))
-  check1('registerCommand stamps the resolved definition on success', pluginHost.includes('stampCommandOwner(this.ctx, attributedDefinition, identity, contributionId)'))
+  check1('registerCommand stamps the resolved definition on success',
+    pluginHost.includes('stampCommandOwner(host, attributedDefinition, identity, contributionId)'))
   check1('registerCommand resolves commands through the plugin context', pluginHost.includes("pluginCtx.get('commands')"))
   check1('registerCommand maps duplicate errors', pluginHost.includes('mapCommandError(error)'))
 

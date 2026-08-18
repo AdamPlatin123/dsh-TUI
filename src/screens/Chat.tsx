@@ -11,7 +11,7 @@ import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type 
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore } from '../dsh-adapter/status.js'
-import type { TuiShortcutRuntime } from '../dsh-adapter/shortcuts.js'
+import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { ApprovalStore } from '../dsh-adapter/approvals.js'
@@ -178,8 +178,8 @@ export function Chat({
   extensionDialogs?: TuiDialogStore
   /** Plugin status-line contributions (tuiStatus service's store). */
   extensionStatus?: TuiStatusStore
-  /** Plugin keyboard shortcut registry (tuiShortcuts service). */
-  extensionShortcuts?: TuiShortcutRuntime
+  /** Host-only keyboard shortcut dispatch path. */
+  extensionShortcuts?: TuiShortcutHost
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
@@ -242,12 +242,9 @@ export function Chat({
   // outlives its channel.
   React.useEffect(() => {
     if (extensionShortcuts === undefined) return
-    extensionShortcuts.onError = combo => {
+    return extensionShortcuts.setErrorHandler(combo => {
       channel.notify(t('ext-shortcut-failed', { combo }), { color: 'error', timeoutMs: 4000 })
-    }
-    return () => {
-      extensionShortcuts.onError = undefined
-    }
+    })
   }, [extensionShortcuts, channel])
   // When a questionnaire batch completes, fold a Q&A summary into the
   // transcript (the tool card itself is hidden from the message list).

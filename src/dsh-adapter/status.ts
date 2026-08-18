@@ -10,6 +10,8 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
+import { bindCallerEffect, concreteService } from './host-access.js'
+import { componentIdentityOf } from './component-identity.js'
 
 /** One rendered contribution. */
 export interface TuiStatusEntry {
@@ -31,13 +33,13 @@ export class TuiStatusStore {
   // value comparison has an ABA hole (set 'x', set 'x' again, the first
   // disposer would wipe the second write, e.g. a hot reload restoring the
   // same status text).
-  private readonly entries = new Map<string, { text: string; token: number }>()
+  private readonly entries = new Map<string, { text: string; token: number; owner: string }>()
   // useSyncExternalStore requires a referentially stable snapshot between
   // emits — a fresh array per call would re-render in an infinite loop.
   private snapshot: readonly TuiStatusEntry[] = []
 
   /** Set or clear (undefined/empty) one key. */
-  set(key: string, text: string | undefined, token = 0): void {
+  set(key: string, text: string | undefined, token = 0, owner = 'host'): void {
     const had = this.entries.has(key)
     if (text === undefined || text === '') {
       if (!had) return
@@ -50,7 +52,7 @@ export class TuiStatusStore {
         existing.token = token
         return
       }
-      this.entries.set(key, { text, token })
+      this.entries.set(key, { text, token, owner })
     }
     this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
     this.emit()
@@ -61,10 +63,17 @@ export class TuiStatusStore {
     return this.snapshot
   }
 
+  /** Host runtime uses this to enforce that one activation cannot rewrite or
+   * clear another activation's keyed contribution. */
+  ownerOf(key: string): string | undefined {
+    return this.entries.get(key)?.owner
+  }
+
   /** Clear `key` only while it still holds the write tagged `token` — a
    *  stale disposer must not wipe a newer contribution (even one with
    *  identical text). Returns true when this call actually cleared. */
-  clearIf(key: string, token: number): boolean {
+  clearIf(key: string, token: number, owner?: string): boolean {
+    if (owner !== undefined && this.entries.get(key)?.owner !== owner) return false
     if (this.entries.get(key)?.token !== token) return false
     this.entries.delete(key)
     this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
@@ -104,16 +113,13 @@ declare module '@deepseek-ai/cordis' {
  * a status line must never take the TUI down.
  */
 export class TuiStatusRuntime extends Service {
-  /** The store the chat screen renders. Exposed for the host, not plugins. */
-  readonly store = new TuiStatusStore()
-
-  /** Monotonic per-write token; a disposer only clears ITS write (see the
-   *  store's token comment for the same-value ABA this prevents). */
-  private nextToken = 1
-
   constructor(ctx: Context) {
     super(ctx, 'tuiStatus')
-    ctx.effect(() => () => this.store.clear())
+    // Keep host state out of the traceable service object. A WeakMap also
+    // works with Cordis's caller-bound method proxy (unlike `#private`).
+    const state: StatusState = { store: new TuiStatusStore(), nextToken: 1 }
+    hostStatusStores.set(this, state)
+    ctx.effect(() => () => state.store.clear())
   }
 
   /**
@@ -138,15 +144,32 @@ export class TuiStatusRuntime extends Service {
    */
   set(key: string, text: string | number | boolean | undefined, identity?: Context): () => void {
     const noop = (): void => {}
-    const normalized = String(key ?? '').trim().toLowerCase()
-    if (!KEY_PATTERN.test(normalized)) {
-      this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected invalid key ${JSON.stringify(key)}`)
+    const state = statusStateFor(this)
+    const store = state.store
+    const callerIdentity = componentIdentityOf(this.ctx)
+    const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
+    if (identity !== undefined && callerIdentity !== undefined && suppliedIdentity !== callerIdentity) {
+      this.ctx.logger.warn('dsh-tui: tuiStatus.set rejected an identity belonging to another activation')
       return noop
     }
-    if (text !== undefined && !this.store.getSnapshot().some(e => e.key === normalized)) {
+    const owner = suppliedIdentity === undefined
+      ? 'host'
+      : `${suppliedIdentity.componentId}\0${suppliedIdentity.activationId}`
+    let normalized: string
+    try {
+      normalized = String(key ?? '').trim().toLowerCase()
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiStatus.set rejected an uncoercible key')
+      return noop
+    }
+    if (!KEY_PATTERN.test(normalized)) {
+      this.ctx.logger.warn('dsh-tui: tuiStatus.set rejected an invalid key')
+      return noop
+    }
+    if (text !== undefined && !store.getSnapshot().some(e => e.key === normalized)) {
       // New key beyond the cap: the line is one row of terminal — an
       // unbounded count would push the prompt off screen.
-      if (this.store.getSnapshot().length >= MAX_ENTRIES) {
+      if (store.getSnapshot().length >= MAX_ENTRIES) {
         this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}": ${MAX_ENTRIES} contributions already shown`)
         return noop
       }
@@ -162,9 +185,13 @@ export class TuiStatusRuntime extends Service {
       }
       cleaned = cleanScalarText(text, TEXT_CELLS)
     }
-    const token = this.nextToken++
-    const had = this.store.getSnapshot().some(entry => entry.key === normalized)
-    this.store.set(normalized, cleaned, token)
+    const token = state.nextToken++
+    const had = store.getSnapshot().some(entry => entry.key === normalized)
+    if (store.ownerOf(normalized) !== undefined && store.ownerOf(normalized) !== owner) {
+      this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}" — the contribution belongs to another activation`)
+      return noop
+    }
+    store.set(normalized, cleaned, token, owner)
     const ledger = this.ctx.get('tuiEffectLedger')
     if (cleaned === undefined) {
       if (had) ledger?.record({ operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' }, identity)
@@ -179,14 +206,39 @@ export class TuiStatusRuntime extends Service {
         identity,
       )
     }
-    return () => {
-      if (this.store.clearIf(normalized, token)) {
+    const dispose = () => {
+      if (store.clearIf(normalized, token, owner)) {
         this.ctx.get('tuiEffectLedger')?.record(
           { operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' },
           identity,
         )
       }
     }
+    bindCallerEffect(this.ctx, dispose)
+    return dispose
+  }
+}
+
+/** Host-only status store accessor; not part of the package export map. */
+interface StatusState {
+  readonly store: TuiStatusStore
+  nextToken: number
+}
+
+const hostStatusStores = new WeakMap<TuiStatusRuntime, StatusState>()
+
+function statusStateFor(runtime: TuiStatusRuntime): StatusState {
+  const store = hostStatusStores.get(concreteService(runtime))
+  if (store === undefined) throw new Error('tuiStatus host store is unavailable')
+  return store
+}
+
+export function getHostStatusStore(runtime: TuiStatusRuntime | undefined): TuiStatusStore | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return hostStatusStores.get(concreteService(runtime))?.store
+  } catch {
+    return undefined
   }
 }
 

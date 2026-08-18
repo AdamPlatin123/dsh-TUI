@@ -77,9 +77,12 @@ const readRecords = (file: string): FileRecord[] =>
 
 /** 一个已通过官方 parser/admission 的插件上下文。 */
 const namedCtx = async (host: InstanceType<typeof Context>, plugin: string, id = `com.example.${plugin}`,
-  permissions: readonly { name: string; scope: string }[] = []): Promise<InstanceType<typeof Context>> => {
+  permissions: readonly { name: string; scope: string }[] = [],
+  requires: readonly { apiVersion: string; kind: string; optional?: boolean; fallback?: string }[] = [],
+): Promise<InstanceType<typeof Context>> => {
   const admitted = await mountAdmitted(host, plugin, testManifest({
     id,
+    requires,
     permissions,
   }))
   return admitted.context
@@ -217,8 +220,8 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const alpha = await namedCtx(ctx, 'alpha', 'com.example.alpha', [
     { name: 'storage.local.read', scope: 'com.example.alpha' },
     { name: 'storage.local.write', scope: 'com.example.alpha' },
-  ])
-  const gamma = await namedCtx(ctx, 'gamma', 'com.example.gamma')
+  ], [STORAGE_COORDINATE])
+  const gamma = await namedCtx(ctx, 'gamma', 'com.example.gamma', [], [STORAGE_COORDINATE])
 
   const storage = ctx.get('tuiPluginStorage')
   if (storage === undefined) throw new Error('tuiPluginStorage not mounted by the row')
@@ -298,8 +301,23 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
     hostIdx !== -1 && ledgerIdx > hostIdx && storageIdx > ledgerIdx && observerIdx > storageIdx)
 
   const shim = readFileSync(join(root, 'src/plugin-host.ts'), 'utf8')
-  check1('public shim exports effect-ledger', shim.includes("export * from './dsh-adapter/effect-ledger.js'"))
-  check1('public shim exports command-errors', shim.includes("export * from './dsh-adapter/command-errors.js'"))
+  check1('public shim exports safe effect-ledger types without host runtime',
+    shim.includes('export type { LedgerEntry, LedgerOperation, LedgerResult, TuiEffectLedgerRuntime }')
+    && !shim.includes("export * from './dsh-adapter/effect-ledger.js'"))
+  check1('public shim exports command error vocabulary without host internals',
+    shim.includes('COMMAND_ERROR_CODES')
+    && !shim.includes("export * from './dsh-adapter/command-errors.js'"))
+  const publicHost = await import('../src/plugin-host.js')
+  const hostOnlyExports = [
+    'getHostAdmission', 'dispatchTuiNotification', 'decisionHandlersOf',
+    'registerDecisionHandler', 'withDecisionRegistration', 'stampCommandOwner',
+    'unstampCommandOwner', 'commandOwner', 'fiberNameOf', 'TuiPluginHostRuntime',
+    'TuiPluginStorageRuntime', 'TuiMessageObserverRuntime', 'TuiEffectLedgerRuntime',
+  ] as const
+  check1('public shim hides loader, ingress, attribution and host runtime exports',
+    hostOnlyExports.every(name => !(name in publicHost)))
+  check1('public shim retains the Cordis row entry points',
+    typeof publicHost.name === 'string' && typeof publicHost.apply === 'function')
 
   const identityParam = (path: string, method: string) => {
     const source = readFileSync(join(root, path), 'utf8')

@@ -3,6 +3,8 @@
 import type React from 'react'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Channel } from './channel.js'
+import { bindCallerEffect, concreteService } from './host-access.js'
+import { componentIdentityOf } from './component-identity.js'
 
 /**
  * Props every plugin scene receives. Both element creation and hooks must go
@@ -59,12 +61,9 @@ export const name = 'dsh-tui-scenes'
  * takes the whole terminal the way the trajectory scene does.
  */
 export class TuiSceneRuntime extends Service {
-  private readonly scenes = new Map<string, TuiSceneDescriptor>()
-  private readonly listeners = new Set<() => void>()
-  private current: TuiSceneDescriptor | undefined
-
   constructor(ctx: Context) {
     super(ctx, 'tuiScenes')
+    sceneStates.set(this, { scenes: new Map(), owners: new Map(), listeners: new Set(), current: undefined })
   }
 
   /**
@@ -74,9 +73,18 @@ export class TuiSceneRuntime extends Service {
    * records `undeclared` (C-060).
    */
   register(descriptor: TuiSceneDescriptor, identity?: Context): () => void {
+    const state = sceneStateFor(this)
+    const callerIdentity = componentIdentityOf(this.ctx)
+    const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
+    if (identity !== undefined && callerIdentity !== undefined && suppliedIdentity !== callerIdentity) {
+      throw new Error('dsh-tui: tuiScenes.register identity belongs to another activation')
+    }
+    const owner = suppliedIdentity === undefined
+      ? 'host'
+      : `${suppliedIdentity.componentId}\0${suppliedIdentity.activationId}`
     const id = descriptor.id.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_-]*$/u.test(id)) throw new TypeError(`invalid TUI scene id: ${descriptor.id}`)
-    if (this.scenes.has(id)) {
+    if (state.scenes.has(id)) {
       this.ctx.get('tuiEffectLedger')?.record(
         {
           operation: 'create',
@@ -88,25 +96,29 @@ export class TuiSceneRuntime extends Service {
       )
       throw new Error(`TUI scene "${id}" is already registered`)
     }
-    const normalized = { ...descriptor, id }
-    this.scenes.set(id, normalized)
+    const normalized = Object.freeze({ ...descriptor, id })
+    state.scenes.set(id, normalized)
+    state.owners.set(id, owner)
     this.ctx.get('tuiEffectLedger')?.record(
       { operation: 'create', resource: { kind: 'scene', id }, result: 'applied' },
       identity,
     )
-    return () => {
-      if (this.scenes.get(id) !== normalized) return
-      this.scenes.delete(id)
+    const dispose = () => {
+      if (state.scenes.get(id) !== normalized) return
+      state.scenes.delete(id)
+      state.owners.delete(id)
       this.ctx.get('tuiEffectLedger')?.record(
         { operation: 'release', resource: { kind: 'scene', id }, result: 'applied' },
         identity,
       )
       // Disposing the open scene must not strand the user on a dead screen.
-      if (this.current === normalized) {
-        this.current = undefined
+      if (state.current === normalized) {
+        state.current = undefined
         this.notify()
       }
     }
+    bindCallerEffect(this.ctx, dispose)
+    return dispose
   }
 
   /**
@@ -115,39 +127,76 @@ export class TuiSceneRuntime extends Service {
    * the log, not silently do nothing in the UI.
    */
   open(id: string): boolean {
-    const scene = this.scenes.get(id.trim().toLowerCase())
+    const state = sceneStateFor(this)
+    const scene = state.scenes.get(id.trim().toLowerCase())
     if (scene === undefined) {
       this.ctx.logger.warn(`dsh-tui: no TUI scene registered as "${id}"`)
       return false
     }
-    if (scene === this.current) return true
-    this.current = scene
+    const callerIdentity = componentIdentityOf(this.ctx)
+    if (callerIdentity !== undefined) {
+      const owner = `${callerIdentity.componentId}\0${callerIdentity.activationId}`
+      if (state.owners.get(scene.id) !== owner) {
+        this.ctx.logger.warn(`dsh-tui: scene "${scene.id}" belongs to another activation`)
+        return false
+      }
+    }
+    if (scene === state.current) return true
+    state.current = scene
     this.notify()
     return true
   }
 
   close(): void {
-    if (this.current === undefined) return
-    this.current = undefined
+    const state = sceneStateFor(this)
+    if (state.current === undefined) return
+    const callerIdentity = componentIdentityOf(this.ctx)
+    if (callerIdentity !== undefined) {
+      const owner = `${callerIdentity.componentId}\0${callerIdentity.activationId}`
+      if (state.owners.get(state.current.id) !== owner) {
+        this.ctx.logger.warn(`dsh-tui: scene "${state.current.id}" belongs to another activation`)
+        return
+      }
+    }
+    state.current = undefined
     this.notify()
   }
 
   /** The scene currently replacing the conversation, if any. */
   get active(): TuiSceneDescriptor | undefined {
-    return this.current
+    return sceneStateFor(this).current
   }
 
   /** UI-side change feed: fired after every open/close/dispose transition. */
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
+    const state = sceneStateFor(this)
+    state.listeners.add(listener)
+    const dispose = () => {
+      state.listeners.delete(listener)
     }
+    bindCallerEffect(this.ctx, dispose)
+    return dispose
   }
 
   private notify(): void {
-    for (const listener of this.listeners) listener()
+    const state = sceneStateFor(this)
+    for (const listener of state.listeners) listener()
   }
+}
+
+interface SceneState {
+  readonly scenes: Map<string, TuiSceneDescriptor>
+  readonly owners: Map<string, string>
+  readonly listeners: Set<() => void>
+  current: TuiSceneDescriptor | undefined
+}
+
+const sceneStates = new WeakMap<TuiSceneRuntime, SceneState>()
+
+function sceneStateFor(runtime: TuiSceneRuntime): SceneState {
+  const state = sceneStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiScenes host state is unavailable')
+  return state
 }
 
 export default TuiSceneRuntime

@@ -29,9 +29,9 @@ import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersion
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
-import type { TuiDialogRuntime } from './dialogs.js'
-import type { TuiStatusRuntime } from './status.js'
-import type { TuiShortcutRuntime } from './shortcuts.js'
+import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
+import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime } from './workspaces.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
@@ -555,9 +555,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
-    extensionDialogs: (ctx.get('tuiDialogs') as TuiDialogRuntime | undefined)?.store,
-    extensionStatus: (ctx.get('tuiStatus') as TuiStatusRuntime | undefined)?.store,
-    extensionShortcuts: ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined,
+    extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
+    extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
+    extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
     // Full-screen surfaces inside Chat — the trajectory scene and the session
     // browser — enter the alt screen themselves in inline mode; in fullscreen
     // the tree is already wrapped below, so they must not nest.

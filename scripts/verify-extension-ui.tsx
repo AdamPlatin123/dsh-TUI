@@ -35,10 +35,10 @@ const [
   { render },
   { Chat },
   { QuestionStore },
-  { TuiDialogStore, TuiDialogRuntime, INPUT_CELLS },
-  { TuiStatusStore, TuiStatusRuntime },
-  { TuiShortcutRuntime, parseShortcutCombo, matchShortcut },
-  { TuiRendererRuntime },
+  { TuiDialogStore, TuiDialogRuntime, getHostDialogStore, INPUT_CELLS },
+  { TuiStatusStore, TuiStatusRuntime, getHostStatusStore },
+  { TuiShortcutRuntime, getHostShortcuts, parseShortcutCombo, matchShortcut },
+  { TuiRendererRuntime, getHostRenderers },
   { parseExtensionGrants },
   { dispatchTuiDecision, normalizeCancelDecision },
   { stringWidth },
@@ -224,6 +224,29 @@ ctx.plugin(TuiShortcutRuntime)
 ctx.plugin(TuiRendererRuntime)
 await sleep(100)
 
+const dialogStore = getHostDialogStore(ctx.tuiDialogs)
+const statusStore = getHostStatusStore(ctx.tuiStatus)
+const shortcutHost = getHostShortcuts(ctx.tuiShortcuts)
+const rendererHost = getHostRenderers(ctx.tuiRenderers)
+if (dialogStore === undefined || statusStore === undefined || shortcutHost === undefined || rendererHost === undefined) {
+  throw new Error('extension host accessors were not initialized')
+}
+
+// Cordis callers receive a traceable service proxy. Host controls must stay
+// absent from that plugin-visible object: direct queue/store/dispatch access
+// would let one extension interfere with another extension's effects.
+check('host-only: dialog queue is absent from the plugin service',
+  !('store' in (ctx.tuiDialogs as object)))
+check('host-only: status store is absent from the plugin service',
+  !('store' in (ctx.tuiStatus as object)))
+check('host-only: shortcut dispatch is absent from the plugin service',
+  !('dispatch' in (ctx.tuiShortcuts as object)) && !('onError' in (ctx.tuiShortcuts as object)))
+check('host-only: renderer dispatch is absent from the plugin service',
+  !('render' in (ctx.tuiRenderers as object)))
+const publicExtensionSurface = await import('../src/extensions.js')
+check('host-only: accessors are absent from the public extension package',
+  !Object.keys(publicExtensionSurface).some(name => name.startsWith('getHost')))
+
 {
   // Malformed requests resolve cancelled + warn; they never throw.
   check('tuiDialogs.select: no options → cancelled + warn',
@@ -249,7 +272,7 @@ await sleep(100)
     ],
     timeoutMs: 150,
   })
-  const snapshot = ctx.tuiDialogs.store.getSnapshot()
+  const snapshot = dialogStore.getSnapshot()
   check('tuiDialogs.select: control chars stripped from the title',
     snapshot?.kind === 'select' && snapshot.title === '带 铃声 的标题', JSON.stringify(snapshot?.title))
   check('tuiDialogs.select: malformed options filtered',
@@ -269,54 +292,54 @@ await sleep(100)
     ],
     timeoutMs: 200,
   })
-  const opaqueSnapshot = ctx.tuiDialogs.store.getSnapshot()
+  const opaqueSnapshot = dialogStore.getSnapshot()
   check('tuiDialogs.select: option ids kept verbatim in the snapshot',
     opaqueSnapshot?.kind === 'select'
     && opaqueSnapshot.options[0]?.id === opaqueId
     && opaqueSnapshot.options[1]?.id === longId)
-  ctx.tuiDialogs.store.cancel(ctx.tuiDialogs.store.getSnapshot()?.key ?? '')
+  dialogStore.cancel(dialogStore.getSnapshot()?.key ?? '')
   check('tuiDialogs.select: cleanup cancel still resolves undefined', (await pick) === undefined)
 }
 
 {
   ctx.tuiStatus.set('Bad Key!', 'nope')
-  check('tuiStatus: invalid key refused + warn', ctx.tuiStatus.store.getSnapshot().length === 0 && warnCount('tuiStatus.set rejected invalid key') === 1)
+  check('tuiStatus: invalid key refused + warn', statusStore.getSnapshot().length === 0 && warnCount('tuiStatus.set rejected an invalid key') === 1)
   // P2-9：文档的 plugin:sub-item 冒号命名约定合法（逐段 slug 校验）。
   ctx.tuiStatus.set('my-plugin:sub-item', 'colon ok')
   check('tuiStatus: colon-namespaced key accepted (documented convention)',
-    ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'my-plugin:sub-item' && e.text === 'colon ok'))
+    statusStore.getSnapshot().some(e => e.key === 'my-plugin:sub-item' && e.text === 'colon ok'))
   ctx.tuiStatus.set('my-plugin:sub-item', undefined)
   // 大写按既有 case-fold 纪律归一为小写后接受。
   ctx.tuiStatus.set('My-Plugin:Sub-Item', 'folded')
   check('tuiStatus: uppercase colon key case-folds and is accepted',
-    ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'my-plugin:sub-item' && e.text === 'folded'))
+    statusStore.getSnapshot().some(e => e.key === 'my-plugin:sub-item' && e.text === 'folded'))
   ctx.tuiStatus.set('My-Plugin:Sub-Item', undefined)
   // 归一化后仍畸形的（空段/连冒号/空格）拒绝。
   for (const bad of ['trail:', ':lead', 'double::colon', 'has space:x']) {
-    const before = warnCount('tuiStatus.set rejected invalid key')
+    const before = warnCount('tuiStatus.set rejected an invalid key')
     ctx.tuiStatus.set(bad, 'nope')
-    check(`tuiStatus: malformed colon key "${bad}" refused`, warnCount('tuiStatus.set rejected invalid key') === before + 1)
+    check(`tuiStatus: malformed colon key "${bad}" refused`, warnCount('tuiStatus.set rejected an invalid key') === before + 1)
   }
   ctx.tuiStatus.set('demo', '构建\x1b[31m中')
   check('tuiStatus: control chars stripped',
-    ctx.tuiStatus.store.getSnapshot()[0]?.text === '构建 [31m中', JSON.stringify(ctx.tuiStatus.store.getSnapshot()[0]?.text))
+    statusStore.getSnapshot()[0]?.text === '构建 [31m中', JSON.stringify(statusStore.getSnapshot()[0]?.text))
   // Scalar-only coercion: a non-scalar text is refused with a warn — never
   // rendered as "[object Object]", and NOT treated as a clear either.
   ctx.tuiStatus.set('scalar', { nope: true } as unknown as string)
   check('tuiStatus: non-scalar text refused + warn',
-    !ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'scalar')
+    !statusStore.getSnapshot().some(e => e.key === 'scalar')
     && warnCount('tuiStatus.set rejected non-scalar text') === 1)
   // …but a number/boolean coerces (genuine scalars, not objects) — and the
   // public signature accepts them directly, no cast needed.
   ctx.tuiStatus.set('scalar', 42)
   check('tuiStatus: numeric text coerces',
-    ctx.tuiStatus.store.getSnapshot().find(e => e.key === 'scalar')?.text === '42')
+    statusStore.getSnapshot().find(e => e.key === 'scalar')?.text === '42')
   ctx.tuiStatus.set('scalar', undefined)
   // Beyond MAX_ENTRIES (20): the 21st NEW key is refused.
   for (let i = 0; i < 19; i++) ctx.tuiStatus.set(`plug-${String(i).padStart(2, '0')}`, 'x')
   ctx.tuiStatus.set('one-too-many', 'x')
   check('tuiStatus: contribution cap enforced',
-    ctx.tuiStatus.store.getSnapshot().length === 20 && warnCount('contributions already shown') === 1)
+    statusStore.getSnapshot().length === 20 && warnCount('contributions already shown') === 1)
   ctx.tuiStatus.set('demo', undefined)
   for (let i = 0; i < 19; i++) ctx.tuiStatus.set(`plug-${String(i).padStart(2, '0')}`, undefined)
 
@@ -325,14 +348,14 @@ await sleep(100)
   const disposeOld = ctx.tuiStatus.set('lifecycle', '旧值')
   disposeOld()
   check('tuiStatus: disposer clears its own contribution',
-    ctx.tuiStatus.store.getSnapshot().length === 0)
+    statusStore.getSnapshot().length === 0)
   const disposeStale = ctx.tuiStatus.set('lifecycle', '旧值')
   ctx.tuiStatus.set('lifecycle', '新值')
   disposeStale()
   check('tuiStatus: stale disposer keeps the newer value',
-    ctx.tuiStatus.store.getSnapshot()[0]?.text === '新值')
+    statusStore.getSnapshot()[0]?.text === '新值')
   ctx.tuiStatus.set('lifecycle', undefined)
-  check('tuiStatus: explicit clear still works', ctx.tuiStatus.store.getSnapshot().length === 0)
+  check('tuiStatus: explicit clear still works', statusStore.getSnapshot().length === 0)
 
   // Same-value ABA: two writes of IDENTICAL text — the first disposer must
   // not clear the second write (token comparison, not value comparison; a
@@ -341,10 +364,10 @@ await sleep(100)
   const disposeSecond = ctx.tuiStatus.set('aba', '同值')
   disposeFirst()
   check('tuiStatus: same-value stale disposer keeps the newer write',
-    ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'aba' && e.text === '同值'))
+    statusStore.getSnapshot().some(e => e.key === 'aba' && e.text === '同值'))
   disposeSecond()
   check('tuiStatus: the owning disposer clears the same-value write',
-    !ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'aba'))
+    !statusStore.getSnapshot().some(e => e.key === 'aba'))
 }
 
 {
@@ -433,27 +456,27 @@ await sleep(100)
   // dispatch: hit runs the handler and consumes; miss passes through.
   let fired = 0
   ctx.tuiShortcuts.register('alt+z', { description: 'fire', handler: () => { fired += 1 } })
-  check('tuiShortcuts.dispatch: matching key consumed', ctx.tuiShortcuts.dispatch('z', { meta: true }) === true)
+  check('tuiShortcuts.dispatch: matching key consumed', shortcutHost.dispatch('z', { meta: true }) === true)
   await sleep(20)
   check('tuiShortcuts.dispatch: handler ran', fired === 1)
-  check('tuiShortcuts.dispatch: non-matching key passes through', ctx.tuiShortcuts.dispatch('q', { ctrl: true }) === false)
+  check('tuiShortcuts.dispatch: non-matching key passes through', shortcutHost.dispatch('q', { ctrl: true }) === false)
 
   // Throwing handler → onError, never propagated.
   let errored = ''
-  ctx.tuiShortcuts.onError = combo => { errored = combo }
+  const removeErrorHandler = shortcutHost.setErrorHandler(combo => { errored = combo })
   ctx.tuiShortcuts.register('alt+y', {
     description: 'boom',
     handler: () => { throw new Error('handler exploded') },
   })
-  ctx.tuiShortcuts.dispatch('y', { meta: true })
+  shortcutHost.dispatch('y', { meta: true })
   await sleep(20)
   check('tuiShortcuts.dispatch: handler error routed to onError', errored === 'alt+y')
-  ctx.tuiShortcuts.onError = undefined
+  removeErrorHandler()
 
   // dispose unregisters
   const dispose = ctx.tuiShortcuts.register('alt+x', { description: 'temp', handler: noop })
   dispose()
-  check('tuiShortcuts: dispose unregisters', ctx.tuiShortcuts.dispatch('x', { meta: true }) === false)
+  check('tuiShortcuts: dispose unregisters', shortcutHost.dispatch('x', { meta: true }) === false)
 }
 
 {
@@ -463,16 +486,16 @@ await sleep(100)
   ctx.tuiRenderers.register('agent-preset/selected', noop)
   check('tuiRenderers: host-special plugin event refused', warnCount('built-in event types keep their own projection') === 2)
   ctx.tuiRenderers.register('NoSlash', noop)
-  check('tuiRenderers: malformed type refused', warnCount('rejected invalid event type') === 1)
+  check('tuiRenderers: malformed type refused', warnCount('rejected an invalid event type') === 1)
   const dupBefore = warnCount('already registered')
   ctx.tuiRenderers.register('my-plugin/note', () => ({ title: '便签', lines: ['第一行', '第二行'] }))
   ctx.tuiRenderers.register('my-plugin/note', noop)
   check('tuiRenderers: duplicate refused', warnCount('already registered') === dupBefore + 1)
-  const result = ctx.tuiRenderers.render('my-plugin/note', { text: 'x' })
+  const result = rendererHost.render('my-plugin/note', { text: 'x' })
   check('tuiRenderers.render: title + lines returned',
     result?.title === '便签' && result.lines.length === 2)
   check('tuiRenderers.render: unregistered type → undefined',
-    ctx.tuiRenderers.render('other/thing', {}) === undefined)
+    rendererHost.render('other/thing', {}) === undefined)
 
   // The built-in denylist is a module-load SNAPSHOT: a plugin that followed
   // seam 1's rule (adding its type to the live KNOWN_SESSION_EVENT_TYPES
@@ -481,7 +504,7 @@ await sleep(100)
   KNOWN_SESSION_EVENT_TYPES.add('my-plugin/persisted')
   ctx.tuiRenderers.register('my-plugin/persisted', () => ({ lines: ['已登记'] }))
   check('tuiRenderers: renderer for a plugin-REGISTERED type is accepted',
-    ctx.tuiRenderers.render('my-plugin/persisted', {})?.lines.length === 1)
+    rendererHost.render('my-plugin/persisted', {})?.lines.length === 1)
   KNOWN_SESSION_EVENT_TYPES.delete('my-plugin/persisted')
 
   // Output validation inside the render boundary: non-string title dropped
@@ -491,7 +514,7 @@ await sleep(100)
     title: 42 as never,
     lines: Array.from({ length: 5000 }, (_, i) => `行${i}\x07尾部`),
   }))
-  const big = ctx.tuiRenderers.render('big/output', {})
+  const big = rendererHost.render('big/output', {})
   check('tuiRenderers.render: non-string title dropped, no crash', big?.title === undefined)
   check('tuiRenderers.render: lines capped at 100', big?.lines.length === 100, String(big?.lines.length))
   check('tuiRenderers.render: control chars stripped from lines',
@@ -499,22 +522,22 @@ await sleep(100)
   ctx.tuiRenderers.register('mixed/lines', () => ({
     lines: ['文本', 42, true, null, { bad: true }, '末尾'] as never,
   }))
-  const mixed = ctx.tuiRenderers.render('mixed/lines', {})
+  const mixed = rendererHost.render('mixed/lines', {})
   check('tuiRenderers.render: scalar lines coerced, objects skipped',
     mixed?.lines.join('|') === '文本|42|true|末尾', JSON.stringify(mixed?.lines))
 
   // Throwing renderer: skipped, sticky-logged once per type.
   const before = warnCount('renderer for "bad/actor" threw')
   ctx.tuiRenderers.register('bad/actor', () => { throw new Error('render exploded') })
-  ctx.tuiRenderers.render('bad/actor', {})
-  ctx.tuiRenderers.render('bad/actor', {})
+  rendererHost.render('bad/actor', {})
+  rendererHost.render('bad/actor', {})
   check('tuiRenderers.render: throw → undefined, logged once per type',
-    ctx.tuiRenderers.render('bad/actor', {}) === undefined && warnCount('renderer for "bad/actor" threw') === before + 1)
+    rendererHost.render('bad/actor', {}) === undefined && warnCount('renderer for "bad/actor" threw') === before + 1)
 
   // Malformed result (lines not an array) → no opinion.
   ctx.tuiRenderers.register('weird/result', () => ({ title: 'x' }) as never)
   check('tuiRenderers.render: malformed result → undefined',
-    ctx.tuiRenderers.render('weird/result', {}) === undefined)
+    rendererHost.render('weird/result', {}) === undefined)
 }
 
 // ── B2. RFC 0005 D-7: intercept subscriptions require explicit grants ────
@@ -642,9 +665,9 @@ const instance = await render(
     channel={channel as never}
     questionStore={new QuestionStore()}
     onExit={() => {}}
-    extensionDialogs={ctx.tuiDialogs.store}
-    extensionStatus={ctx.tuiStatus.store}
-    extensionShortcuts={ctx.tuiShortcuts}
+    extensionDialogs={dialogStore}
+    extensionStatus={statusStore}
+    extensionShortcuts={shortcutHost}
   />,
   { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
@@ -668,7 +691,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   stdin.write('\r')
   check('ui: select ↓+Enter resolves the second id', (await pending) === 'second')
   await sleep(200)
-  check('ui: dialog closed after settle', ctx.tuiDialogs.store.getSnapshot() === null)
+  check('ui: dialog closed after settle', dialogStore.getSnapshot() === null)
 }
 
 // FIFO: the second dialog waits for the first to settle. Confirm: Enter = yes.
@@ -678,7 +701,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   await sleep(300)
   check('ui: confirm renders with message + localized defaults',
     screen().includes('确认一下') && screen().includes('要做吗'), screen().slice(-200))
-  check('ui: FIFO — second dialog still queued', ctx.tuiDialogs.store.getSnapshot()?.kind === 'confirm')
+  check('ui: FIFO — second dialog still queued', dialogStore.getSnapshot()?.kind === 'confirm')
   stdin.write('\r') // Enter on 是 → true
   check('ui: confirm Enter resolves true', (await first) === true)
   await sleep(300)
@@ -717,7 +740,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   stdin.write('\x1b[200~\r\n\r\n\x1b[201~')
   await sleep(250)
   check('ui: pure-newline paste does NOT confirm the dialog',
-    ctx.tuiDialogs.store.getSnapshot()?.kind === 'confirm')
+    dialogStore.getSnapshot()?.kind === 'confirm')
   stdin.write('\x1b') // cleanup: Esc cancels it
   const resolvedPasteConfirm = await pending
   check('ui: paste-surviving dialog cancels normally', resolvedPasteConfirm === false, JSON.stringify(resolvedPasteConfirm))

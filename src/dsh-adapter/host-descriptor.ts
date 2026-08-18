@@ -33,8 +33,15 @@ export interface HostDescriptorOptions {
 
 export interface HostDescriptorBuild {
   descriptor: HostDescriptor
-  dropped: string[]
-  warnings: string[]
+  readonly dropped: readonly string[]
+  readonly warnings: readonly string[]
+}
+
+function freezeDeep<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== 'object' || seen.has(value as object)) return value
+  seen.add(value as object)
+  for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child, seen)
+  return Object.freeze(value)
 }
 
 export function readOwnPackageVersion(): string {
@@ -158,5 +165,13 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
       descriptor.contracts.length = 0
     }
   }
-  return { descriptor, dropped, warnings }
+  // The descriptor is handed to untrusted admission/diagnostic callers.  A
+  // cached mutable object would let one caller delete contracts or forge the
+  // runtime generation for every later negotiation, so freeze the complete
+  // graph and return immutable diagnostic arrays as well.
+  return Object.freeze({
+    descriptor: freezeDeep(descriptor),
+    dropped: Object.freeze(dropped),
+    warnings: Object.freeze(warnings),
+  })
 }

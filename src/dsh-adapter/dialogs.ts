@@ -21,6 +21,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
+import { concreteService } from './host-access.js'
 
 /** Option of a select dialog. `id` is what the promise resolves with. */
 export interface TuiDialogSelectOption {
@@ -270,19 +271,32 @@ declare module '@deepseek-ai/cordis' {
  * down; callers get a logger warning instead.
  */
 export class TuiDialogRuntime extends Service {
-  /** The queue the chat screen renders. Exposed for the host, not plugins. */
-  readonly store = new TuiDialogStore()
-
   constructor(ctx: Context) {
     super(ctx, 'tuiDialogs')
-    ctx.effect(() => () => this.store.settleAll())
+    // Keep queue state off the service object. Cordis invokes public methods
+    // through a caller-bound proxy, so JS `#private` fields are unsuitable
+    // here; the module-local WeakMap preserves both encapsulation and proxy
+    // compatibility.
+    const store = new TuiDialogStore()
+    hostDialogStores.set(this, store)
+    ctx.effect(() => () => store.settleAll())
   }
 
   /** Cordis traceable services normally provide the caller through `this.ctx`;
    * the explicit overloads below make ownership unambiguous for embedders and
    * tests that retain the service instance directly. */
   private callContext(value: unknown): Context {
-    return Context.is(value) ? value : this.ctx
+    const caller = this.ctx
+    if (!Context.is(value)) return caller
+    // An explicit owner is accepted only when it is the activation that made
+    // the service call.  Otherwise a plugin could pass the root (or another
+    // plugin's context) and leave an orphaned dialog alive after deactivation.
+    if (value !== caller) {
+      let sameActivation = false
+      try { sameActivation = caller.fiber === value.fiber } catch { sameActivation = false }
+      if (!sameActivation) throw new Error('tuiDialogs owner context must be the calling activation')
+    }
+    return value
   }
 
   private timeoutOf(value: unknown): number {
@@ -295,83 +309,120 @@ export class TuiDialogRuntime extends Service {
   select(request: TuiDialogSelectRequest): Promise<string | undefined>
   select(owner: Context, request: TuiDialogSelectRequest): Promise<string | undefined>
   select(ownerOrRequest: Context | TuiDialogSelectRequest, explicitRequest?: TuiDialogSelectRequest): Promise<string | undefined> {
-    const owner = this.callContext(ownerOrRequest)
-    const request = (explicitRequest ?? ownerOrRequest) as TuiDialogSelectRequest
-    const title = clean(request?.title, TITLE_CELLS)
-    const rawOptions = Array.isArray(request?.options) ? request.options : []
-    const options: TuiDialogSelectOption[] = []
-    for (const raw of rawOptions.slice(0, MAX_OPTIONS)) {
-      // The id is NOT render-path data — it is the opaque token the promise
-      // resolves with, matched by the plugin against its own options. Sanitizing
-      // it (whitespace collapse, cell truncation) would hand back a DIFFERENT
-      // string the plugin cannot look up; validate and keep it verbatim.
-      const id = raw?.id
-      const label = clean(raw?.label, LABEL_CELLS)
-      if (typeof id !== 'string' || id === '' || !label) continue
-      // '' (absent, blank, or a dropped non-scalar) means no description row.
-      const description = clean(raw?.description, MESSAGE_CELLS)
-      options.push({ id, label, ...(description === '' ? {} : { description }) })
-    }
-    if (!title || options.length === 0) {
-      this.ctx.logger.warn('dsh-tui: tuiDialogs.select called without a title or options; cancelled')
+    try {
+      const owner = this.callContext(ownerOrRequest)
+      const request = (explicitRequest ?? ownerOrRequest) as TuiDialogSelectRequest
+      const title = clean(request?.title, TITLE_CELLS)
+      const rawOptions = Array.isArray(request?.options) ? request.options : []
+      const options: TuiDialogSelectOption[] = []
+      for (const raw of rawOptions.slice(0, MAX_OPTIONS)) {
+        // The id is NOT render-path data — it is the opaque token the promise
+        // resolves with, matched by the plugin against its own options. Sanitizing
+        // it (whitespace collapse, cell truncation) would hand back a DIFFERENT
+        // string the plugin cannot look up; validate and keep it verbatim.
+        const id = raw?.id
+        const label = clean(raw?.label, LABEL_CELLS)
+        if (typeof id !== 'string' || id === '' || !label) continue
+        // '' (absent, blank, or a dropped non-scalar) means no description row.
+        const description = clean(raw?.description, MESSAGE_CELLS)
+        options.push({ id, label, ...(description === '' ? {} : { description }) })
+      }
+      if (!title || options.length === 0) {
+        this.ctx.logger.warn('dsh-tui: tuiDialogs.select called without a title or options; cancelled')
+        return Promise.resolve(undefined)
+      }
+      return dialogStoreFor(this)
+        .ask({ kind: 'select', title, options }, request.signal, this.timeoutOf(request.timeoutMs), owner)
+        .then(value => (typeof value === 'string' ? value : undefined))
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiDialogs.select received malformed data; cancelled')
       return Promise.resolve(undefined)
     }
-    return this.store
-      .ask({ kind: 'select', title, options }, request.signal, this.timeoutOf(request.timeoutMs), owner)
-      .then(value => (typeof value === 'string' ? value : undefined))
   }
 
   /** Yes/no question; resolves the boolean, false on cancel. */
   confirm(request: TuiDialogConfirmRequest): Promise<boolean>
   confirm(owner: Context, request: TuiDialogConfirmRequest): Promise<boolean>
   confirm(ownerOrRequest: Context | TuiDialogConfirmRequest, explicitRequest?: TuiDialogConfirmRequest): Promise<boolean> {
-    const owner = this.callContext(ownerOrRequest)
-    const request = (explicitRequest ?? ownerOrRequest) as TuiDialogConfirmRequest
-    const title = clean(request?.title, TITLE_CELLS)
-    if (!title) {
-      this.ctx.logger.warn('dsh-tui: tuiDialogs.confirm called without a title; cancelled')
+    try {
+      const owner = this.callContext(ownerOrRequest)
+      const request = (explicitRequest ?? ownerOrRequest) as TuiDialogConfirmRequest
+      const title = clean(request?.title, TITLE_CELLS)
+      if (!title) {
+        this.ctx.logger.warn('dsh-tui: tuiDialogs.confirm called without a title; cancelled')
+        return Promise.resolve(false)
+      }
+      const message = clean(request?.message, MESSAGE_CELLS)
+      const confirmLabel = clean(request?.confirmLabel, LABEL_CELLS)
+      const cancelLabel = clean(request?.cancelLabel, LABEL_CELLS)
+      return dialogStoreFor(this)
+        .ask(
+          {
+            kind: 'confirm',
+            title,
+            ...(message === '' ? {} : { message }),
+            confirmLabel,
+            cancelLabel,
+          },
+          request.signal,
+          this.timeoutOf(request.timeoutMs),
+          owner,
+        )
+        .then(value => value === true)
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiDialogs.confirm received malformed data; cancelled')
       return Promise.resolve(false)
     }
-    const message = clean(request?.message, MESSAGE_CELLS)
-    const confirmLabel = clean(request?.confirmLabel, LABEL_CELLS)
-    const cancelLabel = clean(request?.cancelLabel, LABEL_CELLS)
-    return this.store
-      .ask(
-        {
-          kind: 'confirm',
-          title,
-          ...(message === '' ? {} : { message }),
-          confirmLabel,
-          cancelLabel,
-        },
-        request.signal,
-        this.timeoutOf(request.timeoutMs),
-        owner,
-      )
-      .then(value => value === true)
   }
 
   /** Free-text input; resolves the text, or undefined on cancel. */
   input(request: TuiDialogInputRequest): Promise<string | undefined>
   input(owner: Context, request: TuiDialogInputRequest): Promise<string | undefined>
   input(ownerOrRequest: Context | TuiDialogInputRequest, explicitRequest?: TuiDialogInputRequest): Promise<string | undefined> {
-    const owner = this.callContext(ownerOrRequest)
-    const request = (explicitRequest ?? ownerOrRequest) as TuiDialogInputRequest
-    const title = clean(request?.title, TITLE_CELLS)
-    if (!title) {
-      this.ctx.logger.warn('dsh-tui: tuiDialogs.input called without a title; cancelled')
+    try {
+      const owner = this.callContext(ownerOrRequest)
+      const request = (explicitRequest ?? ownerOrRequest) as TuiDialogInputRequest
+      const title = clean(request?.title, TITLE_CELLS)
+      if (!title) {
+        this.ctx.logger.warn('dsh-tui: tuiDialogs.input called without a title; cancelled')
+        return Promise.resolve(undefined)
+      }
+      const placeholder = clean(request?.placeholder, LABEL_CELLS)
+      const initial = clean(request?.initial, INPUT_CELLS)
+      return dialogStoreFor(this)
+        .ask(
+          { kind: 'input', title, ...(placeholder === '' ? {} : { placeholder }), initial },
+          request.signal,
+          this.timeoutOf(request.timeoutMs),
+          owner,
+        )
+        .then(value => (typeof value === 'string' ? value : undefined))
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiDialogs.input received malformed data; cancelled')
       return Promise.resolve(undefined)
     }
-    const placeholder = clean(request?.placeholder, LABEL_CELLS)
-    const initial = clean(request?.initial, INPUT_CELLS)
-    return this.store
-      .ask(
-        { kind: 'input', title, ...(placeholder === '' ? {} : { placeholder }), initial },
-        request.signal,
-        this.timeoutOf(request.timeoutMs),
-        owner,
-      )
-      .then(value => (typeof value === 'string' ? value : undefined))
+  }
+}
+
+/**
+ * Host-only queue accessor. This module is intentionally not a package
+ * export; plugins receive only the traceable `tuiDialogs` capability, whose
+ * public surface is select/confirm/input.
+ */
+const hostDialogStores = new WeakMap<TuiDialogRuntime, TuiDialogStore>()
+
+function dialogStoreFor(runtime: TuiDialogRuntime): TuiDialogStore {
+  const store = hostDialogStores.get(concreteService(runtime))
+  if (store === undefined) throw new Error('tuiDialogs host store is unavailable')
+  return store
+}
+
+export function getHostDialogStore(runtime: TuiDialogRuntime | undefined): TuiDialogStore | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return hostDialogStores.get(concreteService(runtime))
+  } catch {
+    return undefined
   }
 }
 
