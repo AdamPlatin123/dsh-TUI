@@ -357,3 +357,28 @@ jobs:
       # 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
       # onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
       - run: node --import tsx/esm scripts/verify-plugin-scene-boundary.tsx
+
+  # rc.6 向下兼容门禁（issue: rc6 compat）：verify-rc6-compat.mjs 用 pnpm
+  # overrides 把全部 @deepseek-ai/* 钉到 0.1.0-rc.6 重装，然后在 rc.6 线上
+  # 跑完整编译 + 上游契约门禁。peer 范围把 rc.6 拒之门外、或 blessed 符号
+  # 只在 rc.7 存在，都会在这里先爆，而不是在 rc.6 用户的机器上爆。
+  verify-rc6:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # rc.7 基线安装（缓存命中），脚本随后切换到 rc.6 覆盖安装。
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm verify:rc6

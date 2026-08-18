@@ -121,12 +121,20 @@ export const Config: Schema<Config> = Schema.object({
  * @returns a promise settling when the TUI teardown completes.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
-  const { upstreamDrift, UPSTREAM_VALIDATED_VERSION } = await import('./contract.js')
+  const { upstreamDrift, upstreamLineNumbers, UPSTREAM_VALIDATED_VERSIONS } = await import('./contract.js')
   for (const entry of upstreamDrift()) {
     console.warn(
       `[dsh-tui] upstream drift: ${entry.package} installed=${entry.installed ?? 'missing'} ` +
-      `validated=${UPSTREAM_VALIDATED_VERSION} — the TUI was validated against ` +
-      `${UPSTREAM_VALIDATED_VERSION}; upgrade the profile when upstream is bumped.`,
+      `validated=${UPSTREAM_VALIDATED_VERSIONS.join(' / ')} — the TUI was validated against ` +
+      `${UPSTREAM_VALIDATED_VERSIONS.join(' / ')}; upgrade the profile when upstream is bumped.`,
+    )
+  }
+  const lines = upstreamLineNumbers()
+  if (lines.length > 1) {
+    console.warn(
+      `[dsh-tui] upstream drift: profile mixes release lines (rc.${lines.join(' + rc.')}) — ` +
+      `the TUI is validated against ${UPSTREAM_VALIDATED_VERSIONS.join(' / ')}; ` +
+      `align the profile to one release line before upgrading.`,
     )
   }
   const { apply: ccTuiApply } = await import('./plugin.js')

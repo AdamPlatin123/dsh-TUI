@@ -12,9 +12,12 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 
 ## 上游契约
 
-- 校验版本线:`0.1.0-rc.6`(`src/dsh-adapter/contract.ts`)
+- 校验版本线:`0.1.0-rc.6 / 0.1.0-rc.7` 双线(`src/dsh-adapter/contract.ts`;
+  peer 范围 `^0.1.0-rc.6` 同时接纳两条线,rc.6 核心 profile 可直接安装)
 - 白名单包:blessed list(harness 包按 rc 号校验,框架包 cordis/schemastery 按 major 校验)
-- 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
+- 启动时:检测到 drift 打 warning;同一 profile 混用 rc.6/rc.7 两线也会单独告警;
+  CI 上 `pnpm run verify:contract` 直接失败,`pnpm run verify:rc6` 用 rc.6 覆盖安装
+  重跑编译 + 契约门禁
 
 ## Patch Surface
 

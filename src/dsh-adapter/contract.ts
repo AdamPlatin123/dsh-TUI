@@ -1,7 +1,12 @@
 /**
  * Upstream compatibility contract.
  *
- * The TUI is validated against one upstream release line (0.1.0-rc.7).
+ * The TUI is validated against the 0.1.0-rc.6 and 0.1.0-rc.7 release lines.
+ * rc.6 is a first-class supported line (backward compatibility): every
+ * symbol the adapter imports exists in rc.6, and the only rc.6→rc.7 code
+ * delta in the consumed packages is dsh-llm's replay-metadata typing, which
+ * the TUI never reads. The peer range (`^0.1.0-rc.6`) admits both lines so
+ * an rc.6 core profile installs without peer conflicts.
  * Every official package this adapter touches is blessed here; anything
  * else must go through upstream channels or the adapter, never the UI.
  *
@@ -12,7 +17,18 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+/** Primary validated release line (what the current build was typechecked against). */
 export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.7'
+
+/**
+ * Every validated release line. Both rc.6 and rc.7 are first-class; a
+ * profile running either line must not see drift. Anything outside this
+ * list is unvalidated and keeps warning.
+ */
+export const UPSTREAM_VALIDATED_VERSIONS: readonly string[] = [
+  '0.1.0-rc.6',
+  '0.1.0-rc.7',
+]
 
 /**
  * Framework packages version on their own lines; the contract validates
@@ -91,7 +107,7 @@ function rcNumber(version: string | undefined): number | undefined {
 }
 
 /**
- * Report every blessed package whose installed version is NOT the validated
+ * Report every blessed package whose installed version is NOT on a validated
  * release line. Empty array = the running install matches the contract.
  */
 export function upstreamDrift(): UpstreamDriftEntry[] {
@@ -105,15 +121,31 @@ export function upstreamDrift(): UpstreamDriftEntry[] {
       const installedMajor = Number((installed ?? '').split('.')[0])
       matches = installedMajor === frameworkMajor
     } else {
-      matches = rcNumber(installed) === rcNumber(UPSTREAM_VALIDATED_VERSION)
+      matches = UPSTREAM_VALIDATED_VERSIONS.some(line => rcNumber(installed) === rcNumber(line))
     }
     if (!matches) {
       drift.push({
         package: packageName,
         installed,
-        validated: frameworkMajor !== undefined ? `major ${frameworkMajor}` : UPSTREAM_VALIDATED_VERSION,
+        validated: frameworkMajor !== undefined ? `major ${frameworkMajor}` : UPSTREAM_VALIDATED_VERSIONS.join(' / '),
       })
     }
   }
   return drift
+}
+
+/**
+ * RC numbers of the release lines observed among the installed blessed
+ * packages (frameworks excluded). More than one line in one profile means a
+ * half-upgraded install — the boot warning calls it out separately.
+ */
+export function upstreamLineNumbers(): number[] {
+  const lines = new Set<number>()
+  for (const [packageName, installed] of Object.entries(installedUpstreamVersions())) {
+    if (!UPSTREAM_BLESSED_PACKAGES.includes(packageName as never)) continue
+    if (UPSTREAM_FRAMEWORK_MAJORS[packageName] !== undefined) continue
+    const rc = rcNumber(installed)
+    if (rc !== undefined) lines.add(rc)
+  }
+  return [...lines].sort((a, b) => a - b)
 }
