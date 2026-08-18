@@ -24,11 +24,14 @@
  * back on; a log-replaying consumer mounts the bare package instead.
  * @module @deepseek-harness-tui/dsh-tui/working-activity
  */
-import type { Context } from '@deepseek-ai/cordis'
 import { apply as mountedApply } from 'dsh-working-activity'
 
 export * from 'dsh-working-activity'
 
-export const apply = (ctx: Context, config: Parameters<typeof mountedApply>[1]): void => {
+// Types derive from the mounted plugin's own signature: importing
+// @deepseek-ai/cordis here would violate the adapter boundary gate.
+type MountedContext = Parameters<typeof mountedApply>[0]
+
+export const apply = (ctx: MountedContext, config: Parameters<typeof mountedApply>[1]): void => {
   mountedApply(ctx, { ...config, publish: false })
 }
