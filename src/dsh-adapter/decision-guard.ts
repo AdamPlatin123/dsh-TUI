@@ -50,12 +50,12 @@ import { TUI_DECISION_EVENT_NAMES } from '../plugin-spec/tui-extension.js'
 /** The intercept permission each decision event requires (D-7 naming:
  *  `domain.resource.intercept`). Observe-class events (tui/rewind-done,
  *  tui/session-switched) are deliberately absent. */
-export const DECISION_EVENT_PERMISSIONS: Readonly<Record<string, string>> = {
+export const DECISION_EVENT_PERMISSIONS: Readonly<Record<string, string>> = Object.freeze({
   'tui/input': 'session.input.intercept',
   'tui/rewind-prompt': 'session.rewind.intercept',
   'tui/session-switch': 'session.switch.intercept',
   'tui/compact': 'session.compact.intercept',
-}
+})
 
 // ── Compatibility aliases (pre-GrantStore names) ────────────────────────────
 // The grant-file format and these entry points predate the unified store;

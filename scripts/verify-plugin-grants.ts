@@ -73,6 +73,13 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 }
 const cleanup: string[] = [fakeHome]
 
+// The permission map is part of the public vocabulary but also feeds the
+// host's authorization checkpoint. Readonly TypeScript annotations do not
+// protect a runtime object exposed to plugin code.
+check1('decision permission map is immutable',
+  Object.isFrozen(DECISION_EVENT_PERMISSIONS)
+  && DECISION_EVENT_PERMISSIONS['tui/input'] === 'session.input.intercept')
+
 // ── A. GrantStore 语义 ────────────────────────────────────────────────────
 {
   // A1. 旧字符串格式没有 scope，迁移时必须 fail closed。
