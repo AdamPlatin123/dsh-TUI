@@ -15,6 +15,9 @@
     "access": "public"
   },
   "type": "module",
+  "imports": {
+    "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js"
+  },
   "bin": {
     "dsh-tui": "./bin/dsh-tui.js"
   },
@@ -70,6 +73,7 @@
     "cordis.patch.yml",
     "cordis.yml",
     "dsh-ecosystem-spec/registry",
+    "dsh-ecosystem-spec/protocols",
     "dsh-ecosystem-spec/schemas",
     "presets",
     "skills"
