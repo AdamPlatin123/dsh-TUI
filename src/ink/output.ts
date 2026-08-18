@@ -1,5 +1,6 @@
 import {
   type AnsiCode,
+  ansiCodesToString,
   type StyledChar,
   styledCharsFromTokens,
   tokenize,
@@ -246,6 +247,157 @@ type NoSelectOperation = {
 }
 
 /**
+ * Single-slot cache for the one over-long line that grows every frame during
+ * streaming (the current stream tail). CharCache excludes such lines
+ * (MAX_CACHEABLE_LINE) because a cached entry is used for exactly one frame
+ * - so without this slot, every frame re-runs tokenize + grapheme clustering
+ * + bidi over the WHOLE line even though only a few characters were appended.
+ * The slot lets a frame that strictly extends the previous frame's line reuse
+ * the prefix clustering and only process the appended suffix.
+ */
+type StreamingLineSlot = {
+  line: string
+  clustered: ClusteredChar[]
+  /** SGR state at end of line (styles of the last styled char) - replayed
+   * before the suffix so appended characters inherit the right style. */
+  trailingStyles: AnsiCode[]
+}
+
+type EscapeTailState = 'none' | 'complete' | 'dangling' | 'bare'
+
+/**
+ * Classify the tail of the line relative to its LAST ESC character.
+ * - 'none': no ESC at all
+ * - 'dangling': the last ESC starts an escape sequence that is cut off at
+ *   end-of-line - next frame's continuation completes it, so the prefix
+ *   clustering cannot be reused (the partial sequence was clustered as text)
+ * - 'bare': the last ESC's sequence is complete but ends exactly at
+ *   end-of-line - the SGR state after it never applied to any character, so
+ *   trailingStyles (derived from the last char) would be stale next frame
+ * - 'complete': last sequence terminated with plain text after it
+ */
+function escapeTailState(line: string): EscapeTailState {
+  const i = line.lastIndexOf('\x1b')
+  if (i === -1) return 'none'
+  const rest = line.slice(i)
+  const c1 = rest[1]
+  if (c1 === undefined) return 'dangling'
+  if (c1 === '[') {
+    for (let k = 2; k < rest.length; k++) {
+      const ch = rest.charCodeAt(k)
+      if (ch >= 0x40 && ch <= 0x7e) return k === rest.length - 1 ? 'bare' : 'complete'
+      if (ch < 0x20 || ch > 0x3f) return 'complete'
+    }
+    return 'dangling'
+  }
+  if (c1 === ']' || c1 === 'P' || c1 === '_' || c1 === '^' || c1 === 'X') {
+    for (let k = 2; k < rest.length; k++) {
+      if (rest[k] === '\x07') return k === rest.length - 1 ? 'bare' : 'complete'
+      if (rest[k] === '\x1b' && rest[k + 1] === '\\') {
+        return k + 1 === rest.length - 1 ? 'bare' : 'complete'
+      }
+    }
+    return 'dangling'
+  }
+  // Two-character sequence ESC <0x30-0x7E>: rest.length >= 2 means complete.
+  return rest.length === 2 ? 'bare' : 'complete'
+}
+
+/** True when the line's last code point may continue into a multi-codepoint
+ *  grapheme (ZWJ, variation selectors, combining marks, skin tones, regional
+ *  indicators) - appending to it would change the last grapheme's clustering. */
+function endsWithOpenGrapheme(line: string): boolean {
+  const cp = line.codePointAt(line.length - 1)
+  if (cp === undefined) return false
+  return (
+    cp === 0x200d ||
+    cp === 0xfe0f ||
+    cp === 0xfe0e ||
+    (cp >= 0x0300 && cp <= 0x036f) ||
+    (cp >= 0x1f3fb && cp <= 0x1f3ff) ||
+    (cp >= 0x1f1e6 && cp <= 0x1f1ff)
+  )
+}
+
+/** Hebrew / Arabic / Syriac and related RTL blocks - bidirectional reordering
+ *  is line-global, so prefix-reuse (which reorders only the suffix) is not
+ *  safe for these; take the full path. */
+function hasRtlChars(text: string): boolean {
+  return /[\u0590-\u05FF\u0600-\u06FF\u0700-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(text)
+}
+
+/** Update (or clear) the streaming slot after a full-path build of `line`.
+ *  The slot is only kept when the line can safely be extended next frame. */
+function updateStreamingSlot(
+  slot: { current: StreamingLineSlot | null },
+  line: string,
+  clustered: ClusteredChar[],
+  chars: StyledChar[],
+): void {
+  if (
+    line.length <= MAX_CACHEABLE_LINE ||
+    endsWithOpenGrapheme(line) ||
+    hasRtlChars(line)
+  ) {
+    // Short lines are served by CharCache; complex tails always take the
+    // full path. Drop a stale slot when the stream settles.
+    if (slot.current) slot.current = null
+    return
+  }
+  const tail = escapeTailState(line)
+  if (tail === 'dangling' || tail === 'bare') {
+    if (slot.current) slot.current = null
+    return
+  }
+  slot.current = {
+    line: detachString(line),
+    clustered,
+    trailingStyles: chars.length > 0 ? chars[chars.length - 1]!.styles : [],
+  }
+}
+
+/**
+ * Build the clustered characters for one line, taking the streaming-prefix
+ * fast path when possible. `slot` is the instance-level streaming slot;
+ * `prevChars`/`fullChars` wiring is handled by updateStreamingSlot.
+ */
+function buildClusteredChars(
+  line: string,
+  stylePool: StylePool,
+  slot: { current: StreamingLineSlot | null },
+): ClusteredChar[] {
+  const prev = slot.current
+  if (
+    prev &&
+    line.length > MAX_CACHEABLE_LINE &&
+    line.length > prev.line.length &&
+    line.startsWith(prev.line) &&
+    !endsWithOpenGrapheme(prev.line) &&
+    !hasRtlChars(line.slice(prev.line.length))
+  ) {
+    // Reuse the prefix clustering verbatim; tokenize only the appended
+    // suffix, replaying the line-end SGR state so new characters inherit
+    // the correct style. Bidi runs on the suffix alone (line verified RTL-free).
+    const suffix = line.slice(prev.line.length)
+    const replay = styledCharsFromTokens(
+      tokenize(ansiCodesToString(prev.trailingStyles) + suffix),
+    )
+    const clustered = styledCharsWithGraphemeClustering(replay, stylePool)
+    const result = prev.clustered.concat(
+      reorderBidi(clustered),
+    )
+    updateStreamingSlot(slot, line, result, replay)
+    return result
+  }
+  const chars = styledCharsFromTokens(tokenize(line))
+  const clustered = reorderBidi(
+    styledCharsWithGraphemeClustering(chars, stylePool),
+  )
+  updateStreamingSlot(slot, line, clustered, chars)
+  return clustered
+}
+
+/**
  * Collects write/blit/clear/clip operations from the render tree, then
  * applies them to a Screen buffer in get(). The Screen is what gets
  * diffed against the previous frame to produce terminal updates.
@@ -261,6 +413,14 @@ export default class Output {
   private readonly operations: Operation[] = []
 
   private charCache = new CharCache()
+
+  /**
+   * Streaming-tail slot, shared by every writeLineToScreen call of this
+   * Output (only one line grows per frame during streaming). Survives reset()
+   * like charCache - it is keyed by strict line extension, so stale entries
+   * can never produce a wrong hit.
+   */
+  private streamingSlot: { current: StreamingLineSlot | null } = { current: null }
 
   constructor(options: Options) {
     const { width, height, stylePool, screen } = options
@@ -607,6 +767,7 @@ export default class Output {
               screenWidth,
               this.stylePool,
               this.charCache,
+              this.streamingSlot,
             )
             writeCells += contentEnd - x
             // See Screen.softWrap docstring for the encoding. contentEnd
@@ -755,15 +916,11 @@ function writeLineToScreen(
   screenWidth: number,
   stylePool: StylePool,
   charCache: CharCache,
+  streamingSlot: { current: StreamingLineSlot | null },
 ): number {
   let characters = charCache.get(line)
   if (!characters) {
-    characters = reorderBidi(
-      styledCharsWithGraphemeClustering(
-        styledCharsFromTokens(tokenize(line)),
-        stylePool,
-      ),
-    )
+    characters = buildClusteredChars(line, stylePool, streamingSlot)
     charCache.set(line, characters)
   }
 

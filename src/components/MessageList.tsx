@@ -188,6 +188,21 @@ export function MessageList({
   // transcript mid-stream.
   if (sticky && visibleRows.length > 0) {
     start = Math.min(start, visibleRows.length - 1)
+    // Blank-band guard: sticky scrollTop tracks the renderer's FRESH Yoga
+    // scrollHeight, while these offsets use per-row heights measured one to
+    // two commits late. During fast streaming the accurate scrollTop scans
+    // deeper through the underestimated offsets than the real viewport does,
+    // unmounting rows that are still on screen (visible spacer band). Walk
+    // backwards from the tail with the known heights and mount at least one
+    // viewport plus overscan of content above it, so the window can never
+    // open a gap inside what the user is looking at.
+    let covered = viewport + OVERSCAN_LINES
+    let floor = visibleRows.length - 1
+    while (floor > 0 && covered > 0) {
+      covered -= heightOf(visibleRows[floor])
+      floor--
+    }
+    start = Math.min(start, floor + 1)
   }
   if (forceMountRowId !== undefined && forceMountRowId !== null) {
     const idx = visibleRows.findIndex(row => row.id === forceMountRowId)
@@ -254,7 +269,16 @@ export function MessageList({
     }
     if (scrollHandle) {
       if (sticky || (start === 0 && end >= visibleRows.length)) {
-        scrollHandle.setClampBounds(undefined, undefined)
+        // Sticky still needs the MIN clamp: the first wheel-up breaks sticky
+        // on the DOM (ScrollBox.scrollBy) several frames before React
+        // commits a new mount window, and the drain frames in between paint
+        // unmounted spacer rows as a blank band. Clamping to the currently
+        // mounted top shows the edge content until React catches up - same
+        // behavior as the steady-state scroll path. The MAX clamp stays
+        // disabled: sticky follow pushes scrollTop to each frame's new
+        // maxScroll, which a stale mounted max would clamp away.
+        const min = start > 0 ? Math.max(0, base + topPad - viewport) : undefined
+        scrollHandle.setClampBounds(min, undefined)
       } else {
         const min = Math.max(0, base + topPad - viewport)
         scrollHandle.setClampBounds(min, Math.max(min, base + mountedBottom - viewport))

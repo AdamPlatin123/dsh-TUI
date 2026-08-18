@@ -5,7 +5,15 @@ import { env } from '../utils/env.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
-import { cursorMove, cursorTo, eraseLines, SGR_RESET } from './termio/csi.js'
+import {
+  CURSOR_HOME,
+  cursorMove,
+  cursorTo,
+  ERASE_SCREEN,
+  ERASE_SCROLLBACK,
+  eraseLines,
+  SGR_RESET,
+} from './termio/csi.js'
 import { BSU, ESU, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js'
 import { link } from './termio/osc.js'
 
@@ -365,12 +373,23 @@ export function writeDiffToTerminal(
         }
         break
       case 'clearTerminal':
-        // Pass the live row count: the blank only needs one viewport worth
-        // of scroll (see getClearTerminalSequence on why overshooting
-        // evicts the user's real scrollback).
-        buffer += getClearTerminalSequence(
-          (terminal.stdout as unknown as { rows?: number }).rows,
-        )
+        // Hard clear of screen + scrollback. MUST run OUTSIDE the BSU/ESU
+        // sync block: Windows Terminal snaps the viewport back to the top
+        // when 2J/3J execute inside a synchronized-update block
+        // (claude-code#35580) — the reason the scrollUp-based "soft" clear
+        // existed at all. Close the block, clear, reopen. Everything stays
+        // in the SAME write, so the terminal processes it with no
+        // intermediate paint. The hard clear actually removes the UI's
+        // scrollback snapshots (the duplicated whale-logo class of bugs);
+        // the old soft clear (CSI n S) PUSHED the live viewport into the
+        // scrollback instead, depositing a fresh full-UI copy per reset.
+        buffer +=
+          (useSync ? ESU : '') +
+          SGR_RESET +
+          ERASE_SCREEN +
+          ERASE_SCROLLBACK +
+          CURSOR_HOME +
+          (useSync ? BSU : '')
         break
       case 'cursorHide':
         buffer += HIDE_CURSOR
