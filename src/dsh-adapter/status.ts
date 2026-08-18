@@ -10,7 +10,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { assertCallerContext, bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
+import { assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
 
 /** One rendered contribution. */
@@ -115,6 +115,7 @@ declare module '@deepseek-ai/cordis' {
 export class TuiStatusRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiStatus')
+    compositionRoot(ctx)
     // Keep host state out of the traceable service object. A WeakMap also
     // works with Cordis's caller-bound method proxy (unlike `#private`).
     const state: StatusState = { store: new TuiStatusStore(), nextToken: 1 }

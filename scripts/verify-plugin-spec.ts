@@ -225,6 +225,23 @@ try {
   rmSync(malformedRoot, { recursive: true, force: true })
 }
 
+const policyTamperRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-policy-tamper-'))
+try {
+  const policySpecDir = join(policyTamperRoot, 'dsh-ecosystem-spec')
+  cpSync(specDir, policySpecDir, { recursive: true })
+  const permissionsFile = join(policySpecDir, 'registry', 'permissions-0.1.json')
+  const permissions = JSON.parse(readFileSync(permissionsFile, 'utf8')) as {
+    permissions: Array<{ name: string; default: string }>
+  }
+  const readPermission = permissions.permissions.find(permission => permission.name === 'storage.local.read')
+  if (readPermission === undefined) throw new Error('storage.local.read policy missing from fixture')
+  readPermission.default = 'allow'
+  writeFileSync(permissionsFile, JSON.stringify(permissions))
+  expect('permission default drift makes vendored data unavailable', loadSpecData(policySpecDir) === undefined)
+} finally {
+  rmSync(policyTamperRoot, { recursive: true, force: true })
+}
+
 // --- 汇总 ------------------------------------------------------------------
 if (failures.length > 0) {
   console.error(`plugin-spec battery FAILED (${failures.length}/${checks}):`)

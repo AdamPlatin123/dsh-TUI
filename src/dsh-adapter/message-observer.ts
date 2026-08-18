@@ -56,7 +56,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { validateMessageEvent } from '@dsh-std/messages'
 import { check } from '../plugin-spec/schema-check.js'
 import { cleanScalarText } from './sanitize.js'
-import { assertCallerContext, compositionRoot, concreteService } from './host-access.js'
+import { activationContext, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import {
@@ -305,8 +305,10 @@ hostContext: compositionRoot(ctx),
    * unloads.
    */
   subscribe(pluginCtx: Context, listener: MessagesObserveListener, options: { scope: string }): () => void {
-    assertCallerContext(this.ctx, pluginCtx, 'messages.observe.subscribe', this)
-    const identity = requireComponentIdentity(pluginCtx)
+    const caller = activationContext(pluginCtx)
+    if (caller === undefined) throw new Error('dsh-tui: messages.observe.subscribe requires a live activation context')
+    assertCallerContext(this.ctx, caller, 'messages.observe.subscribe', this)
+    const identity = requireComponentIdentity(caller)
     const plugin = identity.componentId
     if (!requiresContract(identity, 'messages.dsh/v1alpha1', 'MessageObserver')) {
       observerStateFor(this).hostContext.logger.warn(
@@ -342,14 +344,14 @@ hostContext: compositionRoot(ctx),
           result: 'failed',
           errorCode: 'PERMISSION_NOT_GRANTED',
         },
-        pluginCtx,
+        caller,
       )
       return () => false
     }
     const subscription: Subscription = {
       plugin,
       identity,
-      ownerContext: pluginCtx,
+      ownerContext: caller,
       scope,
       listener,
       chain: Promise.resolve(),
@@ -359,7 +361,7 @@ hostContext: compositionRoot(ctx),
     observerStateFor(this).subscriptions.add(subscription)
     this.ledger()?.record(
       { operation: 'bind', resource: { kind: 'subscription', id: plugin }, result: 'applied' },
-      pluginCtx,
+      caller,
     )
     const release = (): boolean => {
       if (subscription.closed) return false
@@ -373,11 +375,7 @@ hostContext: compositionRoot(ctx),
         scope,
       )) release()
     })
-    try {
-      pluginCtx.effect(() => release)
-    } catch {
-      // Degraded context: the subscription lives until process end.
-    }
+    bindCallerEffect(caller, release)
     return release
   }
 

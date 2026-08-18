@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ComponentManifest, PluginManifest } from '@dsh-std/manifest'
 import { normalizePermissionScope, scopeCovers } from '../plugin-spec/permission-scope.js'
+import { activationFiber, bindCallerEffect } from './host-access.js'
 
 export type ComponentIdentityErrorCode = 'COMPONENT_NOT_ADMITTED' | 'COMPONENT_ALREADY_ADMITTED'
 
@@ -42,12 +43,8 @@ function validateActivationId(value: unknown): string {
 const identities = new WeakMap<object, VerifiedComponentIdentity>()
 
 function ownerKey(context: Context): object {
-  try {
-    const fiber: unknown = context.fiber
-    if (typeof fiber === 'object' && fiber !== null) return fiber
-  } catch {
-    // A real plugin context always has a fiber; reject degraded callers below.
-  }
+  const fiber = activationFiber(context)
+  if (fiber !== undefined) return fiber
   throw new ComponentIdentityError('COMPONENT_NOT_ADMITTED', 'a Component activation requires an owning Cordis fiber')
 }
 
@@ -73,13 +70,11 @@ export function bindComponentIdentity(
   const release = (): void => {
     if (identities.get(key) === identity) identities.delete(key)
   }
-  try {
-    context.effect(() => release)
-  } catch (error) {
+  if (!bindCallerEffect(context, release)) {
     identities.delete(key)
     throw new ComponentIdentityError(
       'COMPONENT_NOT_ADMITTED',
-      `cannot bind Component identity to an inactive activation: ${error instanceof Error ? error.message : String(error)}`,
+      'cannot bind Component identity to an inactive activation',
     )
   }
   return identity

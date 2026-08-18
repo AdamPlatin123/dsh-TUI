@@ -3,7 +3,7 @@
 import type React from 'react'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Channel } from './channel.js'
-import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
 
 /**
@@ -71,6 +71,7 @@ export const name = 'dsh-tui-scenes'
 export class TuiSceneRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiScenes')
+    compositionRoot(ctx)
     const runtime = this
     const state: SceneState = {
       scenes: new Map(),

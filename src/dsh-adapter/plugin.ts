@@ -33,7 +33,7 @@ import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
-import { createLocalWorkspaceRuntime } from './workspaces.js'
+import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
@@ -232,7 +232,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // without the service means the patch came from an older dsh-tui copy
   // than the running code — warn once so the skew is diagnosable. Bare
   // embedders (no --profile) take the same fallback by design, silently.
-  const mountedWorkspaceService = ctx.get('tuiWorkspaces')
+  const mountedWorkspaceService = getHostWorkspaceRuntime(ctx.get('tuiWorkspaces'))
   if (mountedWorkspaceService === undefined && resolveDshProfileName() !== undefined) {
     ctx.logger.warn(
       'dsh-tui: tuiWorkspaces service is not mounted; /workspace runs with the local-only fallback. ' +

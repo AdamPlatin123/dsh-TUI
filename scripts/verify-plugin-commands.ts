@@ -289,7 +289,7 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     pluginHost.includes('registerCommand(pluginCtx: Context'))
   check1('registerCommand stamps the resolved definition on success',
     pluginHost.includes('stampCommandOwner(host, attributedDefinition, identity, contributionId)'))
-  check1('registerCommand resolves commands through the plugin context', pluginHost.includes("pluginCtx.get('commands')"))
+  check1('registerCommand resolves commands through the canonical activation context', pluginHost.includes("caller.get('commands')"))
   check1('registerCommand maps duplicate errors', pluginHost.includes('mapCommandError(error)'))
 
   const i18n = readFileSync(join(root, 'src/i18n.ts'), 'utf8')

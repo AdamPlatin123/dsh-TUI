@@ -21,7 +21,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { concreteService, requirePluginCaller } from './host-access.js'
+import { activationContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Option of a select dialog. `id` is what the promise resolves with. */
 export interface TuiDialogSelectOption {
@@ -135,6 +135,10 @@ export class TuiDialogStore {
     signal?: AbortSignal,
     timeoutMs?: number,
     owner?: Context,
+    bindOwnerEffect?: (
+      disposer: () => unknown,
+      onRegistered: (cleanup: () => unknown) => void,
+    ) => boolean,
   ): Promise<TuiDialogAnswer> {
     if (signal?.aborted) return Promise.resolve(undefined)
     return new Promise<TuiDialogAnswer>((resolve) => {
@@ -182,11 +186,13 @@ export class TuiDialogStore {
         pending.timer = setTimeout(pending.onAbort, timeoutMs)
       }
       if (owner !== undefined) {
-        try {
-          const disposer = owner.effect(() => pending.onAbort)
-          pending.ownerCleanup = typeof disposer === 'function' ? disposer : undefined
-        } catch {
-          // An inactive activation must never leave an orphan in the queue.
+        const bound = bindOwnerEffect?.(
+          pending.onAbort,
+          cleanup => { pending.ownerCleanup = cleanup },
+        ) ?? false
+        if (!bound) {
+          // An inactive or untrusted activation must never leave an orphan in
+          // the queue. The binder also rolls back partial owner state.
           pending.onAbort()
           return
         }
@@ -273,6 +279,7 @@ declare module '@deepseek-ai/cordis' {
 export class TuiDialogRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiDialogs')
+    compositionRoot(ctx)
     // Keep queue state off the service object. Cordis invokes public methods
     // through a caller-bound proxy, so JS `#private` fields are unsuitable
     // here; the module-local WeakMap preserves both encapsulation and proxy
@@ -291,12 +298,11 @@ export class TuiDialogRuntime extends Service {
     // An explicit owner is accepted only when it is the activation that made
     // the service call.  Otherwise a plugin could pass the root (or another
     // plugin's context) and leave an orphaned dialog alive after deactivation.
-    if (value !== caller) {
-      let sameActivation = false
-      try { sameActivation = caller.fiber === value.fiber } catch { sameActivation = false }
-      if (!sameActivation) throw new Error('tuiDialogs owner context must be the calling activation')
+    const canonical = activationContext(value)
+    if (canonical === undefined || activationContext(caller) !== canonical) {
+      throw new Error('tuiDialogs owner context must be the calling activation')
     }
-    return value
+    return canonical
   }
 
   private timeoutOf(value: unknown): number {
@@ -332,7 +338,13 @@ export class TuiDialogRuntime extends Service {
         return Promise.resolve(undefined)
       }
       return dialogStoreFor(this)
-        .ask({ kind: 'select', title, options }, request.signal, this.timeoutOf(request.timeoutMs), owner)
+        .ask(
+          { kind: 'select', title, options },
+          request.signal,
+          this.timeoutOf(request.timeoutMs),
+          owner,
+          (disposer, onRegistered) => bindCallerEffect(owner, disposer, onRegistered),
+        )
         .then(value => (typeof value === 'string' ? value : undefined))
     } catch {
       this.ctx.logger.warn('dsh-tui: tuiDialogs.select received malformed data; cancelled')
@@ -367,6 +379,7 @@ export class TuiDialogRuntime extends Service {
           request.signal,
           this.timeoutOf(request.timeoutMs),
           owner,
+          (disposer, onRegistered) => bindCallerEffect(owner, disposer, onRegistered),
         )
         .then(value => value === true)
     } catch {
@@ -395,6 +408,7 @@ export class TuiDialogRuntime extends Service {
           request.signal,
           this.timeoutOf(request.timeoutMs),
           owner,
+          (disposer, onRegistered) => bindCallerEffect(owner, disposer, onRegistered),
         )
         .then(value => (typeof value === 'string' ? value : undefined))
     } catch {

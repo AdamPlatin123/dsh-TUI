@@ -46,7 +46,7 @@ import {
   validateDeleteOutput,
 } from '@dsh-std/storage'
 import { DATA_DIR } from '../utils/paths.js'
-import { assertCallerContext, compositionRoot, concreteService } from './host-access.js'
+import { activationContext, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
 import { declaresPermission, requireComponentIdentity, requiresContract, type VerifiedComponentIdentity } from './component-identity.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
@@ -284,9 +284,11 @@ hostContext: compositionRoot(ctx),
    * disposer); data is retained (contract cleanup rule).
    */
   open(pluginCtx: Context): TuiPluginStorage {
-    assertCallerContext(this.ctx, pluginCtx, 'storage.local.open', this)
+    const caller = activationContext(pluginCtx)
+    if (caller === undefined) throw new PluginStorageError('STORAGE_UNAVAILABLE', 'storage.local.open requires a live activation context')
+    assertCallerContext(this.ctx, caller, 'storage.local.open', this)
     const state = storageStateFor(this)
-    const identity = requireComponentIdentity(pluginCtx)
+    const identity = requireComponentIdentity(caller)
     if (!requiresContract(identity, 'storage.dsh/v1alpha1', 'LocalStorage')) {
       throw new PluginStorageError(
         'PERMISSION_NOT_GRANTED',
@@ -301,25 +303,21 @@ hostContext: compositionRoot(ctx),
     }
     this.ledger()?.record(
       { operation: 'create', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
-      pluginCtx,
+      caller,
     )
     // `closed` is PER HANDLE, not per namespace: unloading one fiber must not
     // kill another handle opened on the same namespace. Close on unload;
-    // idempotent (a double-close stays harmless by design); degraded contexts
-    // without `effect` simply never auto-close.
+    // idempotent (a double-close stays harmless by design).
     let closed = false
-    try {
-      pluginCtx.effect(() => () => {
-        if (closed) return
-        closed = true
-        this.ledger()?.record(
-          { operation: 'release', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
-          pluginCtx,
-        )
-      })
-    } catch {
-      // Degraded context: the handle lives until process end.
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      this.ledger()?.record(
+        { operation: 'release', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
+        caller,
+      )
     }
+    bindCallerEffect(caller, close)
     const file = join(state.dir, `${storageFileName(plugin)}.json`)
     const grants = (): GrantStore => this.grants()
     const ledger = (): TuiEffectLedgerRuntime | undefined => this.ledger()
@@ -383,7 +381,7 @@ hostContext: compositionRoot(ctx),
             result: 'failed',
             errorCode: 'PERMISSION_NOT_GRANTED',
           },
-          pluginCtx,
+          caller,
         )
         throw new PluginStorageError(
           'PERMISSION_NOT_GRANTED',

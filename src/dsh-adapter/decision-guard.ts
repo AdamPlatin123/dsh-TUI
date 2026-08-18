@@ -46,7 +46,7 @@ import {
   permissionScopeCovers,
 } from '../plugin-spec/permission-scope.js'
 import { TUI_DECISION_EVENT_NAMES } from '../plugin-spec/tui-extension.js'
-import { compositionRoot } from './host-access.js'
+import { bindCallerEffect, compositionRoot } from './host-access.js'
 
 /** The intercept permission each decision event requires (D-7 naming:
  *  `domain.resource.intercept`). Observe-class events (tui/rewind-done,
@@ -305,8 +305,10 @@ export function registerDecisionHandler(
     }
     return true
   }
-  // Both deactivation and grant-file revocation are release boundaries.
-  try { pluginCtx.effect(() => release) } catch { /* degraded test context */ }
+  // Both deactivation and grant-file revocation are release boundaries. Bind
+  // through the host-captured Fiber effect so an explicit Context shadow
+  // cannot replace the cleanup function.
+  bindCallerEffect(pluginCtx, release)
   if (permission !== undefined) {
     const stop = registry.grants.onChange?.(() => {
       const principal = { componentId: identity.componentId, activationId: identity.activationId }
@@ -314,7 +316,7 @@ export function registerDecisionHandler(
     })
     stopGrantWatch = stop
     if (stop !== undefined) {
-      try { pluginCtx.effect(() => stop) } catch { /* degraded test context */ }
+      bindCallerEffect(pluginCtx, stop)
     }
   }
   return release

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ContractCoordinate, HostContract, HostDescriptor } from '../plugin-spec/types.js'
-import { digestFile, loadSpecData } from '../plugin-spec/registry.js'
+import { digestFile, loadSpecData, verifyContractProfiles } from '../plugin-spec/registry.js'
 import { TUI_DECISION_EVENT_NAMES } from '../plugin-spec/tui-extension.js'
 import { createContractIndex, validateHost } from '../plugin-spec/validate.js'
 import { check } from '../plugin-spec/schema-check.js'
@@ -83,11 +83,13 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
   const dropped: string[] = []
   const contracts: HostContract[] = []
   const data = loadSpecData(options.specDir)
-  const advertisedFacets = data?.registry.facetApiVersions
-    ?.filter(version => /^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)$/u.test(version))
-  const facetApiVersions = advertisedFacets !== undefined && advertisedFacets.length > 0
-    ? advertisedFacets
-    : [...HOST_FACET_API_VERSIONS]
+  // `loadSpecData` rejects malformed/empty facet declarations. Preserve the
+  // pinned values exactly when data is valid; use the schema-valid fallback
+  // only for the completely unavailable/degraded path.
+  const facetApiVersions = data === undefined
+    ? [...HOST_FACET_API_VERSIONS]
+    : [...data.registry.facetApiVersions]
+  const profileFailures = data === undefined ? [] : verifyContractProfiles(data)
 
   if (data === undefined) {
     warnings.push('admission profile unavailable (dsh-ecosystem-spec/); advertising an empty protocol surface')
@@ -103,6 +105,11 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
         continue
       }
       if ('profile' in entry) {
+        if (profileFailures.length > 0) {
+          dropped.push(key)
+          warnings.push(`${key}: TUI contract profile self-check failed (${profileFailures.join(' | ')})`)
+          continue
+        }
         let actual: string
         try {
           actual = digestFile(data.dir, entry.profile)

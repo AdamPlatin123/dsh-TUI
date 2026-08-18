@@ -25,7 +25,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import { cleanRenderText } from './sanitize.js'
-import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** What a renderer returns: an optional title row plus body lines. */
 export interface TuiEntryRenderResult {
@@ -73,6 +73,7 @@ declare module '@deepseek-ai/cordis' {
 export class TuiRendererRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiRenderers')
+    compositionRoot(ctx)
     const runtime = this
     const state: RendererState = {
       renderers: new Map(),

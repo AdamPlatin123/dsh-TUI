@@ -2,7 +2,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { CommandCompletionNode, LocalizedDescriptions } from '../commands.js'
-import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 export interface TuiCommandTreeProvider {
   /** Root command name without `/`. Must match the command registry entry. */
@@ -25,6 +25,7 @@ export const name = 'dsh-tui-command-trees'
 export class TuiCommandTreeRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiCommandTrees')
+    compositionRoot(ctx)
     commandTreeStates.set(this, { providers: new Map() })
   }
 

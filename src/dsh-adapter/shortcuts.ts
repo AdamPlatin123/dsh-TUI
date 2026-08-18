@@ -22,7 +22,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
-import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Minimal shape of the ink Key flags the matcher reads (kept structurally
  *  compatible with `Key` from the ui kit without importing React-facing
@@ -232,6 +232,7 @@ declare module '@deepseek-ai/cordis' {
 export class TuiShortcutRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiShortcuts')
+    compositionRoot(ctx)
     const runtime = this
     const state: ShortcutState = {
       shortcuts: new Map(),

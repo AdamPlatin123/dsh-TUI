@@ -12,7 +12,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { LocalizedDescriptions } from '../commands.js'
-import { bindCallerEffect, concreteService, requirePluginCaller } from './host-access.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Control kinds the TUI settings screen knows how to render. */
 export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
@@ -111,6 +111,7 @@ export const name = 'dsh-tui-settings-sections'
 export class TuiSettingsSectionsRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiSettingsSections')
+    compositionRoot(ctx)
     const runtime = this
     const state: SettingsSectionState = { sections: new Map(), listeners: new Set(), host: undefined }
     state.host = Object.freeze({

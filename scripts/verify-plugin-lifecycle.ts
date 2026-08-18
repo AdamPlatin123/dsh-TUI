@@ -12,7 +12,7 @@ import TuiShortcutRuntime, { getHostShortcuts } from '../src/dsh-adapter/shortcu
 import { TuiRendererRuntime, getHostRenderers } from '../src/dsh-adapter/renderers.js'
 import TuiSceneRuntime, { getHostSceneRuntime } from '../src/dsh-adapter/scenes.js'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections } from '../src/dsh-adapter/settings-sections.js'
-import TuiWorkspaceRuntime from '../src/dsh-adapter/workspaces.js'
+import TuiWorkspaceRuntime, { getHostWorkspaceRuntime } from '../src/dsh-adapter/workspaces.js'
 import TuiCommandTreeRuntime from '../src/dsh-adapter/command-trees.js'
 
 let failures = 0
@@ -39,7 +39,8 @@ const shortcuts = getHostShortcuts(root.get('tuiShortcuts'))
 const renderers = getHostRenderers(root.get('tuiRenderers'))
 const scenes = getHostSceneRuntime(root.get('tuiScenes'))
 const sections = getHostSettingsSections(root.get('tuiSettingsSections'))
-if (dialogs === undefined || status === undefined || shortcuts === undefined || renderers === undefined || scenes === undefined || sections === undefined) {
+const workspaces = getHostWorkspaceRuntime(root.get('tuiWorkspaces'))
+if (dialogs === undefined || status === undefined || shortcuts === undefined || renderers === undefined || scenes === undefined || sections === undefined || workspaces === undefined) {
   throw new Error('lifecycle battery could not resolve host accessors')
 }
 
@@ -51,6 +52,9 @@ let rootWorkspaceRejected = false
 let rootTreeRejected = false
 let rootDialog: Promise<boolean> | undefined
 let retainedStatus: any
+let retainedWorkspace: any
+let foreignWorkspaceCommands: readonly { name: string }[] | undefined
+let foreignWorkspaceRun: Promise<unknown> | undefined
 const rootProbe = root.inject(
   ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],
   (pluginCtx) => {
@@ -169,6 +173,7 @@ const pluginFiber = root.inject(
   ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],
   (pluginCtx) => {
     retainedStatus = pluginCtx.get('tuiStatus')
+    retainedWorkspace = pluginCtx.get('tuiWorkspaces')
     pluginCtx.tuiStatus.set('lifecycle', 'active')
     pluginCtx.tuiShortcuts.register('alt+x', { description: 'lifecycle', handler: () => {} })
     pluginCtx.tuiRenderers.register('lifecycle/note', () => ({ lines: ['active'] }))
@@ -193,9 +198,21 @@ check('live plugin effects are visible before dispose',
   && sections.list().some(section => section.ns === 'lifecycle')
   && shortcuts.dispatch('x', { meta: true })
   && renderers.render('lifecycle/note', {})?.lines[0] === 'active'
-  && root.get('tuiWorkspaces')?.commands().some(command => command.name === 'lifecycle') === true
+  && workspaces.commands().some(command => command.name === 'lifecycle') === true
   && root.get('tuiCommandTrees')?.children(['lifecycle']).length === 1
   && dialogs.getSnapshot()?.kind === 'confirm')
+
+// Provider commands are activation-owned. A second plugin can use its own
+// workspace facade, but it must not discover or invoke the first plugin's
+// command contribution.
+const foreignWorkspaceFiber = root.inject(['tuiWorkspaces'], (pluginCtx) => {
+  foreignWorkspaceCommands = pluginCtx.tuiWorkspaces.commands()
+  foreignWorkspaceRun = pluginCtx.tuiWorkspaces.runCommand('lifecycle', '', process.cwd())
+})
+await foreignWorkspaceFiber
+check('foreign plugin cannot discover another activation workspace commands', foreignWorkspaceCommands?.some(command => command.name === 'lifecycle') !== true)
+check('foreign plugin cannot invoke another activation workspace command', (await foreignWorkspaceRun) === undefined)
+await foreignWorkspaceFiber.dispose()
 
 await pluginFiber.dispose()
 check('plugin dialog is cancelled on its fiber dispose', (await pluginDialog) === false)
@@ -206,9 +223,108 @@ check('fiber dispose releases every registered extension effect',
   && sections.list().length === 0
   && shortcuts.dispatch('x', { meta: true }) === false
   && renderers.render('lifecycle/note', {}) === undefined
-  && root.get('tuiWorkspaces')?.commands().some(command => command.name === 'lifecycle') === false
+  && workspaces.commands().some(command => command.name === 'lifecycle') === false
   && root.get('tuiCommandTrees')?.children(['lifecycle']).length === 0
   && dialogs.getSnapshot() === null)
+
+let retainedWorkspaceCommandsRejected = false
+let retainedWorkspaceRenameRejected = false
+try {
+  retainedWorkspace?.commands()
+} catch {
+  retainedWorkspaceCommandsRejected = true
+}
+try {
+  await retainedWorkspace?.rename(process.cwd(), 'stale')
+} catch {
+  retainedWorkspaceRenameRejected = true
+}
+check('retained workspace proxy rejects commands after dispose', retainedWorkspaceCommandsRejected)
+check('retained workspace proxy rejects rename after dispose', retainedWorkspaceRenameRejected)
+
+// A plugin can shadow the public `fiber` property with an object that looks
+// live, or mutate the real fiber's effect method. Caller authentication must
+// use the Cordis-published identity and the captured host effect, not either
+// writable surface.
+let forgedDialog: Promise<boolean> | undefined
+let forgedSceneRejected = false
+let forgedSettingsRejected = false
+let forgedWorkspaceRejected = false
+let forgedTreeRejected = false
+const forgedFiber = root.inject(
+  ['tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiScenes', 'tuiSettingsSections', 'tuiWorkspaces', 'tuiCommandTrees'],
+  (pluginCtx) => {
+    const fakeFiber = { uid: 999, state: 2, runtime: null, ctx: root, effect: (execute: () => unknown) => execute() }
+    const forged = pluginCtx.extend({ fiber: fakeFiber })
+    forged.get('tuiStatus')?.set('forged', 'must not persist')
+    forged.get('tuiShortcuts')?.register('alt+f', { description: 'forged', handler: () => {} })
+    forged.get('tuiRenderers')?.register('forged/leak', () => ({ lines: ['must not persist'] }))
+    forgedDialog = forged.get('tuiDialogs')?.confirm({ title: 'must not queue' })
+    try {
+      forged.get('tuiScenes')?.register({ id: 'forged-leak', component: () => null })
+    } catch {
+      forgedSceneRejected = true
+    }
+    try {
+      forged.get('tuiSettingsSections')?.register({ ns: 'forged-leak', title: 'Forged', fields: [] })
+    } catch {
+      forgedSettingsRejected = true
+    }
+    try {
+      forged.get('tuiWorkspaces')?.register({ schemes: ['forged-leak'], list: () => [], resolve: () => undefined, describe: () => undefined })
+    } catch {
+      forgedWorkspaceRejected = true
+    }
+    try {
+      forged.get('tuiCommandTrees')?.register({ root: 'forged-leak', children: () => [] })
+    } catch {
+      forgedTreeRejected = true
+    }
+  },
+)
+await forgedFiber
+check('forged caller leaves no status', status.getSnapshot().length === 0)
+check('forged caller leaves no shortcut', shortcuts.dispatch('f', { alt: true, meta: true }) === false)
+check('forged caller leaves no renderer', renderers.render('forged/leak', {}) === undefined)
+check('forged caller leaves no dialog', dialogs.getSnapshot() === null && (await forgedDialog) === false)
+check('forged scene caller is rejected', forgedSceneRejected)
+check('forged settings caller is rejected', forgedSettingsRejected)
+check('forged workspace caller is rejected', forgedWorkspaceRejected)
+check('forged command-tree caller is rejected', forgedTreeRejected)
+await forgedFiber.dispose()
+
+// `Fiber.restart()` invalidates effects before its public wrapper settles. A
+// retained context must not register into the next activation during that
+// unload window.
+let restartContext: Context | undefined
+let restartRuns = 0
+const restartFiber = root.inject(['tuiStatus'], (pluginCtx) => {
+  restartContext = pluginCtx
+  restartRuns += 1
+  if (restartRuns === 1) pluginCtx.tuiStatus.set('restart-normal', 'first')
+  else pluginCtx.tuiStatus.set('restart-normal-2', 'second')
+})
+await restartFiber
+const restart = restartFiber.restart()
+for (let index = 0; index < 8; index += 1) {
+  await Promise.resolve()
+  restartContext?.tuiStatus.set(`restart-late-${index}`, 'stale')
+}
+await restart
+check('restart window rejects retained caller effects',
+  status.getSnapshot().some(entry => entry.key === 'restart-normal-2')
+  && !status.getSnapshot().some(entry => entry.key.startsWith('restart-late-')))
+await restartFiber.dispose()
+
+// Capturing the original fiber effect also prevents a plugin from replacing
+// `ctx.fiber.effect` with a no-op and escaping teardown.
+const effectFiber = root.inject(['tuiStatus'], (pluginCtx) => {
+  pluginCtx.fiber.effect = (() => undefined) as typeof pluginCtx.fiber.effect
+  pluginCtx.tuiStatus.set('effect-overwrite', 'must clear')
+})
+await effectFiber
+await effectFiber.dispose()
+check('overwritten fiber.effect cannot retain a contribution', !status.getSnapshot().some(entry => entry.key === 'effect-overwrite'))
 
 await root.fiber.dispose()
 if (failures > 0) {
