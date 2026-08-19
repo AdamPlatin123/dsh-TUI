@@ -82,22 +82,23 @@ export function EffortTierBadge({
   const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
   const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
-  // 字母间距聚拢（Codex 的 converge 语义）：间距是连续浮点，每个字母
-  // 独立按连续位置取整落列——不同字母在不同帧跨格，每帧至少一个字
-  // 母在动，视觉连续（把间距整体取整会让 ease-out 慢末段上百毫秒才
-  // 跨一格，看起来就是卡顿）。曲线混入 15% 线性做末段保底速度：减
-  // 感仍在，但收敛尾端每帧仍有可见移动。
+  // 字母间距聚拢（Codex 的 converge 语义）：间距是连续浮点，字母位置
+  // 以**行中心为锚**对称收缩——pos_i = center + (i-(n-1)/2)·(1+gap)，
+  // 左右字母各向中心移动一半（奇数档名的居中字母原位不动），两侧速
+  // 度天然均衡；每字母独立按连续位置取整落列，不同字母在不同帧跨
+  // 格，每帧至少一个在动（把间距整体取整会让 ease-out 慢末段上百毫
+  // 秒才跨一格，看起来就是卡顿）。曲线混入 15% 线性做末段保底速度。
   const progress = Math.min(1, Math.max(0, (elapsedMs - IGNITION_TIMELINE.labelStartMs) / CONVERGE_MS))
   const eased = 1 - easeOutCubic(progress)
   const easedWithFloor = 0.85 * eased + 0.15 * (1 - progress)
   const gapF = GAP_END + (GAP_START - GAP_END) * easedWithFloor
   const letterCount = overlay.label.length
-  const totalWidthF = letterCount + (letterCount - 1) * gapF
-  const offsetF = (columns - 3 - totalWidthF) / 2 - 1
+  // 行心：❯ 占 2 列、块光标 1 列之后可用区的中点。
+  const center = 3 + (columns - 3) / 2 - 0.5
   let spaced = ''
   let column = 0
   for (let i = 0; i < letterCount; i++) {
-    const at = Math.max(column, Math.round(offsetF + i * (1 + gapF)))
+    const at = Math.max(column, Math.round(center + (i - (letterCount - 1) / 2) * (1 + gapF)))
     spaced += ' '.repeat(at - column) + overlay.label[i]!
     column = at + 1
   }
