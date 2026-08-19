@@ -80,6 +80,10 @@ export interface Config {
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Optional high-frequency global shortcut overrides (issue #113). */
   keybindings?: KeybindingConfig
+  /** Thinking-block display: `preview` (default) streams a 2-3 line live
+   *  preview and folds each step when it settles; `full` keeps thinking
+   *  expanded until the whole turn ends. Editable live from `/settings`. */
+  thinkingFold?: 'preview' | 'full'
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -110,6 +114,7 @@ export const Config: Schema<Config> = Schema.object({
     toggleDetails: Schema.string().required(false),
     interrupt: Schema.string().required(false),
   }).required(false),
+  thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),
