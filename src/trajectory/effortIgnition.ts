@@ -63,14 +63,14 @@ const PULSE_HALF_WIDTH = 4.5
  * 级常量：每帧调用零分配。
  */
 const HUES_DARK: readonly [RGBColor, RGBColor, RGBColor] = [
-  { r: 110, g: 160, b: 255 },
-  { r: 150, g: 195, b: 255 },
-  { r: 80, g: 130, b: 240 },
+  { r: 96, g: 160, b: 255 },
+  { r: 120, g: 250, b: 245 },
+  { r: 175, g: 150, b: 255 },
 ]
 const HUES_LIGHT: readonly [RGBColor, RGBColor, RGBColor] = [
-  { r: 30, g: 90, b: 220 },
-  { r: 60, g: 120, b: 235 },
-  { r: 20, g: 70, b: 200 },
+  { r: 20, g: 80, b: 230 },
+  { r: 0, g: 150, b: 190 },
+  { r: 110, g: 70, b: 230 },
 ]
 
 export function ignitionHues(onLight: boolean): readonly [RGBColor, RGBColor, RGBColor] {
@@ -226,8 +226,8 @@ export function ignitionLineColors(options: {
     const hue: RGBColor = { r: r / weight, g: g / weight, b: b / weight }
     const alpha =
       style === 'aurora' ? Math.min(weight * 0.4, 0.5) * fade : weight * 0.55
-    // 波按强度淡入带底色：alpha=1 是纯 hue，alpha→0 收敛回本底。上限
-    // 0.6（同 Codex）——满强度也留一点底色，不刺眼。输出前通道量化到
+    // 波按强度淡入带底色：alpha=1 是纯 hue，alpha→0 收敛回本底。
+    // 高亮度档（用户拍板）：上限 0.85，波形列以彩色高亮直出。输出前通道量化到
     // 8 步长：渐变列因此能合并成长段（渲染层 RLE 段数降一个数量级），
     // 8/256 的色差在终端 cell 分辨率下不可辨。
     const tinted = blend(bandRgb, hue, Math.min(alpha, 0.6))

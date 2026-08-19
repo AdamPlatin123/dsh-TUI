@@ -1,9 +1,9 @@
 /**
  * EffortTierBadge — 输入行尾的档位字样徽标：三幕点焰的第二幕载体
  * （与 EffortInputBorder 的双框扫光同一时间轴、同一触发），切到最高
- * 思考强度档时光带行至中段，输入行尾浮现 ` MAX`（当前档名大写），
- * 由暗渐亮加粗，随后随图层整体渐隐让位——行数恒定，静止时完全不
- * 渲染（行尾无任何附加物）。
+ * 思考强度档时光带行至中段，输入行居中浮现 `MAX`（当前档名大写，
+ * 明亮蓝加粗，由暗渐亮），随后随图层整体渐隐让位——行数恒定，静
+ * 止时完全不渲染；输入行有文字时不显示（绝不遮挡内容）。
  *
  * 触发判定在渲染期做（props-变化-调整模式，与边框/充能组件同模
  * 式）；冷启动恢复偏好/单档表/无档位表/无共享时钟均不触发。时钟
@@ -67,11 +67,12 @@ export function EffortTierBadge({
   const alpha = brighten * fade
   if (alpha <= 0) return null
   const band: RGBColor = onLight ? { r: 240, g: 240, b: 242 } : { r: 27, g: 30, b: 40 }
+  // 明亮蓝：accent 混白 35% 提亮（用户拍板的高亮观感）。
   const hue = ignitionHues(onLight)[0]
-  const mix = (x: number, y: number): number => Math.round(x + (y - x) * 0.35 * alpha)
-  const dim: RGBColor = { r: mix(band.r, hue.r), g: mix(band.g, hue.g), b: mix(band.b, hue.b) }
-  const full = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
-  const color = rgbString({ r: full(dim.r, hue.r), g: full(dim.g, hue.g), b: full(dim.b, hue.b) })
+  const whiten = (x: number): number => Math.round(x + (255 - x) * 0.35)
+  const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
+  const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
+  const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
   return (
     <Text bold color={color}>
       {' '}

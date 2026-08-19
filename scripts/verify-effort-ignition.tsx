@@ -27,7 +27,7 @@ const [
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
-  { render, Text },
+  { render, Text, Box },
   { EffortInputBorder },
   { EffortTierBadge },
   { ClockProvider },
@@ -136,12 +136,14 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
 }
 
 function borderNode(effort: string | undefined): React.ReactNode {
+  // Children mirror the real empty input row: block caret + centered badge.
   return React.createElement(
     EffortInputBorder,
     { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null,
-      'row',
-      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false })),
+    React.createElement(Box, { flexDirection: 'row', width: '100%' },
+      React.createElement(Text, { inverse: true }, ' '),
+      React.createElement(Box, { flexGrow: 1, justifyContent: 'center' },
+        React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false }))),
   )
 }
 
@@ -173,8 +175,10 @@ function SweepDriver(): React.ReactNode {
     // border for the whole show.
     await sleep(650)
     const inputRow = harness.rowText(1)
-    check('act 2 label: the tier name emerged at the end of the input row',
-      inputRow.trimEnd().endsWith(LEVELS[LEVELS.length - 1]!.toUpperCase()), inputRow.trimEnd().slice(-10))
+    const tierName = LEVELS[LEVELS.length - 1]!.toUpperCase()
+    const at = inputRow.indexOf(tierName)
+    check('act 2 label: the tier name emerged CENTERED on the input row',
+      at >= Math.floor(COLS / 2) - 8 && at <= Math.ceil(COLS / 2) + 4, `col ${at}: ${inputRow.trim().slice(0, 20)}`)
     check('act 2 label: no extra row — bottom border never moves',
       harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯')
     const labelColors = harness.fgColors(1)
@@ -185,7 +189,7 @@ function SweepDriver(): React.ReactNode {
     const stream = harness.writes.join('')
     const scroll = [/\x1b\[\d*S/, /\x1b\[\d*T/].some(pattern => pattern.test(stream))
     check('act 3 fade: badge and sweep are gone, border back to rest',
-      harness.rowText(0) === restText && harness.rowText(1).trim() === 'row' && harness.fgColors(0) <= 1)
+      harness.rowText(0) === restText && harness.rowText(1).trim() === '' && harness.fgColors(0) <= 1)
     check('lifecycle: no scroll sequences at any point', !scroll)
     check('after the fade both borders rest in a single colour', harness.fgColors(0) <= 1 && harness.fgColors(2) <= 1)
   } finally {

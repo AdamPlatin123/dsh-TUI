@@ -1058,18 +1058,23 @@ export function PromptInput({
               // Solid block caret on a BLANK cell: the terminal paints the
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
-              <Text inverse> </Text>
+              <Box flexDirection="row" width="100%">
+                <Text inverse> </Text>
+                {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（明亮
+                    蓝加粗，与边框扫光同时间轴，随图层渐隐让位；行数恒
+                    定，有文字时不显示）。 */}
+                <Box flexGrow={1} justifyContent="center">
+                  <EffortTierBadge
+                    effort={channel.reasoningEffort}
+                    levels={channel.effortLevels}
+                    onLight={isLightThemeActive(themeName)}
+                  />
+                </Box>
+              </Box>
             ) : (
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
-          {/* 三幕点焰第二幕：切到最高档时行尾短暂浮现档名大写（与边框
-              扫光同时间轴，随图层渐隐让位；行数恒定）。 */}
-          <EffortTierBadge
-            effort={channel.reasoningEffort}
-            levels={channel.effortLevels}
-            onLight={isLightThemeActive(themeName)}
-          />
         </Box>
       </EffortInputBorder>
     </Box>
