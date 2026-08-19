@@ -5,7 +5,14 @@ import { env } from '../utils/env.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
-import { cursorMove, cursorTo, eraseLines, SGR_RESET } from './termio/csi.js'
+import {
+  CURSOR_HOME,
+  cursorMove,
+  cursorTo,
+  ERASE_SCREEN,
+  eraseLines,
+  SGR_RESET,
+} from './termio/csi.js'
 import { BSU, ESU, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js'
 import { link } from './termio/osc.js'
 
@@ -69,6 +76,23 @@ export function isProgressReportingAvailable(): boolean {
 }
 
 /**
+ * True when running inside a JetBrains IDE terminal (JediTerm). The IDE
+ * injects `TERMINAL_EMULATOR=JetBrains-JediTerm` into the pty environment of
+ * its local terminal sessions and sets no TERM_PROGRAM, so this is the only
+ * reliable local-JediTerm marker; it is also not forwarded over SSH by
+ * default (sshd only sends TERM), matching the local-terminal scope of the
+ * behaviors it gates.
+ *
+ * JediTerm's emulation diverges from xterm.js in exactly the places the
+ * renderer cares about (DEC 2026 support, DECSTBM semantics), so it is
+ * detected explicitly rather than left to TERM/TERM_PROGRAM fallbacks.
+ * @returns true when the process runs in a JetBrains IDE terminal.
+ */
+export function isJetBrainsIdeTerminal(): boolean {
+  return process.env.TERMINAL_EMULATOR === 'JetBrains-JediTerm'
+}
+
+/**
  * Checks if the terminal supports DEC mode 2026 (synchronized output).
  * When supported, BSU/ESU sequences prevent visible flicker during redraws.
  * @returns true when the terminal supports DEC 2026.
@@ -94,6 +118,14 @@ export function isSynchronizedOutputSupported(): boolean {
   ) {
     return true
   }
+
+  // JetBrains IDE terminals (JediTerm) implement DEC 2026 synchronized
+  // output; TERM_PROGRAM is unset there (only TERMINAL_EMULATOR is), so the
+  // env list above never matches. Frames wrapped in BSU/ESU land atomically
+  // in JediTerm's reworked block renderer — the same guarantee VS Code gets
+  // via TERM_PROGRAM=vscode — which keeps its partial-update reflow from
+  // scrambling continuously-updated screens.
+  if (isJetBrainsIdeTerminal()) return true
 
   // kitty sets TERM=xterm-kitty or KITTY_WINDOW_ID
   if (term?.includes('kitty') || process.env.KITTY_WINDOW_ID) return true
@@ -198,17 +230,33 @@ export function supportsExtendedKeys(): boolean {
 /**
  * True when win32-input-mode (DECSET 9001, `CSI ? 9001 h`) should drive
  * keyboard input. This is a ConPTY feature — both Windows Terminal and
- * classic conhost switch into it when the app emits the sequence, so a
- * platform check alone covers both. In this mode every key arrives as a
- * full INPUT_RECORD (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), the only encoding that
+ * classic conhost switch into it when the app emits the sequence. In this
+ * mode every key arrives as a full INPUT_RECORD
+ * (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), the only encoding that
  * preserves Enter's Shift/Ctrl bits on Windows (issue #147). It replaces
  * the kitty/modifyOtherKeys push — callers must treat them as mutually
  * exclusive. Non-ConPTY Windows terminals (mintty via winpty) ignore the
  * unknown private mode and fall back to classic VT input unchanged.
+ *
+ * Embedded xterm.js hosts may identify as `TERM_PROGRAM=vscode` while using
+ * the xterm.js engine version as TERM_PROGRAM_VERSION (Termy 1.4.1 reports
+ * 6.0.0). They do not provide native ConPTY's input-mode contract: enabling
+ * 9001 can reduce arrows/mouse sequences to their trailing A-D/M bytes and
+ * interfere with IME commits (issue #215). Native VS Code reports its own
+ * 1.x application version and retains win32-input-mode support.
  * @returns true on native Windows (never in WSL — platform is linux there).
  */
-export function supportsWin32InputMode(): boolean {
-  return process.platform === 'win32'
+export function supportsWin32InputMode(
+  platform: NodeJS.Platform = process.platform,
+  termProgram: string | undefined = process.env.TERM_PROGRAM,
+  termProgramVersion: string | undefined = process.env.TERM_PROGRAM_VERSION,
+): boolean {
+  if (platform !== 'win32') return false
+
+  const version = coerce(termProgramVersion)
+  const isEmbeddedXtermJs =
+    termProgram === 'vscode' && version !== null && version.major >= 5
+  return !isEmbeddedXtermJs
 }
 
 /**
@@ -230,6 +278,24 @@ export function hasCursorUpViewportYankBug(): boolean {
  * so callers can pass a sync-skip hint gated to specific modes.
  */
 export const SYNC_OUTPUT_SUPPORTED = isSynchronizedOutputSupported()
+
+/**
+ * Whether the DECSTBM hardware-scroll optimization may be used to paint
+ * ScrollBox scrolls. Called once per frame — the same env reads as the
+ * SYNC_OUTPUT_SUPPORTED gate, so the extra cost is a single comparison.
+ *
+ * JediTerm is explicitly excluded even though it implements DEC 2026: its
+ * scroll-region (DECSTBM) + CSI S/T handling deviates from xterm and, when
+ * driven per-frame by a diffing renderer, corrupts the screen progressively
+ * as content scrolls (the "JetBrains terminal slowly garbles" bug class).
+ * The diff engine falls back to repainting the shifted rows cell-by-cell,
+ * which every terminal renders identically. Same gate as upstream Claude
+ * Code, which hard-disables DECSTBM on JetBrains terminals.
+ * @returns true when DECSTBM scroll optimization is safe on this terminal.
+ */
+export function isDecstbmSafe(): boolean {
+  return SYNC_OUTPUT_SUPPORTED && !isJetBrainsIdeTerminal()
+}
 
 /**
  * Render forensics: when DSH_TUI_RENDER_LOG names a file path, every painted
@@ -306,12 +372,31 @@ export function writeDiffToTerminal(
         }
         break
       case 'clearTerminal':
-        // Pass the live row count: the blank only needs one viewport worth
-        // of scroll (see getClearTerminalSequence on why overshooting
-        // evicts the user's real scrollback).
-        buffer += getClearTerminalSequence(
-          (terminal.stdout as unknown as { rows?: number }).rows,
-        )
+        // Hard clear of screen + scrollback. MUST run OUTSIDE the BSU/ESU
+        // sync block: Windows Terminal snaps the viewport back to the top
+        // when 2J/3J execute inside a synchronized-update block
+        // (claude-code#35580) — the reason the scrollUp-based "soft" clear
+        // existed at all. Close the block, clear, reopen. Everything stays
+        // in the SAME write, so the terminal processes it with no
+        // intermediate paint. The hard clear actually removes the UI's
+        // scrollback snapshots (the duplicated whale-logo class of bugs);
+        // the old soft clear (CSI n S) PUSHED the live viewport into the
+        // scrollback instead, depositing a fresh full-UI copy per reset.
+        // Screen-only hard clear: 2J + home, NO 3J. Erasing the scrollback
+        // here destroyed the user's entire visible history on every settle
+        // shrink (the "context lost / cannot scroll" reports) — the inline
+        // transcript IS the scrollback; wiping it to avoid duplicate
+        // snapshots is never an acceptable trade. 2J clears the screen for
+        // the repaint while everything above the viewport survives.
+        // Executed OUTSIDE the DEC 2026 sync block (split begin/end): WT
+        // yanks the viewport to top when 2J runs inside a synchronized
+        // update (claude-code#35580).
+        buffer +=
+          (useSync ? ESU : '') +
+          SGR_RESET +
+          ERASE_SCREEN +
+          CURSOR_HOME +
+          (useSync ? BSU : '')
         break
       case 'cursorHide':
         buffer += HIDE_CURSOR

@@ -152,11 +152,11 @@ export function StatusLine({
   // summary (the live working line itself moves to the spinner slot above
   // the input while a turn runs, so the two never duplicate).
   const hint = selectionActive
-    ? 'esc to return to input'
+    ? t('statusline-hint-select')
     : channel.working
-      ? 'esc to interrupt'
+      ? t('statusline-hint-working')
       : !helpOpen
-        ? '? for shortcuts'
+        ? t('statusline-hint-shortcuts')
         : ''
   const activity = channel.workingActivity
   const showActivity =
@@ -196,7 +196,7 @@ export function StatusLine({
     // Taking the width from the same source the bar already uses makes the
     // three rows agree by construction. verify-trace-scene part D walks a
     // ladder of widths and asserts the wake reaches the right margin at each.
-    <Box paddingX={2} width={columns} flexShrink={0}>
+    <Box paddingX={1} width={columns} flexShrink={0}>
       <Box flexDirection="column" width="100%">
         {/* Row 1: segmented context bar, its own line, first (pi-nano-context
             placement — the bar sits directly under the transcript). */}

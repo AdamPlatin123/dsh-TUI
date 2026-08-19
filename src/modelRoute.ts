@@ -87,11 +87,42 @@ export function recordedModelRoute(
 }
 
 /**
+ * `LlmError` code the adapter registry raises for a provider nobody
+ * registered. Matched on the code rather than `instanceof LlmError`: a profile
+ * that resolves two copies of the llm package would fail the identity check
+ * while the code stays stable, and this module deliberately carries no llm
+ * import.
+ */
+const NO_ADAPTER_CODE = 'NO_ADAPTER'
+
+/**
+ * Whether a catalog read failed because the provider itself is unregistered,
+ * as opposed to a transport or adapter-internal failure.
+ * @param error - The value `listModels` rejected with.
+ * @returns True when no adapter owns the queried provider.
+ */
+function isUnregisteredProvider(error: unknown): boolean {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && (error as { code?: unknown }).code === NO_ADAPTER_CODE
+  )
+}
+
+/**
  * Best-effort combination check (issue #67): when the llm runtime advertises
  * a non-empty catalog for the route's provider and the model is not in it,
  * reject the whole route in favor of `fallback` so a stale persisted choice
- * surfaces at startup instead of as a server-side model-name error. Any
- * uncertainty — no llm service, a failed or empty catalog — trusts the route.
+ * surfaces at startup instead of as a server-side model-name error.
+ *
+ * Uncertainty trusts the route — no llm service, an empty catalog, a catalog
+ * read that failed for transport or adapter-internal reasons. An unregistered
+ * PROVIDER is not uncertainty: no adapter owns the name, so the route is
+ * proven unusable and falls back exactly like an unknown model does. Trusting
+ * it does not keep startup alive either — agent creation dies a few frames
+ * later inside the preset setup hook, reported as `refusing to compose an
+ * unscoped context`, which names neither the provider nor the stale
+ * preference that chose it.
  * @param llm - The llm runtime seam, when mounted.
  * @param route - The resolved route to check.
  * @param fallback - Route to adopt when the check rejects.
@@ -106,8 +137,9 @@ export async function validateModelRoute(
   let models: readonly { id: string }[]
   try {
     models = await llm.listModels(route.provider)
-  } catch {
-    return { route }
+  } catch (error) {
+    if (!isUnregisteredProvider(error)) return { route }
+    return { route: fallback, rejected: route }
   }
   if (models.length === 0 || models.some(model => model.id === route.model)) return { route }
   return { route: fallback, rejected: route }

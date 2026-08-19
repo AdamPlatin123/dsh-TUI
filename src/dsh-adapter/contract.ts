@@ -1,7 +1,7 @@
 /**
  * Upstream compatibility contract.
  *
- * The TUI is validated against one upstream release line (0.1.0-rc.6).
+ * The TUI is validated against one upstream release line (0.1.0-rc.7).
  * Every official package this adapter touches is blessed here; anything
  * else must go through upstream channels or the adapter, never the UI.
  *
@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.6'
+export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.7'
 
 /**
  * Framework packages version on their own lines; the contract validates
@@ -31,6 +31,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-agent-instructions',
   '@deepseek-ai/dsh-agent-presets',
+  '@deepseek-ai/dsh-atomic-write',
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-cordis-host-runner',
   '@deepseek-ai/dsh-llm',

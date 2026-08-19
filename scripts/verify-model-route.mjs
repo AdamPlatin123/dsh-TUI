@@ -19,7 +19,11 @@
  *    so a half-pinned config falls back to that whole route.
  * 8. validateModelRoute: a route absent from a non-empty adapter catalog is
  *    rejected wholesale to the fallback; an empty/failed/missing catalog is
- *    trusted (best effort, never blocks startup).
+ *    trusted (best effort, never blocks startup). A provider NO adapter
+ *    registered is not "failed catalog" but proven-unusable, so it falls back
+ *    too — trusting it does not keep startup alive, it defers the death to
+ *    agent creation where the error names neither the provider nor the stale
+ *    preference behind it.
  * 9. recordedModelRoute: a resume's status-line route comes from the target
  *    session's own log (last request/header wins; a bare log records none).
  *
@@ -117,6 +121,41 @@ const PREF = { provider: 'my-gateway', model: 'glm-5.3' }
 
   const absent = await validateModelRoute(undefined, PREF)
   check('no llm service -> trusted', absent.rejected === undefined && eq(absent.route, PREF))
+
+  // A provider nobody registered: dsh-llm's registry raises LlmError with code
+  // NO_ADAPTER before any catalog read happens. Proven unusable, so it falls
+  // back like an unknown model — matched on the code, never on message text.
+  const noAdapter = Object.assign(new Error('no adapter registered for provider "fake-provider"'), {
+    code: 'NO_ADAPTER',
+  })
+  const unregistered = await validateModelRoute(
+    { listModels: () => Promise.reject(noAdapter) },
+    { provider: 'fake-provider', model: 'deepseek-v4-flash' },
+    DEFAULT_MODEL_ROUTE,
+  )
+  check(
+    'unregistered provider -> wholesale fallback',
+    unregistered.rejected !== undefined
+      && eq(unregistered.rejected, { provider: 'fake-provider', model: 'deepseek-v4-flash' })
+      && eq(unregistered.route, DEFAULT_MODEL_ROUTE),
+    JSON.stringify(unregistered),
+  )
+
+  // The discriminator must be the code, not the wording: an adapter-internal
+  // failure that happens to mention adapters stays trusted.
+  const lookalike = await validateModelRoute(
+    { listModels: () => Promise.reject(new Error('no adapter registered for provider "my-gateway"')) },
+    PREF,
+  )
+  check(
+    'transport failure that reads like NO_ADAPTER -> still trusted',
+    lookalike.rejected === undefined && eq(lookalike.route, PREF),
+    JSON.stringify(lookalike),
+  )
+
+  // A non-Error rejection must not crash the check.
+  const weird = await validateModelRoute({ listModels: () => Promise.reject('nope') }, PREF)
+  check('non-Error rejection -> trusted, no throw', weird.rejected === undefined && eq(weird.route, PREF))
 }
 
 // 9. Resume status-line route (review feedback on #76): the status line

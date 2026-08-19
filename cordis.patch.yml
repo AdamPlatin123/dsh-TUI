@@ -187,6 +187,34 @@
     # execution and durable command events remain owned by dsh-commands.
     - id: dsh-tui-command-trees
       name: '@deepseek-harness-tui/dsh-tui/command-trees'
+    # Optional plugins declare editable settings sections here (issue #165);
+    # storage, validation and writes remain owned by the dsh settings service.
+    - id: dsh-tui-settings-sections
+      name: '@deepseek-harness-tui/dsh-tui/settings-sections'
+
+    # Optional plugins register full-screen scenes (trajectory-style whole-
+    # terminal views) here and open them from their own command handlers;
+    # rendering and input ownership remain owned by the TUI's Chat screen.
+    - id: dsh-tui-scenes
+      name: '@deepseek-harness-tui/dsh-tui/scenes'
+
+    # Plugin-interop anchor (Community Consensus v0.15): the unified grant
+    # store, runtime generation id, and Host Descriptor live here; later
+    # contract surfaces (plugin storage, message observation, effect
+    # ledger) mount off THIS row's apply, so the patch surface changes only
+    # once for the whole alignment. Mounted ahead of the extensions row and
+    # any third-party plugin row.
+    - id: dsh-tui-plugin-host
+      name: '@deepseek-harness-tui/dsh-tui/plugin-host'
+
+    # Plugin-facing UI seams (the pi-style extension surface): managed
+    # dialogs (select/confirm/input), keyed status-line contributions,
+    # keyboard shortcuts, and custom session-entry text renderers. The
+    # decision events (tui/input, tui/rewind-prompt, tui/session-switch,
+    # tui/compact, …) are fired by the channel on the cordis bus directly
+    # and need no row.
+    - id: dsh-tui-extensions
+      name: '@deepseek-harness-tui/dsh-tui/extensions'
 
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
     # TUI composes every session's model-facing world from. No `roots` here —
@@ -217,17 +245,18 @@
       name: '@deepseek-harness-tui/dsh-tui'
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
-      inject: [workspaceRegistry, agents, tuiWorkspaces]
-      # `tuiWorkspaces` lives in the entry-level inject ONLY as an ordering
-      # guarantee alongside the dsh-tui-workspaces row above — it is
-      # deliberately absent from the plugin's code-level inject (issue
-      # #183): the dsh CLI may read this patch from an older copy of the
-      # package than the plugin module it loads, and a hard code-level
-      # inject then deadlocks the tree at boot ("pending (waiting for
-      # service: tuiWorkspaces)"). Without the row the TUI degrades to a
-      # local-only workspace runtime instead. (The comment sits below the
-      # inject line: verify-workspace-attachment.mjs asserts the
-      # name→inject distance.)
+      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers]
+      # `tuiWorkspaces`/`tuiScenes` (and the dsh-tui-extensions services)
+      # live in the entry-level inject ONLY as an
+      # ordering (and reload-rebind) guarantee alongside their service rows
+      # above — they are deliberately absent from the plugin's code-level
+      # inject (issue #183): the dsh CLI may read this patch from an older
+      # copy of the package than the plugin module it loads, and a hard
+      # code-level inject then deadlocks the tree at boot ("pending (waiting
+      # for service: tuiWorkspaces)"). Without the rows the TUI degrades:
+      # /workspace falls back to the local-only runtime, plugin scenes never
+      # open. (The comment sits below the inject line:
+      # verify-workspace-attachment.mjs asserts the name→inject distance.)
       config:
         provider: deepseek-official
         # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +
@@ -235,6 +264,9 @@
         # inline 模式下由终端原生选择/复制/scrollback 接管；想用 fullscreen 在
         # profile 用户层 cordis.patch.yml 同 id 覆盖整行 config（fullscreen: true）。
         fullscreen: false
+        # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
+        # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
+        # diffLayout: auto
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
         # （deepseek: off/high/max）——不在档位表里的值被忽略，回落 adapter
         # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-tui/effort.json）；

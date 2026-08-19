@@ -147,6 +147,8 @@ export function PromptInput({
     controllerRef.current = {
       hasText: () => value.length > 0,
       clear: () => {
+        valueRef.current = ''
+        cursorRef.current = 0
         setValue('')
         setCursor(0)
       },
@@ -158,12 +160,15 @@ export function PromptInput({
   const [selectedCommand, setSelectedCommand] = React.useState(0)
   const history = React.useRef<string[]>([])
   const historyIndex = React.useRef(-1)
+  const historyDraft = React.useRef('')
   // ctrl+r history fill: replace the input when a new fill arrives, then
   // tell the caller to clear it.
   const lastFill = React.useRef<string | null>(null)
   React.useEffect(() => {
     if (fillText && fillText !== lastFill.current) {
       lastFill.current = fillText
+      valueRef.current = fillText
+      cursorRef.current = fillText.length
       setValue(fillText)
       setCursor(fillText.length)
       onFillConsumed?.()
@@ -176,16 +181,6 @@ export function PromptInput({
   const clipboardBusyRef = React.useRef(false)
   /** True while the external editor owns the terminal (Ctrl+X round-trip). */
   const editorBusyRef = React.useRef(false)
-  /**
-   * Latest committed input state. The Ctrl+V clipboard read resolves
-   * asynchronously; inserting against the render that STARTED the read
-   * would drop whatever the user typed while waiting. The continuation
-   * inserts against this mirror instead.
-   */
-  const liveInputRef = React.useRef({ value: '', cursor: 0 })
-  React.useEffect(() => {
-    liveInputRef.current = { value, cursor }
-  })
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
   React.useEffect(() => {
@@ -239,6 +234,13 @@ export function PromptInput({
     !selectionActive &&
     fileEscRef.current !== mention?.start
 
+  const setInput = (next: string, cursorOffset = next.length) => {
+    valueRef.current = next
+    cursorRef.current = Math.max(0, Math.min(cursorOffset, next.length))
+    setValue(next)
+    setCursor(cursorRef.current)
+  }
+
   /**
    * Accept the selected file suggestion: replace ONLY the mention token at
    * the caret (prefix/suffix text survives), quoting whitespace paths. A
@@ -260,8 +262,7 @@ export function PromptInput({
     history.current.push(trimmed)
     if (history.current.length > HISTORY_LIMIT) history.current.shift()
     historyIndex.current = -1
-    setValue('')
-    setCursor(0)
+    setInput('', 0)
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
@@ -285,8 +286,7 @@ export function PromptInput({
     history.current.push(trimmed)
     if (history.current.length > HISTORY_LIMIT) history.current.shift()
     historyIndex.current = -1
-    setValue('')
-    setCursor(0)
+    setInput('', 0)
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.steer(trimmed)
@@ -303,8 +303,7 @@ export function PromptInput({
     history.current.push(trimmed)
     if (history.current.length > HISTORY_LIMIT) history.current.shift()
     historyIndex.current = -1
-    setValue('')
-    setCursor(0)
+    setInput('', 0)
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
@@ -323,8 +322,7 @@ export function PromptInput({
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
-    setValue(item.text)
-    setCursor(item.text.length)
+    setInput(item.text)
     setSelectedCommand(0)
     setFileSelected(0)
     channel.notify(t('input-retracted'), { timeoutMs: 2000 })
@@ -348,8 +346,7 @@ export function PromptInput({
     history.current.push(trimmed)
     if (history.current.length > HISTORY_LIMIT) history.current.shift()
     historyIndex.current = -1
-    setValue('')
-    setCursor(0)
+    setInput('', 0)
     setSelectedCommand(0)
     setFileSelected(0)
     appendHistory(trimmed)
@@ -373,19 +370,11 @@ export function PromptInput({
       history.current.push(text.trim())
       if (history.current.length > HISTORY_LIMIT) history.current.shift()
       historyIndex.current = -1
-      setValue('')
-      setCursor(0)
+      setInput('', 0)
       setSelectedCommand(0)
       appendHistory(text.trim())
     }
     return handled
-  }
-
-  const setInput = (next: string, cursorOffset = next.length) => {
-    valueRef.current = next
-    cursorRef.current = Math.max(0, Math.min(cursorOffset, next.length))
-    setValue(next)
-    setCursor(cursorRef.current)
   }
 
   /** Clipboard reads are asynchronous; insert against the latest render so
@@ -399,13 +388,13 @@ export function PromptInput({
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
-  const cursorLine = () => {
-    const before = value.slice(0, cursor)
+  const cursorLine = (text: string, cursorOffset: number) => {
+    const before = text.slice(0, cursorOffset)
     return before.split('\n').length - 1
   }
   /** Column of the cursor within its line. */
-  const cursorColumn = () => {
-    const before = value.slice(0, cursor)
+  const cursorColumn = (text: string, cursorOffset: number) => {
+    const before = text.slice(0, cursorOffset)
     const line = before.split('\n').pop() ?? ''
     return line.length
   }
@@ -417,12 +406,17 @@ export function PromptInput({
     // setValue can never overwrite fresh typing (and vice versa).
     if (editorBusyRef.current) return
 
+    // App deliberately dispatches every parsed key from one stdin read in a
+    // single React update. Read the synchronous mirrors so each event sees
+    // the text/caret produced by the preceding event in that batch.
+    const value = valueRef.current
+    const cursor = cursorRef.current
+
     /** Insert text at the caret (typing, paste) and dismiss overlays. */
     const insertAtCaret = (text: string) => {
       if (helpOpen) onToggleHelp()
       const next = value.slice(0, cursor) + text + value.slice(cursor)
-      setValue(next)
-      setCursor(cursor + text.length)
+      setInput(next, cursor + text.length)
       setSelectedCommand(0)
       setFileSelected(0)
     }
@@ -479,10 +473,7 @@ export function PromptInput({
           // Insert against the LIVE input state: the read above resolved
           // asynchronously and the user may have typed while waiting.
           const text = formatClipboardInsert(content)
-          const live = liveInputRef.current
-          const caret = Math.min(live.cursor, live.value.length)
-          setValue(live.value.slice(0, caret) + text + live.value.slice(caret))
-          setCursor(caret + text.length)
+          insertClipboardAtCaret(text)
         })
         .catch(() => {
           channel.notify(t('input-clipboard-read-failed'), { color: 'warning' })
@@ -508,8 +499,7 @@ export function PromptInput({
         try {
           const outcome = await editInExternalEditor(value)
           if (outcome.kind === 'edited') {
-            setValue(outcome.text)
-            setCursor(outcome.text.length)
+            setInput(outcome.text)
             setSelectedCommand(0)
             setFileSelected(0)
           } else if (outcome.kind === 'unavailable') {
@@ -575,11 +565,18 @@ export function PromptInput({
       if (!tryRunCommand(value)) submitText(value)
     }
 
+    // Ctrl+J is the only portable multiline fallback when a terminal cannot
+    // report modifiers on Enter. The parser names its bare LF `enter`, while
+    // the physical Enter key arrives as CR (`return`).
+    if (input === '\n' && event?.keypress.name === 'enter') {
+      insertAtCaret('\n')
+      return
+    }
+
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
-    // the trailing CR/LF marks a complete line to submit. A bare Enter
-    // arrives as `\r`/`\n`/`\r\n` — treat it as Enter, NOT a direct
-    // submit. Only real multi-char piped lines keep the legacy
-    // direct-submit path.
+    // the trailing CR/LF marks a complete line to submit. A bare CR/CRLF is
+    // Enter, while real multi-char piped lines keep the legacy direct-submit
+    // path.
     if (input.includes('\n') || input.includes('\r')) {
       if (/^[\r\n]+$/.test(input)) {
         handleEnter()
@@ -609,8 +606,7 @@ export function PromptInput({
       // ink/terminal.ts); Option+Enter (ESC CR) is the fallback on terminals
       // that can't report shift — e.g. macOS Terminal.app (issue #110).
       const next = value.slice(0, cursor) + '\n' + value.slice(cursor)
-      setValue(next)
-      setCursor(cursor + 1)
+      setInput(next, cursor + 1)
       setSelectedCommand(0)
       return
     }
@@ -654,14 +650,14 @@ export function PromptInput({
         )
         return
       }
-      const line = cursorLine()
+      const line = cursorLine(value, cursor)
       if (line > 0) {
         // Move to the previous line, clamping to its length.
         const upToLineStart = value.lastIndexOf('\n', cursor - 1)
         const prevLineStart =
           upToLineStart === -1 ? 0 : value.lastIndexOf('\n', upToLineStart - 1) + 1
         const prevLine = value.slice(prevLineStart, upToLineStart)
-        setCursor(prevLineStart + Math.min(cursorColumn(), prevLine.length))
+        setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
         return
       }
       if (overlayOpen) {
@@ -671,12 +667,14 @@ export function PromptInput({
         return
       }
       if (history.current.length === 0) return
-      historyIndex.current = historyIndex.current < 0
-        ? history.current.length - 1
-        : Math.max(0, historyIndex.current - 1)
+      if (historyIndex.current < 0) {
+        historyDraft.current = value
+        historyIndex.current = history.current.length - 1
+      } else {
+        historyIndex.current = Math.max(0, historyIndex.current - 1)
+      }
       const entry = history.current[historyIndex.current] ?? ''
-      setValue(entry)
-      setCursor(entry.length)
+      setInput(entry)
       return
     }
     if (key.downArrow) {
@@ -686,7 +684,7 @@ export function PromptInput({
         )
         return
       }
-      const line = cursorLine()
+      const line = cursorLine(value, cursor)
       const lines = value.split('\n')
       if (line < lines.length - 1) {
         const nextLineStart = value.indexOf('\n', cursor) + 1
@@ -695,7 +693,7 @@ export function PromptInput({
           nextLineStart,
           nextLineEnd === -1 ? value.length : nextLineEnd,
         )
-        setCursor(nextLineStart + Math.min(cursorColumn(), nextLine.length))
+        setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
         return
       }
       if (overlayOpen) {
@@ -705,78 +703,77 @@ export function PromptInput({
         return
       }
       if (historyIndex.current < 0) return
-      historyIndex.current += 1
-      const entry = historyIndex.current >= history.current.length
-        ? ''
-        : (history.current[historyIndex.current] ?? '')
-      setValue(entry)
-      setCursor(entry.length)
+      if (historyIndex.current >= history.current.length - 1) {
+        historyIndex.current = -1
+        setInput(historyDraft.current)
+      } else {
+        historyIndex.current += 1
+        setInput(history.current[historyIndex.current] ?? '')
+      }
       return
     }
     if (isMod(key) && key.leftArrow) {
       // Jump to the previous word boundary (readline alt+b). Must precede the
       // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl.
-      setCursor(previous => wordBoundaryLeft(value, previous))
+      setInput(value, wordBoundaryLeft(value, cursor))
       return
     }
     if (isMod(key) && key.rightArrow) {
       // Jump to the next word boundary (readline alt+f).
-      setCursor(previous => wordBoundaryRight(value, previous))
+      setInput(value, wordBoundaryRight(value, cursor))
       return
     }
     if (key.leftArrow) {
-      setCursor(previous => Math.max(0, previous - 1))
+      setInput(value, Math.max(0, cursor - 1))
       return
     }
     if (key.rightArrow) {
-      setCursor(previous => Math.min(value.length, previous + 1))
+      setInput(value, Math.min(value.length, cursor + 1))
       return
     }
     if (key.backspace) {
       if (cursor === 0) return
-      setValue(value.slice(0, cursor - 1) + value.slice(cursor))
-      setCursor(cursor - 1)
+      setInput(value.slice(0, cursor - 1) + value.slice(cursor), cursor - 1)
       return
     }
     if (key.delete) {
       if (cursor >= value.length) return
-      setValue(value.slice(0, cursor) + value.slice(cursor + 1))
+      setInput(value.slice(0, cursor) + value.slice(cursor + 1), cursor)
       return
     }
     if (key.home) {
       // Start of the current line.
       const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
-      setCursor(lineStart)
+      setInput(value, lineStart)
       return
     }
     if (key.end) {
       // End of the current line.
       const nextLine = value.indexOf('\n', cursor)
-      setCursor(nextLine === -1 ? value.length : nextLine)
+      setInput(value, nextLine === -1 ? value.length : nextLine)
       return
     }
     if (isMod(key) && input === 'a') {
       const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
-      setCursor(lineStart)
+      setInput(value, lineStart)
       return
     }
     if (isMod(key) && input === 'e') {
       const nextLine = value.indexOf('\n', cursor)
-      setCursor(nextLine === -1 ? value.length : nextLine)
+      setInput(value, nextLine === -1 ? value.length : nextLine)
       return
     }
     if (isMod(key) && input === 'u') {
       // Delete to start of line.
       const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
-      setValue(value.slice(0, lineStart) + value.slice(cursor))
-      setCursor(lineStart)
+      setInput(value.slice(0, lineStart) + value.slice(cursor), lineStart)
       return
     }
     if (isMod(key) && input === 'k') {
       // Delete to end of line.
       const nextLine = value.indexOf('\n', cursor)
       const end = nextLine === -1 ? value.length : nextLine
-      setValue(value.slice(0, cursor) + value.slice(end))
+      setInput(value.slice(0, cursor) + value.slice(end), cursor)
       return
     }
     if (isMod(key) && input === 'w') {
@@ -787,8 +784,7 @@ export function PromptInput({
       while (end > 0 && /\s/.test(before[end - 1]!)) end--
       let start = end
       while (start > 0 && !/\s/.test(before[start - 1]!)) start--
-      setValue(value.slice(0, start) + value.slice(cursor))
-      setCursor(start)
+      setInput(value.slice(0, start) + value.slice(cursor), start)
       return
     }
     if (key.escape) {
@@ -799,8 +795,7 @@ export function PromptInput({
       // A single Esc closes the open command menu first (CC/pi behavior);
       // the double-tap-clear semantics only apply to ordinary input.
       if (overlayOpen) {
-        setValue('')
-        setCursor(0)
+        setInput('', 0)
         setSelectedCommand(0)
         setFileSelected(0)
         return
@@ -824,8 +819,7 @@ export function PromptInput({
       // A single Esc clears the current input (if any); the double-tap
       // path below handles rewind/clear on an already-empty input.
       if (value.length > 0) {
-        setValue('')
-        setCursor(0)
+        setInput('', 0)
         setSelectedCommand(0)
         setFileSelected(0)
         return
@@ -839,16 +833,13 @@ export function PromptInput({
         if (value.length === 0) {
           onRewindRequest?.()
         } else {
-          setValue('')
-          setCursor(0)
+          setInput('', 0)
         }
         return
       }
       escPendingRef.current = true
       channel.notify(
-        value.length === 0
-          ? 'Press Esc again to rewind'
-          : 'Press Esc again to clear',
+        value.length === 0 ? t('esc-again-rewind') : t('esc-again-clear'),
       )
       escTimerRef.current = setTimeout(() => {
         escPendingRef.current = false
@@ -863,8 +854,7 @@ export function PromptInput({
       // Typing anything else dismisses the help menu (CC behavior).
       if (helpOpen) onToggleHelp()
       const next = value.slice(0, cursor) + input + value.slice(cursor)
-      setValue(next)
-      setCursor(cursor + input.length)
+      setInput(next, cursor + input.length)
       setSelectedCommand(0)
       setFileSelected(0)
     }

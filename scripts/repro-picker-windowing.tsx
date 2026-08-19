@@ -25,12 +25,16 @@ process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-// 隔离 HOME：modelPrefs/history 在模块加载时解析 homedir()，必须先切到
+// 隔离家目录：modelPrefs/history 在模块加载时解析 homedir()，必须先切到
 // 临时目录再 import src；picker 交互不落任何真实偏好文件。
+// HOME 与 USERPROFILE 必须成对设置：os.homedir() 在 POSIX 读 HOME、在 Windows
+// 读 USERPROFILE，只设一个等于在另一个平台上根本没有隔离。
 const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
-process.env.HOME = mkdtempSync(joinPath(tmpdir(), 'dshtui-repro-home-'))
+const reproHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-repro-home-'))
+process.env.HOME = reproHome
+process.env.USERPROFILE = reproHome
 
 // ctrl+r 数据源：30 条历史命令（每项渲染 2 行：命令 + age 描述）。
 const NOW = Date.now()

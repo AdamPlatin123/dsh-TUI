@@ -25,6 +25,7 @@ import {
   type KeyParseState,
   type ParsedInput,
 } from '../src/ink/parse-keypress.js'
+import { supportsWin32InputMode } from '../src/ink/terminal.js'
 
 type KeySummary = {
   kind: string
@@ -66,6 +67,15 @@ class Feeder {
 
 let failures = 0
 
+function checkBoolean(label: string, actual: boolean, expected: boolean): void {
+  if (actual === expected) {
+    console.log(`ok   ${label}`)
+  } else {
+    failures++
+    console.log(`FAIL ${label}\n     expected ${expected}\n     actual   ${actual}`)
+  }
+}
+
 function check(label: string, actual: KeySummary[], expected: KeySummary[]): void {
   const a = JSON.stringify(actual)
   const e = JSON.stringify(expected)
@@ -78,6 +88,29 @@ function check(label: string, actual: KeySummary[], expected: KeySummary[]): voi
 }
 
 const CSI = '\x1b['
+
+// --- 0. host capability gate ------------------------------------------------
+
+checkBoolean(
+  'native Windows terminals enable win32-input-mode',
+  supportsWin32InputMode('win32', undefined, undefined),
+  true,
+)
+checkBoolean(
+  'Termy-style xterm.js hosts keep standard VT input on Windows',
+  supportsWin32InputMode('win32', 'vscode', '6.0.0'),
+  false,
+)
+checkBoolean(
+  'native VS Code keeps win32-input-mode on Windows',
+  supportsWin32InputMode('win32', 'vscode', '1.103.0'),
+  true,
+)
+checkBoolean(
+  'non-Windows terminals never enable win32-input-mode',
+  supportsWin32InputMode('linux', undefined, undefined),
+  false,
+)
 
 // A win32 record translated to a named/special key keeps the raw record as
 // its sequence; a translated text char uses the char itself.
@@ -239,6 +272,26 @@ check('Rc=3 expands to three events', new Feeder().feed(`${CSI}88;45;120;1;32;3_
 check('IME-composed CJK arrives via Uc', new Feeder().feed(`${CSI}65;30;20320;1;32;1_`), [
   wchar('你'),
 ])
+
+// A native Windows paste can split a win32-input-mode record after ESC.
+// When the 50ms escape timer fires before the tail arrives, the tokenizer
+// has already emitted Escape; the later `[Vk;Sc;Uc;Kd;Cs;Rc_` tail must
+// still be recognized instead of leaking the protocol bytes into the input.
+{
+  const f = new Feeder()
+  check('split win32 record: ESC waits for its tail', f.feed('\x1b'), [])
+  check('split win32 record: timeout releases Escape', f.feed(null), [
+    wkey('escape', {}, '\x1b'),
+  ])
+  check('split win32 record: late CJK tail is recovered', f.feed('[0;0;36825;1;0;1_'), [
+    wchar('这'),
+  ])
+}
+check(
+  'split win32 records: adjacent late tails are all recovered',
+  new Feeder().feed('[0;0;36825;1;0;1_[0;0;26679;1;0;1_'),
+  [wchar('这'), wchar('样')],
+)
 
 // --- 7. orphaned low surrogates never reach the Vk table ----------------------
 
