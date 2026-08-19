@@ -54,15 +54,21 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
 
   const optionLabels = [t('approval-yes'), t('approval-no')]
 
+  const titleTool = approval.filePath !== undefined
+    ? `${approval.toolName} ${approval.filePath}`
+    : approval.toolName
+
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} padding={4} />
+      <Divider color="permission" title={t('approval-waiting', { tool: titleTool })} padding={4} />
       <Box flexDirection="column" marginTop={1}>
         {approval.command !== undefined && (
           <Box flexDirection="column" paddingX={2}>
-            <Text dimColor wrap="wrap">
-              {approval.command}
-            </Text>
+            {approval.command.split('\n').map((line, index) => (
+              <Text key={`cmd-${index}`} dimColor wrap="wrap">
+                {line || ' '}
+              </Text>
+            ))}
           </Box>
         )}
         {approval.reason !== undefined && (

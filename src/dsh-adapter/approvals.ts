@@ -26,6 +26,8 @@ export interface ApprovalSnapshot {
   readonly reason?: string
   /** The gated command, recovered from the paired tool/call event. */
   readonly command?: string
+  /** File path for file-operation tools (edit, write, read). */
+  readonly filePath?: string
 }
 
 /** One queued or active approval ask. */
@@ -37,16 +39,18 @@ interface PendingApproval {
 }
 
 const COMMAND_CLIP = 500
+const WRITE_PREVIEW_LINES = 8
+const EDIT_PREVIEW_LINES = 4
 
 /**
  * Recover the gated command from the session log: the approval request
  * links to an already-presented tool call via `callId`, so the arguments
  * are not duplicated on the request. Mirrors the web client's `commandOf`.
  * @param req - The pending approval request.
- * @returns The `command` argument when present, else the raw arguments
- *   string (clipped), else undefined when the call cannot be found.
+ * @returns An object with `command` and/or `filePath`, or undefined when
+ *   the call cannot be found.
  */
-function commandOf(req: ApprovalRequest): string | undefined {
+function commandOf(req: ApprovalRequest): { command?: string, filePath?: string } | undefined {
   if (req.callId === undefined) return undefined
   const events = req.agent.session.events
   for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -56,14 +60,42 @@ function commandOf(req: ApprovalRequest): string | undefined {
     const raw = event.data.arguments
     try {
       const parsed: unknown = JSON.parse(raw)
-      if (parsed !== null && typeof parsed === 'object' && 'command' in parsed) {
-        const command = parsed.command
-        if (typeof command === 'string') return command
+      if (parsed !== null && typeof parsed === 'object') {
+        // bash tool: has a `command` field — return it directly.
+        if ('command' in parsed && typeof parsed.command === 'string') {
+          return { command: parsed.command }
+        }
+        // write tool: file_path + content → human-readable preview.
+        const obj = parsed as Record<string, unknown>
+        if (typeof obj.file_path === 'string' && typeof obj.content === 'string') {
+          const lines = obj.content.split('\n')
+          const preview = lines.slice(0, WRITE_PREVIEW_LINES).map(l => `  ${l}`).join('\n')
+          const remaining = lines.length - WRITE_PREVIEW_LINES
+          const suffix = remaining > 0 ? `\n  ... +${remaining} more lines` : ''
+          return { command: `${preview}${suffix}`, filePath: obj.file_path }
+        }
+        // edit tool: file_path + old_string + new_string → diff preview.
+        if (typeof obj.file_path === 'string' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
+          const parts: string[] = []
+          if (obj.old_string !== '') {
+            const oldLines = obj.old_string.split('\n')
+            const oldPreview = oldLines.slice(0, EDIT_PREVIEW_LINES).map(l => `  - ${l}`).join('\n')
+            const oldRemaining = oldLines.length - EDIT_PREVIEW_LINES
+            parts.push(oldPreview + (oldRemaining > 0 ? `\n  ... +${oldRemaining} more lines` : ''))
+          }
+          if (obj.new_string !== '') {
+            const newLines = obj.new_string.split('\n')
+            const newPreview = newLines.slice(0, EDIT_PREVIEW_LINES).map(l => `  + ${l}`).join('\n')
+            const newRemaining = newLines.length - EDIT_PREVIEW_LINES
+            parts.push(newPreview + (newRemaining > 0 ? `\n  ... +${newRemaining} more lines` : ''))
+          }
+          return { command: parts.join('\n'), filePath: obj.file_path }
+        }
       }
     } catch {
       // Not JSON — fall through to the raw string.
     }
-    return raw.length <= COMMAND_CLIP ? raw : `${raw.slice(0, COMMAND_CLIP)}…`
+    return { command: raw.length <= COMMAND_CLIP ? raw : `${raw.slice(0, COMMAND_CLIP)}…` }
   }
   return undefined
 }
@@ -126,13 +158,14 @@ export class ApprovalStore {
    */
   park(req: ApprovalRequest): Promise<ApprovalOutcome> {
     return new Promise<ApprovalOutcome>(resolve => {
-      const command = commandOf(req)
+      const result = commandOf(req)
       const pending: PendingApproval = {
         key: String(++this.seq),
         snapshot: {
           toolName: req.toolName,
           ...(req.reason !== undefined ? { reason: req.reason } : {}),
-          ...(command !== undefined ? { command } : {}),
+          ...(result?.command !== undefined ? { command: result.command } : {}),
+          ...(result?.filePath !== undefined ? { filePath: result.filePath } : {}),
         },
         resolve,
         onAbort: () => {
