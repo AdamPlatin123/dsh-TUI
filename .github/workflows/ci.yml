@@ -72,7 +72,7 @@ jobs:
       - run: node --import tsx/esm scripts/repro-settings.tsx
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
-      # /new viewport regression (issue #375): switching from a long session
+      # /new viewport regression: switching from a long session
       # to an empty session must show the new whale welcome screen immediately.
       - run: node --import tsx/esm scripts/verify-new-session-logo.tsx
 
