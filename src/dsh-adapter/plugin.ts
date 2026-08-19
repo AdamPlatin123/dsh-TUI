@@ -29,11 +29,13 @@ import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersion
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
-import type { TuiDialogRuntime } from './dialogs.js'
-import type { TuiStatusRuntime } from './status.js'
-import type { TuiShortcutRuntime } from './shortcuts.js'
+import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
+import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
-import { createLocalWorkspaceRuntime } from './workspaces.js'
+import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
+import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
@@ -122,6 +124,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           process.stderr.write(
             `\ndsh-tui: 更新后版本未变化（仍为 ${now ?? 'unknown'}，原为 ${updatedFrom}）；` +
               `可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。\n`,
+          )
+        }
+      } else if (process.stderr.isTTY) {
+        // Launcher alignment bridge (0.8.3): /update only replaces the
+        // package inside the DSH profile; a globally installed `dsh-tui`
+        // launcher is a separate copy that keeps its old version. Launchers
+        // >=0.8.3 export DSH_TUI_LAUNCHER_VERSION so we can tell whether
+        // the outer launcher lags the freshly installed profile. Launchers
+        // <=0.8.2 never set the marker — the generic branch below is
+        // intentionally one-shot: DSH_TUI_UPDATED_FROM exists only on the
+        // replacement process immediately after /update.
+        const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
+        if (launcherVersion === undefined) {
+          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: now })}\n`)
+        } else if (isVersionNewer(now, launcherVersion)) {
+          process.stderr.write(
+            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: now, launcher: launcherVersion })}\n`,
           )
         }
       }
@@ -231,7 +250,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // without the service means the patch came from an older dsh-tui copy
   // than the running code — warn once so the skew is diagnosable. Bare
   // embedders (no --profile) take the same fallback by design, silently.
-  const mountedWorkspaceService = ctx.get('tuiWorkspaces')
+  const mountedWorkspaceService = getHostWorkspaceRuntime(ctx.get('tuiWorkspaces'))
   if (mountedWorkspaceService === undefined && resolveDshProfileName() !== undefined) {
     ctx.logger.warn(
       'dsh-tui: tuiWorkspaces service is not mounted; /workspace runs with the local-only fallback. ' +
@@ -341,6 +360,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Edit/Write diff presentation (schema default 'auto'); the /settings
     // screen edits this key live through the dsh-tui namespace.
     diffLayout: config.diffLayout,
+    thinkingFold: config.thinkingFold,
     handle,
   })
   // Register the dsh-tui settings namespace so the /settings screen can
@@ -352,6 +372,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       settingsNamespace('dsh-tui'),
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+        thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
@@ -372,9 +393,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         writeLangPref(value.lang)
       }
     }
-    const apply = (next: { diffLayout?: 'auto' | 'split' | 'unified'; lang?: 'zh' | 'en' }): void => {
+    // thinkingFold rides the same namespace: /settings writes it live and
+    // the channel picks it up at the next step seal.
+    const applyThinkingFold = (value: { thinkingFold?: 'preview' | 'full' }): void => {
+      channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
+    }
+    const apply = (next: { diffLayout?: 'auto' | 'split' | 'unified'; lang?: 'zh' | 'en'; thinkingFold?: 'preview' | 'full' }): void => {
       applyLayout(next)
       applyLang(next)
+      applyThinkingFold(next)
     }
     apply(scope.get())
     scope.watch(next => {
@@ -385,14 +412,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the settings registration above, and the declared selects write `lang`
   // and `diffLayout` back through the settings service's revision-fenced
   // mutate (the watch applies both live).
-  const settingsSections = ctx.get('tuiSettingsSections') as
-    | { register(section: {
-        ns: string
-        title: string
-        descriptions?: Record<string, string>
-        fields: readonly unknown[]
-      }): () => void }
-    | undefined
+  const settingsSections = getHostSettingsSections(
+    ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
+  )
   if (settingsSections !== undefined) {
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
@@ -427,6 +449,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'auto', label: 'Auto (by width)', descriptions: { zh: '自动（按宽度）' } },
             { value: 'split', label: 'Side-by-side', descriptions: { zh: '双栏对照' } },
             { value: 'unified', label: 'Unified', descriptions: { zh: '统一式' } },
+          ],
+        },
+        {
+          path: ['thinkingFold'],
+          label: 'Thinking display',
+          descriptions: { zh: '思考块展示' },
+          hint: 'Streaming thinking shows a 2-3 line live preview and each step folds when it settles; Full keeps thinking expanded until the turn ends.',
+          hintDescriptions: { zh: '流式时思考显示 2-3 行动态预览，每步落定后折叠；展开模式保持思考展开直到整轮结束。' },
+          kind: 'select',
+          options: [
+            { value: 'preview', label: 'Preview (2-3 lines)', descriptions: { zh: '预览（2-3 行）' } },
+            { value: 'full', label: 'Full until turn end', descriptions: { zh: '展开至轮末' } },
           ],
         },
       ],
@@ -555,9 +589,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
-    extensionDialogs: (ctx.get('tuiDialogs') as TuiDialogRuntime | undefined)?.store,
-    extensionStatus: (ctx.get('tuiStatus') as TuiStatusRuntime | undefined)?.store,
-    extensionShortcuts: ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined,
+    extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
+    extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
+    extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
     // Full-screen surfaces inside Chat — the trajectory scene and the session
     // browser — enter the alt screen themselves in inline mode; in fullscreen
     // the tree is already wrapped below, so they must not nest.
@@ -991,7 +1025,7 @@ function resumeCommand(profile: string | undefined, sessionId: string): string {
 function disposeRootAndThen(ctx: Context, done: () => void, fallbackCode = 1): void {
   const timer = setTimeout(() => process.exit(fallbackCode), 5000)
   timer.unref()
-  void ctx.root.fiber.dispose().then(
+  void withHostRootCapability(() => ctx.root.fiber.dispose()).then(
     () => {
       clearTimeout(timer)
       done()
