@@ -154,7 +154,7 @@ function SweepDriver(): React.ReactNode {
 //   sweep [0,800); letters appear from 400 (M) / 540 (A) / 680 (X), full at
 //   ~840; fade [1100,1600); gone at 1600.
 {
-  const harness = await makeHarness(4, React.createElement(SweepDriver))
+  const harness = await makeHarness(6, React.createElement(SweepDriver))
   try {
     await sleep(150)
     const restText = harness.rowText(0)
@@ -162,14 +162,19 @@ function SweepDriver(): React.ReactNode {
       restText === '╭' + '─'.repeat(COLS - 2) + '╮' && harness.fgColors(0) <= 1)
     // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 400).
     await sleep(450)
-    check('act 1 sweep: a light band runs left→right (≥2 colours), no letters yet',
-      harness.fgColors(0) >= 2 && !harness.rowText(0).includes('M'), harness.rowText(0).slice(24, 36))
-    // elapsed ≈ 950: all letters up and brightening done.
+    check('act 1 sweep: a light band runs left→right on BOTH borders, no letters yet',
+      harness.fgColors(0) >= 2 && harness.fgColors(2) >= 2, `${harness.fgColors(0)}/${harness.fgColors(2)} colours`)
+    // elapsed ≈ 950: all letters up and brightening done — the tier name
+    // sits INSIDE the prompt (the label row under the content row), while
+    // the top border itself stays pure ─.
     await sleep(650)
-    check('act 2 label: the tier name emerged on the border',
-      harness.rowText(0).includes(LEVELS[LEVELS.length - 1]!.toUpperCase().split('').join('─')), harness.rowText(0).slice(24, 36))
-    const labelColors = harness.fgColors(0)
-    check('act 2 label: letters carry the accent family', labelColors >= 2, `${labelColors} colours`)
+    const labelRow = harness.rowText(2)
+    check('act 2 label: the tier name emerged inside the prompt',
+      labelRow.includes(LEVELS[LEVELS.length - 1]!.toUpperCase().split('').join(' ')), labelRow.trim().slice(0, 12))
+    check('act 2 label: border rows carry no letters',
+      harness.rowText(0) === '╭' + '─'.repeat(COLS - 2) + '╮')
+    const labelColors = harness.fgColors(2)
+    check('act 2 label: letters carry the accent family', labelColors >= 1, `${labelColors} colours`)
     // elapsed ≈ 1700 (past FADE_END 1600): everything gone, border identical to rest.
     harness.writes.length = 0
     await sleep(1050)
@@ -178,7 +183,7 @@ function SweepDriver(): React.ReactNode {
     check('act 3 fade: overlay and letters are gone, border back to rest',
       harness.rowText(0) === restText && harness.fgColors(0) <= 1, harness.rowText(0).slice(24, 36))
     check('lifecycle: no scroll sequences at any point', !scroll)
-    check('bottom border stays a single idle colour throughout', harness.fgColors(2) <= 1)
+    check('after the fade both borders rest in a single colour', harness.fgColors(0) <= 1 && harness.fgColors(2) <= 1)
   } finally {
     harness.instance.unmount()
   }
@@ -186,7 +191,7 @@ function SweepDriver(): React.ReactNode {
 
 // --- Negative paths: no sweep, no letters, ever -------------------------------
 async function runDarkScenario(name: string, node: React.ReactNode) {
-  const harness = await makeHarness(4, node)
+  const harness = await makeHarness(6, node)
   try {
     await sleep(300)
     harness.writes.length = 0

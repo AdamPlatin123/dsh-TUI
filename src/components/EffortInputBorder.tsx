@@ -2,22 +2,23 @@
  * EffortInputBorder — 输入框层上的三幕点焰叠加（对齐 Codex 的完整
  * 语义：光扫过、档位字样浮现、整体渐隐）。
  *
- * 输入框只有顶/底两条横边框（round、无左右）——本组件自绘这两行。
- * 底行恒为主题色；顶行承载一次性三幕动画，切到最高思考强度档时：
+ * 输入框只有顶/底两条横边框（round、无左右）——本组件自绘这两行，
+ * **同步**承载动画；档位字样短暂显示在输入框**内容区**（居中一行，
+ * 随图层一起浮现与消失）。切到最高思考强度档时：
  *
- *   1. 扫光 [0, 800ms)——一段橙黄光带沿顶边框自左向右扫过（wave 波
- *      形逐列变色），期间输入框完全正常可用；
- *   2. 档位字样 [400ms, ~1000ms)——光带行至中段时，顶边框居中处
- *      `M A X`（当前档名大写）按字母 stagger 浮现，由暗渐亮加粗；
- *   3. 渐隐 [1100, 1600ms)——字样连同残留光色一起向主题色淡出，
- *      末帧字母让位回 `─`，图层归零：静止时顶/底边框就是原主题色，
- *      无任何附加行。
+ *   1. 扫光 [0, 800ms)——一段蓝色光带沿顶/底边框同步自左向右扫过
+ *      （wave 波形逐列变色），期间输入框完全正常可用；
+ *   2. 档位字样 [400ms, ~1000ms)——光带行至中段时，输入框内容区居
+ *      中浮现 `M A X`（当前档名大写）按字母 stagger 由暗渐亮加粗；
+ *   3. 渐隐 [1100, 1600ms)——字样连同光色一起向主题色淡出，末帧字
+ *      样行让位消失、边框归零：静止时顶/底边框就是原主题色，输入
+ *      框内容区无任何附加物。
  *
- * glyph 变化仅限档位字样的出现/让位（局部列、一次性）；其余帧间变化
- * 全部是既有 `─` 的前景色。触发判定在渲染期做（props-变化-调整模
- * 式）；从「已有档位」切到档位表末位最高档才触发，冷启动恢复偏好/
- * 单档表/无档位表/无共享时钟均不触发。时钟复用 Ink core 共享时钟，
- * 仅动画窗口订阅（keepAlive），播完回到零开销静止边框。
+ * glyph 变化仅限字样行的出现/让位（一次性）；其余帧间变化全部是既
+ * 有 `─` 的前景色。触发判定在渲染期做（props-变化-调整模式）；从
+ * 「已有档位」切到档位表末位最高档才触发，冷启动恢复偏好/单档表/
+ * 无档位表/无共享时钟均不触发。时钟复用 Ink core 共享时钟，仅动画
+ * 窗口订阅（keepAlive），播完回到零开销静止边框。
  */
 import React, { useContext, useEffect, useReducer, useRef, useState } from 'react'
 import { Box, Text } from '../ui.js'
@@ -26,10 +27,7 @@ import { rgbString } from '../trajectory/motion.js'
 import type { Color } from '../ink/styles.js'
 import type { Theme } from '../theme.js'
 import type { RGBColor } from './Spinner/spinnerUtils.js'
-import {
-  ignitionHues,
-  ignitionLineColors,
-} from '../trajectory/effortIgnition.js'
+import { ignitionHues, ignitionLineColors } from '../trajectory/effortIgnition.js'
 
 /** 三幕时间轴（ms）：扫光全长、字样启动（波至中段）、字母 stagger 步长、渐隐起止。 */
 const SWEEP_MS = 800
@@ -45,6 +43,31 @@ type Overlay = { label: string; startedAtMs: number }
 function mixRGB(a: RGBColor, b: RGBColor, t: number): RGBColor {
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * Math.min(1, Math.max(0, t)))
   return { r: mix(a.r, b.r), g: mix(a.g, b.g), b: mix(a.b, b.b) }
+}
+
+/** 边框行（顶/底共用同一色段序列——同步变色）。 */
+function BorderRow({
+  left,
+  right,
+  runs,
+  idleColor,
+}: {
+  left: string
+  right: string
+  runs: ReadonlyArray<{ glyph: string; color: keyof Theme | Color }>
+  idleColor: keyof Theme | Color
+}): React.ReactNode {
+  return (
+    <Text>
+      <Text color={idleColor}>{left}</Text>
+      {runs.map((run, i) => (
+        <Text key={i} color={run.color}>
+          {run.glyph}
+        </Text>
+      ))}
+      <Text color={idleColor}>{right}</Text>
+    </Text>
+  )
 }
 
 export function EffortInputBorder({
@@ -96,19 +119,25 @@ export function EffortInputBorder({
   }, [overlay, elapsedMs])
 
   const midWidth = Math.max(0, columns - 2)
-  // 扫光色：仅第一幕；字样色板与波同源（hues[0] 一族）。
   const sweepColors =
     overlay !== null && elapsedMs < SWEEP_MS && midWidth > 0
       ? ignitionLineColors({ style: 'wave', elapsedMs, width: midWidth, onLight })
       : []
+  // 顶/底共用的色段序列（同步）：扫光列取波形色，其余列回主题色。
+  const runs: Array<{ glyph: string; color: keyof Theme | Color }> = []
+  for (let index = 0; index < midWidth; index++) {
+    const color: keyof Theme | Color = sweepColors[index] ?? idleColor
+    const last = runs[runs.length - 1]
+    if (last !== undefined && last.color === color) last.glyph += '─'
+    else runs.push({ glyph: '─', color })
+  }
+
+  // 字样行（输入框内容区，居中）：字母 stagger 浮现→渐亮→整体渐隐。
   const band: RGBColor = onLight ? { r: 240, g: 240, b: 242 } : { r: 27, g: 30, b: 40 }
   const hue = ignitionHues(onLight)[0]
-  // 字样布局：`M A X`（字母与空位都占 1 列），居中于 ─ 区。
-  const letters = overlay === null ? '' : overlay.label.split('').join(' ')
-  const labelStart = Math.max(0, Math.floor((midWidth - letters.length) / 2))
-  const letterAlpha = (index: number): number => {
+  const letters = overlay === null ? [] : overlay.label.split('')
+  const letterAlpha = (letterIndex: number): number => {
     if (overlay === null) return 0
-    const letterIndex = Math.floor(index / 2)
     const appearAt = LABEL_START_MS + letterIndex * LABEL_STEP_MS
     if (elapsedMs < appearAt) return 0
     const brighten = Math.min(1, (elapsedMs - appearAt) / LABEL_BRIGHTEN_MS)
@@ -118,44 +147,7 @@ export function EffortInputBorder({
         : Math.max(0, 1 - (elapsedMs - FADE_START_MS) / (FADE_END_MS - FADE_START_MS))
     return brighten * fade
   }
-
-  /** 顶行元素序列：[(glyph, color, bold)]，同色 `─` 段合并。 */
-  const top: Array<{ glyph: string; color: keyof Theme | Color; bold?: boolean }> = []
-  let index = 0
-  while (index < midWidth) {
-    const letterIndex = letters.length > 0 ? index - labelStart : -1
-    if (
-      letterIndex >= 0 &&
-      letterIndex < letters.length &&
-      letterIndex % 2 === 0 &&
-      letterAlpha(letterIndex) > 0
-    ) {
-      const alpha = letterAlpha(letterIndex)
-      const dim = mixRGB(band, hue, 0.35 * alpha)
-      const color = rgbString(mixRGB(dim, hue, alpha))
-      top.push({ glyph: letters[letterIndex]!, color, bold: true })
-      index++
-      continue
-    }
-    const sweep = sweepColors[index]
-    const glyph = '─'
-    if (sweep !== undefined) {
-      const last = top[top.length - 1]
-      if (last !== undefined && last.glyph === glyph && last.color === sweep && last.bold !== true) {
-        last.glyph += '─'
-      } else {
-        top.push({ glyph, color: sweep })
-      }
-    } else {
-      const last = top[top.length - 1]
-      if (last !== undefined && last.glyph.startsWith('─') && !last.bold) {
-        last.glyph += '─'
-      } else {
-        top.push({ glyph, color: idleColor })
-      }
-    }
-    index++
-  }
+  const labelVisible = letters.some((_, i) => letterAlpha(i) > 0)
 
   return (
     <Box
@@ -165,17 +157,25 @@ export function EffortInputBorder({
       width="100%"
       flexShrink={0}
     >
-      <Text>
-        <Text color={idleColor}>╭</Text>
-        {top.map((part, i) => (
-          <Text key={i} color={part.color} bold={part.bold}>
-            {part.glyph}
-          </Text>
-        ))}
-        <Text color={idleColor}>╮</Text>
-      </Text>
+      <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} />
       {children}
-      <Text color={idleColor}>╰{'─'.repeat(midWidth)}╯</Text>
+      {labelVisible ? (
+        <Box width="100%" justifyContent="center" height={1}>
+          <Text>
+            {letters.map((letter, i) => {
+              const alpha = letterAlpha(i)
+              const dim = mixRGB(band, hue, 0.35 * alpha)
+              return (
+                <Text key={i} bold color={rgbString(mixRGB(dim, hue, alpha))}>
+                  {letter}
+                  {i < letters.length - 1 ? ' ' : ''}
+                </Text>
+              )
+            })}
+          </Text>
+        </Box>
+      ) : null}
+      <BorderRow left="╰" right="╯" runs={runs} idleColor={idleColor} />
     </Box>
   )
 }

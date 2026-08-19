@@ -54,14 +54,14 @@ const PULSE_HALF_WIDTH = 4.5
  * 级常量：每帧调用零分配。
  */
 const HUES_DARK: readonly [RGBColor, RGBColor, RGBColor] = [
-  { r: 255, g: 178, b: 66 },
-  { r: 255, g: 214, b: 120 },
-  { r: 255, g: 120, b: 60 },
+  { r: 110, g: 160, b: 255 },
+  { r: 150, g: 195, b: 255 },
+  { r: 80, g: 130, b: 240 },
 ]
 const HUES_LIGHT: readonly [RGBColor, RGBColor, RGBColor] = [
-  { r: 176, g: 98, b: 0 },
-  { r: 150, g: 110, b: 0 },
-  { r: 200, g: 70, b: 20 },
+  { r: 30, g: 90, b: 220 },
+  { r: 60, g: 120, b: 235 },
+  { r: 20, g: 70, b: 200 },
 ]
 
 export function ignitionHues(onLight: boolean): readonly [RGBColor, RGBColor, RGBColor] {
