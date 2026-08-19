@@ -22,12 +22,15 @@ export function EffortTierBadge({
   effort,
   levels,
   onLight,
+  columns,
 }: {
   /** 当前思考强度档 id；`undefined` 表示路线未声明。 */
   effort: string | undefined
   /** 当前路线的档位表（低→高，末位为最高档）；未知时传 `undefined`。 */
   levels: readonly string[] | undefined
   onLight: boolean
+  /** 终端列数——居中偏移按它计算（纯文本流，不引入嵌套 Box）。 */
+  columns: number
 }): React.ReactNode {
   const clock = useContext(ClockContext)
   const [overlay, setOverlay] = useState<Overlay | null>(null)
@@ -73,9 +76,11 @@ export function EffortTierBadge({
   const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
   const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
+  // 居中偏移：❯ 占 2 列、块光标占 1 列，其余可用宽度对半减去字样宽。
+  const offset = Math.max(0, Math.floor((columns - 3 - overlay.label.length) / 2) - 1)
   return (
     <Text bold color={color}>
-      {' '}
+      {' '.repeat(offset)}
       {overlay.label}
     </Text>
   )

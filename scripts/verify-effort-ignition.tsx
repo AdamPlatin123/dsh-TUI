@@ -140,10 +140,9 @@ function borderNode(effort: string | undefined): React.ReactNode {
   return React.createElement(
     EffortInputBorder,
     { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Box, { flexDirection: 'row', width: '100%' },
-      React.createElement(Text, { inverse: true }, ' '),
-      React.createElement(Box, { flexGrow: 1, justifyContent: 'center' },
-        React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false }))),
+    React.createElement(Text, null,
+      ' ',
+      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false, columns: COLS })),
   )
 }
 
@@ -166,6 +165,8 @@ function SweepDriver(): React.ReactNode {
     const restText = harness.rowText(0)
     check('rest: plain theme border, no letters, one colour',
       restText === '╭' + '─'.repeat(COLS - 2) + '╮' && harness.fgColors(0) <= 1)
+    check('rest: exactly three rows — bottom border sits directly under the input row',
+      harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯' && harness.rowText(3) === '')
     // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 400).
     await sleep(450)
     check('act 1 sweep: a light band runs left→right on BOTH borders, no letters yet',
