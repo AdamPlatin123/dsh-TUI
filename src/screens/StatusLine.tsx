@@ -8,8 +8,6 @@ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
-import { EffortIgnitionLine } from '../components/EffortIgnitionLine.js'
-import { isLightThemeActive } from '../theme.js'
 import type { WaveBand } from '../dsh-adapter/types.js'
 import {
   renderContextBar,
@@ -216,20 +214,6 @@ export function StatusLine({
             </Text>
           </Box>
         </Box>
-        {/* Row 2.5: effort ignition — a one-second band of waves the moment
-            the reasoning effort switches to the route's top tier; unmounts
-            itself when done (SGR-only: frames change background colours
-            only, glyphs are always spaces). */}
-        <EffortIgnitionLine
-          effort={channel.reasoningEffort}
-          levels={channel.effortLevels}
-          // The enclosing Box has paddingX={1}, so the band's usable width is
-          // columns-2 — passing the full width would clip the right end and
-          // misalign the band against the context bar (columns-4) and the
-          // status row (columns-2) above it.
-          columns={columns - 2}
-          onLight={isLightThemeActive(themeName)}
-        />
         {/* Row 3: idle turn summary (ActivityLine) + mode hint on the right. */}
         <Box
           height={1}
