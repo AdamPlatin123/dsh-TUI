@@ -64,11 +64,20 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
       <Box flexDirection="column" marginTop={1}>
         {approval.command !== undefined && (
           <Box flexDirection="column" paddingX={2}>
-            {approval.command.split('\n').map((line, index) => (
-              <Text key={`cmd-${index}`} dimColor wrap="wrap">
-                {line || ' '}
-              </Text>
-            ))}
+            {approval.command.split('\n').map((line, index) => {
+              const isOld = line.startsWith('  - ')
+              const isNew = line.startsWith('  + ')
+              return (
+                <Text
+                  key={`cmd-${index}`}
+                  dimColor={!isOld && !isNew}
+                  color={isOld ? 'diffRemovedWord' : isNew ? 'diffAddedWord' : undefined}
+                  wrap="wrap"
+                >
+                  {line || ' '}
+                </Text>
+              )
+            })}
           </Box>
         )}
         {approval.reason !== undefined && (

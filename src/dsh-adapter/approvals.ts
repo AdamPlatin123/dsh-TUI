@@ -69,10 +69,10 @@ function commandOf(req: ApprovalRequest): { command?: string, filePath?: string 
         const obj = parsed as Record<string, unknown>
         if (typeof obj.file_path === 'string' && typeof obj.content === 'string') {
           const lines = obj.content.split('\n')
-          const preview = lines.slice(0, WRITE_PREVIEW_LINES).map(l => `  ${l}`).join('\n')
+          const preview = lines.slice(0, WRITE_PREVIEW_LINES).map(l => `  + ${l}`).join('\n')
           const remaining = lines.length - WRITE_PREVIEW_LINES
           const suffix = remaining > 0 ? `\n  ... +${remaining} more lines` : ''
-          return { command: `${preview}${suffix}`, filePath: obj.file_path }
+          return { command: `${preview}${suffix}\n`, filePath: obj.file_path }
         }
         // edit tool: file_path + old_string + new_string → diff preview.
         if (typeof obj.file_path === 'string' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
@@ -89,7 +89,7 @@ function commandOf(req: ApprovalRequest): { command?: string, filePath?: string 
             const newRemaining = newLines.length - EDIT_PREVIEW_LINES
             parts.push(newPreview + (newRemaining > 0 ? `\n  ... +${newRemaining} more lines` : ''))
           }
-          return { command: parts.join('\n'), filePath: obj.file_path }
+          return { command: `${parts.join('\n')}\n`, filePath: obj.file_path }
         }
       }
     } catch {
