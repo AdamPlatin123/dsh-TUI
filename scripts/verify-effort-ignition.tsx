@@ -1,17 +1,18 @@
 /**
- * Effort ignition regression — the top-tier border sweep.
+ * Effort ignition regression — the top-tier wave row under the prompt.
  *
  * Part A asserts the math layer (waveform sampling, easings, envelope, the
  * per-column colour contract, boundary guards). Part B mounts the real
- * EffortInputBorder (self-drawn ╭─╮ / ╰─╯ rows around a fixed content row)
+ * EffortIgnitionRow (one full-width ▁ line — the row always exists, dim at rest)
  * in a headless xterm, one harness per scenario, and asserts:
  *
- * - **Every style sweeps, deterministically** — the component accepts a
- *   fixed `style` prop here, so wave/aurora/pulse each get their own run.
- * - **Glyphs never change; only colours move.** The border rows' TEXT is
- *   byte-identical across frames (╭ + ─×n + ╮); the sweep is foreground
- *   colour only — the strongest form of the SGR-only rule, with no layout
- *   change at any point (the rows exist at rest too).
+ * - **Every style runs over the row, deterministically** — the component
+ *   accepts a fixed `style` prop here, so wave/aurora/pulse each get a run.
+ * - **Glyphs never change; only colours move.** The row's TEXT is
+ *   byte-identical across frames (▁ × width, present at rest too) — the
+ *   strongest form of the SGR-only rule, with no layout change at any
+ *   point: the bright wave is foreground colour running over a constant
+ *   ▁ layer, the dim rest is the same layer at its quiet end.
  * - **Mount/unmount never scroll**: the rows are permanent, but the whole
  *   stream still must contain no scroll sequences (#38/#39/#19/#10 family).
  * - **It returns to rest**: wave colours vanish after the style's total.
@@ -27,7 +28,7 @@ const [
   React,
   { Terminal: XTerm },
   { render, Text },
-  { EffortInputBorder },
+  { EffortIgnitionRow },
   { ClockProvider },
   math,
 ] = await Promise.all([
@@ -35,7 +36,7 @@ const [
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
-  import('../src/components/EffortInputBorder.js'),
+  import('../src/components/EffortIgnitionRow.js'),
   import('../src/ink/components/ClockContext.js'),
   import('../src/trajectory/effortIgnition.js'),
 ])
@@ -85,7 +86,7 @@ check('line colors: some columns are painted mid-wave',
 check('random style: never repeats the previous one',
   Array.from({ length: 20 }, () => math.randomIgnitionStyle('wave')).every(style => style !== 'wave'))
 
-// --- Part B: the border sweeps, text frozen, colours only -----------------------
+// --- Part B: the row layer — one full-width ▁ line, a bright wave runs over it
 const LEVELS = ['low', 'medium', 'high'] as const
 const COLS = 60
 
@@ -109,8 +110,8 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
   }
   const rowText = (y: number): string =>
     term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? ''
-  /** Distinct truecolor foreground colours on a given row (the sweep). */
-  const sweepColors = (y: number): number => {
+  /** Distinct truecolor foreground colours on a given row. */
+  const fgColors = (y: number): number => {
     const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
     if (line === undefined) return 0
     const found = new Set<number>()
@@ -130,18 +131,13 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
       patchConsole: false,
     },
   )
-  return { term, writes, rowText, sweepColors, instance }
+  return { term, writes, rowText, fgColors, instance }
 }
 
-function borderNode(effort: string | undefined, style?: 'wave' | 'aurora' | 'pulse'): React.ReactNode {
-  return React.createElement(
-    EffortInputBorder,
-    { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder', style },
-    React.createElement(Text, null, 'row'),
-  )
+function rowNode(effort: string | undefined, style?: 'wave' | 'aurora' | 'pulse'): React.ReactNode {
+  return React.createElement(EffortIgnitionRow, { effort, levels: LEVELS, columns: COLS, onLight: false, style })
 }
 
-/** Sweep driver: effort flips onto the top tier at t=300ms with a pinned style. */
 function makeSweepDriver(style: 'wave' | 'aurora' | 'pulse') {
   return function Driver(): React.ReactNode {
     const [effort, setEffort] = React.useState<string>('medium')
@@ -149,24 +145,23 @@ function makeSweepDriver(style: 'wave' | 'aurora' | 'pulse') {
       const timer = setTimeout(() => setEffort('high'), 300)
       return () => clearTimeout(timer)
     }, [])
-    return borderNode(effort, style)
+    return rowNode(effort, style)
   }
 }
 
 async function runSweepScenario(style: 'wave' | 'aurora' | 'pulse') {
-  const harness = await makeHarness(6, React.createElement(makeSweepDriver(style)))
+  const harness = await makeHarness(4, React.createElement(makeSweepDriver(style)))
   try {
     await sleep(150)
-    const restTop = harness.rowText(0)
-    const restSweep = harness.sweepColors(0)
-    check(`${style}: border row exists at rest`,
-      restTop.startsWith('╭') && restTop.endsWith('╮') && restTop.length === COLS,
-      restTop.slice(0, 12))
-    // Common on-screen sweep window at t=550ms (pulse's ring is inside a
+    const restText = harness.rowText(0)
+    check(`${style}: the row exists at rest, a full ▁ line`,
+      restText === '▁'.repeat(COLS), restText.slice(0, 10))
+    check(`${style}: rest is a single dim colour`, harness.fgColors(0) <= 1)
+    // Common on-screen sweep window at t=550ms (pulse's ring stays inside a
     // 60-col row until ~665ms; wave's crest has entered; aurora always).
     await sleep(400)
     const midText = harness.rowText(0)
-    const swept = Math.max(harness.sweepColors(0), harness.sweepColors(2))
+    const swept = harness.fgColors(0)
     harness.writes.length = 0
     await sleep(420)
     const stream = harness.writes.join('')
@@ -177,15 +172,14 @@ async function runSweepScenario(style: 'wave' | 'aurora' | 'pulse') {
       ['scroll down', /\x1b\[\d*T/],
     ] as const
     const offenders = repaints.filter(([, pattern]) => pattern.test(stream)).map(([name]) => name)
-    check(`${style}: sweeps the border in a moving gradient`, swept >= 2, `${swept} colours`)
-    check(`${style}: text frozen while colours move`, midText === restTop && midText.startsWith('╭'))
+    check(`${style}: a bright gradient runs across the row`, swept >= 2, `${swept} colours`)
+    check(`${style}: text frozen while colours move`, midText === restText)
     check(`${style}: no repaint escapes while sweeping`, offenders.length === 0,
       offenders.length === 0 ? `${stream.length} bytes` : offenders.join(', '))
     // Past every style's total (≤1300ms from the 300ms switch): back to rest.
     await sleep(700)
-    check(`${style}: returns to the idle border`,
-      harness.sweepColors(0) <= 1 && harness.sweepColors(2) <= 1 && harness.rowText(0) === restTop)
-    check(`${style}: rest shows a single idle colour`, restSweep <= 1)
+    check(`${style}: returns to the dim rest`,
+      harness.fgColors(0) <= 1 && harness.rowText(0) === restText)
   } finally {
     harness.instance.unmount()
   }
@@ -195,38 +189,28 @@ for (const style of ['wave', 'aurora', 'pulse'] as const) {
   await runSweepScenario(style)
 }
 
-// --- Negative paths: these must stay completely dark ---------------------------
-// The drivers below mount variants directly; plain nodes suffice except for
-// the leave-top case, which flips effort after 300ms.
+// --- Negative paths: these must stay completely dim ---------------------------
 async function runDarkScenario(name: string, node: React.ReactNode) {
-  const harness = await makeHarness(6, node)
+  const harness = await makeHarness(4, node)
   try {
     await sleep(300)
     harness.writes.length = 0
     await sleep(1300)
     const stream = harness.writes.join('')
-    const dark = harness.sweepColors(0) <= 1 && harness.sweepColors(2) <= 1 && !/\x1b\[38;2;.*\x1b\[38;2;/.test(stream)
-    check(`${name}: no ignition at all`, dark)
+    const dim = harness.fgColors(0) <= 1 && !/\x1b\[38;2;.*\x1b\[38;2;/.test(stream)
+    check(`${name}: no ignition at all`, dim)
   } finally {
     harness.instance.unmount()
   }
 }
 
-await runDarkScenario('cold mount on the top tier', borderNode('high'))
+await runDarkScenario('cold mount on the top tier', rowNode('high'))
 function SingleTierDriver(): React.ReactNode {
-  return React.createElement(
-    EffortInputBorder,
-    { effort: 'high', levels: ['high'], columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null, 'row'),
-  )
+  return React.createElement(EffortIgnitionRow, { effort: 'high', levels: ['high'], columns: COLS, onLight: false })
 }
 await runDarkScenario('single-tier table', React.createElement(SingleTierDriver))
 function NoTableDriver(): React.ReactNode {
-  return React.createElement(
-    EffortInputBorder,
-    { effort: 'high', levels: undefined, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null, 'row'),
-  )
+  return React.createElement(EffortIgnitionRow, { effort: 'high', levels: undefined, columns: COLS, onLight: false })
 }
 await runDarkScenario('missing level table', React.createElement(NoTableDriver))
 function LeaveTopDriver(): React.ReactNode {
@@ -235,11 +219,7 @@ function LeaveTopDriver(): React.ReactNode {
     const timer = setTimeout(() => setEffort('medium'), 300)
     return () => clearTimeout(timer)
   }, [])
-  return React.createElement(
-    EffortInputBorder,
-    { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null, 'row'),
-  )
+  return rowNode(effort)
 }
 await runDarkScenario('leaving the top tier', React.createElement(LeaveTopDriver))
 

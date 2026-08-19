@@ -4,7 +4,7 @@ import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
-import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortIgnitionRow } from './EffortIgnitionRow.js'
 import { isLightThemeActive } from '../theme.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -1035,16 +1035,16 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      {/* The prompt's own top/bottom border rows, self-drawn so the effort
-          ignition can sweep them (constant glyphs, per-column colours —
-          SGR-only; see EffortInputBorder). Idle colour keeps the plan-mode
-          accent the old Box border carried. */}
-      <EffortInputBorder
-        effort={channel.reasoningEffort}
-        levels={channel.effortLevels}
-        columns={columns}
-        onLight={isLightThemeActive(themeName)}
-        idleColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
+      <Box
+        flexDirection="column"
+        alignItems="flex-start"
+        justifyContent="flex-start"
+        borderColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
+        borderStyle="round"
+        borderLeft={false}
+        borderRight={false}
+        borderBottom
+        width="100%"
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph
@@ -1063,7 +1063,16 @@ export function PromptInput({
             )}
           </Box>
         </Box>
-      </EffortInputBorder>
+      </Box>
+      {/* 一行输入框等宽的橙色波图层：切到最高思考强度档时亮波自左向
+          右跑过（整行恒铺 ▁、波只动颜色；静止时是与终端底色融合的
+          暗端，近乎隐形）。 */}
+      <EffortIgnitionRow
+        effort={channel.reasoningEffort}
+        levels={channel.effortLevels}
+        columns={columns}
+        onLight={isLightThemeActive(themeName)}
+      />
     </Box>
   )
 }
