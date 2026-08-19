@@ -22,6 +22,15 @@ export type IgnitionStyle = 'wave' | 'aurora' | 'pulse'
 
 export const IGNITION_STYLES: readonly IgnitionStyle[] = ['wave', 'aurora', 'pulse']
 
+/** 三幕时间轴（ms）：扫光全长、字样启动（波至中段）、字样渐亮、渐隐起止。边框扫光与输入行字样徽标共用。 */
+export const IGNITION_TIMELINE = {
+  sweepMs: 800,
+  labelStartMs: 400,
+  labelBrightenMs: 160,
+  fadeStartMs: 1100,
+  fadeEndMs: 1600,
+} as const
+
 /** 帧时长（ms），仅用于把墙钟时间折算成动画秒数，不创建任何定时器。 */
 export const IGNITION_TOTAL_MS: Record<IgnitionStyle, number> = {
   wave: 1000,

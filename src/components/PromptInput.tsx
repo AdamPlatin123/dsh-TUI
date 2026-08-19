@@ -5,6 +5,7 @@ import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -1062,6 +1063,13 @@ export function PromptInput({
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
+          {/* 三幕点焰第二幕：切到最高档时行尾短暂浮现档名大写（与边框
+              扫光同时间轴，随图层渐隐让位；行数恒定）。 */}
+          <EffortTierBadge
+            effort={channel.reasoningEffort}
+            levels={channel.effortLevels}
+            onLight={isLightThemeActive(themeName)}
+          />
         </Box>
       </EffortInputBorder>
     </Box>

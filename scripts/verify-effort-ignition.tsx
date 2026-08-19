@@ -29,6 +29,7 @@ const [
   { Terminal: XTerm },
   { render, Text },
   { EffortInputBorder },
+  { EffortTierBadge },
   { ClockProvider },
   math,
 ] = await Promise.all([
@@ -37,6 +38,7 @@ const [
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/EffortInputBorder.js'),
+  import('../src/components/EffortTierBadge.js'),
   import('../src/ink/components/ClockContext.js'),
   import('../src/trajectory/effortIgnition.js'),
 ])
@@ -137,7 +139,9 @@ function borderNode(effort: string | undefined): React.ReactNode {
   return React.createElement(
     EffortInputBorder,
     { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null, 'row'),
+    React.createElement(Text, null,
+      'row',
+      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false })),
   )
 }
 
@@ -164,24 +168,24 @@ function SweepDriver(): React.ReactNode {
     await sleep(450)
     check('act 1 sweep: a light band runs left→right on BOTH borders, no letters yet',
       harness.fgColors(0) >= 2 && harness.fgColors(2) >= 2, `${harness.fgColors(0)}/${harness.fgColors(2)} colours`)
-    // elapsed ≈ 950: all letters up and brightening done — the tier name
-    // sits INSIDE the prompt (the label row under the content row), while
-    // the top border itself stays pure ─.
+    // elapsed ≈ 950: the tier name shows at the END of the input row, and
+    // NO extra row appears — the row under the content row stays the bottom
+    // border for the whole show.
     await sleep(650)
-    const labelRow = harness.rowText(2)
-    check('act 2 label: the tier name emerged inside the prompt',
-      labelRow.includes(LEVELS[LEVELS.length - 1]!.toUpperCase().split('').join(' ')), labelRow.trim().slice(0, 12))
-    check('act 2 label: border rows carry no letters',
-      harness.rowText(0) === '╭' + '─'.repeat(COLS - 2) + '╮')
-    const labelColors = harness.fgColors(2)
-    check('act 2 label: letters carry the accent family', labelColors >= 1, `${labelColors} colours`)
+    const inputRow = harness.rowText(1)
+    check('act 2 label: the tier name emerged at the end of the input row',
+      inputRow.trimEnd().endsWith(LEVELS[LEVELS.length - 1]!.toUpperCase()), inputRow.trimEnd().slice(-10))
+    check('act 2 label: no extra row — bottom border never moves',
+      harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯')
+    const labelColors = harness.fgColors(1)
+    check('act 2 label: the badge carries the accent family', labelColors >= 1, `${labelColors} colours`)
     // elapsed ≈ 1700 (past FADE_END 1600): everything gone, border identical to rest.
     harness.writes.length = 0
     await sleep(1050)
     const stream = harness.writes.join('')
     const scroll = [/\x1b\[\d*S/, /\x1b\[\d*T/].some(pattern => pattern.test(stream))
-    check('act 3 fade: overlay and letters are gone, border back to rest',
-      harness.rowText(0) === restText && harness.fgColors(0) <= 1, harness.rowText(0).slice(24, 36))
+    check('act 3 fade: badge and sweep are gone, border back to rest',
+      harness.rowText(0) === restText && harness.rowText(1).trim() === 'row' && harness.fgColors(0) <= 1)
     check('lifecycle: no scroll sequences at any point', !scroll)
     check('after the fade both borders rest in a single colour', harness.fgColors(0) <= 1 && harness.fgColors(2) <= 1)
   } finally {
