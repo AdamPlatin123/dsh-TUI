@@ -261,6 +261,18 @@ export function Chat({
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)
+  const previousAgentIdRef = React.useRef(channel.agentId)
+  React.useLayoutEffect(() => {
+    if (previousAgentIdRef.current === channel.agentId) return
+    previousAgentIdRef.current = channel.agentId
+    // A session switch is a real frame-identity reset. In inline mode the
+    // shrink renderer normally preserves an equal header seam in scrollback;
+    // that is correct for transient folds, but would leave the NEW session's
+    // identical whale header off-screen until another render. Re-anchor the
+    // switch frame so the new header is painted into the live viewport.
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.reanchorViewport()
+  }, [channel.agentId])
   const [selectionActive, setSelectionActive] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
