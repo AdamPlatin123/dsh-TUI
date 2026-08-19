@@ -15,14 +15,14 @@ import { Text } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import { rgbString } from '../trajectory/motion.js'
 import type { RGBColor } from './Spinner/spinnerUtils.js'
-import { IGNITION_TIMELINE, easeOutCubic, ignitionHues } from '../trajectory/effortIgnition.js'
+import { IGNITION_TIMELINE, ignitionHues } from '../trajectory/effortIgnition.js'
 
 type Overlay = { label: string; startedAtMs: number }
 
 /** 字母间距聚拢：从 10 个空格减速收敛到 1 个（ease-out，快收慢停）。 */
 const GAP_START = 10
 const GAP_END = 1
-const CONVERGE_MS = 800
+const CONVERGE_MS = 500
 
 export function EffortTierBadge({
   effort,
@@ -89,8 +89,12 @@ export function EffortTierBadge({
   // 格，每帧至少一个在动（把间距整体取整会让 ease-out 慢末段上百毫
   // 秒才跨一格，看起来就是卡顿）。曲线混入 15% 线性做末段保底速度。
   const progress = Math.min(1, Math.max(0, (elapsedMs - IGNITION_TIMELINE.labelStartMs) / CONVERGE_MS))
-  const eased = 1 - easeOutCubic(progress)
-  const easedWithFloor = 0.85 * eased + 0.15 * (1 - progress)
+  // 跳变间隔均匀化：离散格子上「减速」若靠曲线导数趋零实现，末段会
+  // 出现几十帧不动一格的长停顿再突跳（卡感来源）。改为 90% 线性 +
+  // 10% easeOutQuad 的轻缓收尾——跳变间隔全程近似恒定（约 55ms/格），
+  // 仅末端轻微放慢，终端上的观感是均匀顺滑的聚拢。
+  const eased = 1 - progress
+  const easedWithFloor = 0.9 * eased + 0.1 * (1 - progress * progress)
   const gapF = GAP_END + (GAP_START - GAP_END) * easedWithFloor
   const letterCount = overlay.label.length
   // 行心：❯ 占 2 列、块光标 1 列之后可用区的中点。
