@@ -2,7 +2,7 @@
  * EffortTierBadge — 输入行尾的档位字样徽标：三幕点焰的第二幕载体
  * （与 EffortInputBorder 的双框扫光同一时间轴、同一触发），切到最高
  * 思考强度档时光带行至中段，输入行居中浮现档名（当前档名大写，字母间距从
- * 10 个空格减速聚拢到 1 个——Codex converge 语义的完整还原，
+ * 10 个空格减速聚拢到 1 个——连续位置逐字母取整保证帧帧有移动，
  * 明亮蓝加粗，由暗渐亮），随后随图层整体渐隐让位——行数恒定，静
  * 止时完全不渲染；输入行有文字时不显示（绝不遮挡内容）。
  *
@@ -82,16 +82,27 @@ export function EffortTierBadge({
   const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
   const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
-  // 字母间距聚拢（Codex 的 converge 语义）：从 GAP_START 减速收敛到
-  // GAP_END（ease-out cubic——快收慢停），收敛完成时恰好完全亮起；
-  // 居中偏移随每帧的字样宽度重算——两侧同时向中间收拢。
+  // 字母间距聚拢（Codex 的 converge 语义）：间距是连续浮点，每个字母
+  // 独立按连续位置取整落列——不同字母在不同帧跨格，每帧至少一个字
+  // 母在动，视觉连续（把间距整体取整会让 ease-out 慢末段上百毫秒才
+  // 跨一格，看起来就是卡顿）。曲线混入 15% 线性做末段保底速度：减
+  // 感仍在，但收敛尾端每帧仍有可见移动。
   const progress = Math.min(1, Math.max(0, (elapsedMs - IGNITION_TIMELINE.labelStartMs) / CONVERGE_MS))
-  const gap = Math.max(GAP_END, Math.round(GAP_END + (GAP_START - GAP_END) * (1 - easeOutCubic(progress))))
-  const spaced = overlay.label.split('').join(' '.repeat(gap))
-  const offset = Math.max(0, Math.floor((columns - 3 - spaced.length) / 2) - 1)
+  const eased = 1 - easeOutCubic(progress)
+  const easedWithFloor = 0.85 * eased + 0.15 * (1 - progress)
+  const gapF = GAP_END + (GAP_START - GAP_END) * easedWithFloor
+  const letterCount = overlay.label.length
+  const totalWidthF = letterCount + (letterCount - 1) * gapF
+  const offsetF = (columns - 3 - totalWidthF) / 2 - 1
+  let spaced = ''
+  let column = 0
+  for (let i = 0; i < letterCount; i++) {
+    const at = Math.max(column, Math.round(offsetF + i * (1 + gapF)))
+    spaced += ' '.repeat(at - column) + overlay.label[i]!
+    column = at + 1
+  }
   return (
     <Text bold color={color}>
-      {' '.repeat(offset)}
       {spaced}
     </Text>
   )
