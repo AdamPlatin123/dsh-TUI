@@ -97,13 +97,20 @@ export function EffortTierBadge({
   const easedWithFloor = 0.9 * eased + 0.1 * (1 - progress * progress)
   const gapF = GAP_END + (GAP_START - GAP_END) * easedWithFloor
   const letterCount = overlay.label.length
-  // 行心：❯ 占 2 列、块光标 1 列之后可用区的中点。
-  const center = 3 + (columns - 3) / 2 - 0.5
+  // 行心（整数列）：❯ 占 2 列、块光标 1 列之后可用区的中点。左右字母
+  // 严格镜像——Math.round 对 .5 恒向上，正负方向的舍入不对称会让左右
+  // 字母的跨格时刻错开（观感：一边快一边慢）。左字母的落列由右字母
+  // 的舍入结果镜像得出（2C − col），保证 M/X 每次同帧反向同跳。
+  const C = Math.round(3 + (columns - 3) / 2 - 0.5)
   let spaced = ''
   let column = 0
   for (let i = 0; i < letterCount; i++) {
-    const at = Math.max(column, Math.round(center + (i - (letterCount - 1) / 2) * (1 + gapF)))
-    spaced += ' '.repeat(at - column) + overlay.label[i]!
+    const off = (i - (letterCount - 1) / 2) * (1 + gapF)
+    const at =
+      off >= 0
+        ? Math.round(C + off)
+        : 2 * C - Math.round(C - off)
+    spaced += ' '.repeat(Math.max(0, at - column)) + overlay.label[i]!
     column = at + 1
   }
   return (
