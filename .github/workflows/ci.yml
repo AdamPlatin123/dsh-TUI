@@ -72,8 +72,8 @@ jobs:
       - run: node --import tsx/esm scripts/repro-settings.tsx
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
-      # /new 会话视口回归（issue #375）：长会话切到空会话后必须立即显示
-      # 新会话鲸鱼欢迎页，不能等用户再发一条消息才从旧 scrollTop 归位。
+      # /new viewport regression (issue #375): switching from a long session
+      # to an empty session must show the new whale welcome screen immediately.
       - run: node --import tsx/esm scripts/verify-new-session-logo.tsx
 
       # 消息列表虚拟化回归：连续高度校正的嵌套更新上限（#129, React #185）、

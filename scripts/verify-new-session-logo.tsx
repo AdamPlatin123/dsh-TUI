@@ -20,11 +20,12 @@ const testHome = mkdtempSync(join(tmpdir(), 'dsh-tui-375-'))
 process.env.HOME = testHome
 process.env.USERPROFILE = testHome
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { createChannel }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { createRoot }, { default: instances }, { Chat }, { QuestionStore }, { createChannel }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
+  import('../src/ink/instances.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/channel.js'),
@@ -33,13 +34,18 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
 const COLS = 100
 const ROWS = 32
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 500, allowProposedApi: true })
+const decoyTerm = new XTerm({ cols: COLS, rows: ROWS, scrollback: 50, allowProposedApi: true })
+type HeadlessTerminal = InstanceType<typeof XTerm>
 
 class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
+  constructor(private readonly terminal: HeadlessTerminal) {
+    super()
+  }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void) {
-    term.write(String(chunk), callback)
+    this.terminal.write(String(chunk), callback)
   }
 }
 
@@ -145,17 +151,42 @@ function check(name: string, ok: boolean, detail = ''): void {
   if (!ok) failed++
 }
 
+function trackReanchors(stdout: FakeStdout): () => number {
+  const ink = instances.get(stdout as NodeJS.WriteStream)
+  if (!ink) throw new Error('expected the Ink root to be registered')
+  const original = ink.reanchorViewport.bind(ink)
+  let calls = 0
+  ink.reanchorViewport = () => {
+    calls++
+    original()
+  }
+  return () => calls
+}
+
+// Register a decoy root first and mount Chat in a second root. The production
+// component must address its owning root, not process.stdout or Map insertion
+// order (the single-root fallback that originally hid this review regression).
+const decoyStdout = new FakeStdout(decoyTerm)
+const targetStdout = new FakeStdout(term)
+const decoyRoot = await createRoot({
+  stdout: decoyStdout as NodeJS.WriteStream,
+  stdin: new FakeStdin() as NodeJS.ReadStream,
+  stderr: new FakeStderr() as NodeJS.WriteStream,
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
 const stdin = new FakeStdin()
-const instance = await render(
-  <Chat channel={channel} questionStore={new QuestionStore()} />,
-  {
-    stdout: new FakeStdout(),
-    stdin,
-    stderr: new FakeStderr(),
-    exitOnCtrlC: false,
-    patchConsole: false,
-  },
-)
+const targetRoot = await createRoot({
+  stdout: targetStdout as NodeJS.WriteStream,
+  stdin: stdin as NodeJS.ReadStream,
+  stderr: new FakeStderr() as NodeJS.WriteStream,
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+const decoyReanchors = trackReanchors(decoyStdout)
+const targetReanchors = trackReanchors(targetStdout)
+decoyRoot.render(<></>)
+targetRoot.render(<Chat channel={channel} questionStore={new QuestionStore()} />)
 await sleep(3500)
 
 const beforeNew = viewportLines()
@@ -175,6 +206,9 @@ check('/new command switched the channel session', channel.agentId === 'new-sess
 check('/new shows the whale header before another message', afterNew.includes('探索未至之境！'))
 check('/new viewport contains no old transcript rows', !afterNew.includes('旧会话'))
 check('session switch adds exactly one new whale header', count(fullBufferText(), '探索未至之境！') === 2)
+check('/new re-anchors the owning second Ink root', targetReanchors() === 1, `calls=${targetReanchors()}`)
+check('/new does not re-anchor the first decoy root', decoyReanchors() === 0, `calls=${decoyReanchors()}`)
 
-await instance.unmount()
+targetRoot.unmount()
+decoyRoot.unmount()
 process.exit(failed === 0 ? 0 : 1)

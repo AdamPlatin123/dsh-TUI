@@ -1,6 +1,6 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
-import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useApp, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
@@ -201,6 +201,7 @@ export function Chat({
    */
   trajectorySeen?: boolean
 }) {
+  const { reanchorViewport } = useApp()
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
   // Re-render on language switches so the whole UI hot-swaps its strings.
@@ -270,9 +271,8 @@ export function Chat({
     // that is correct for transient folds, but would leave the NEW session's
     // identical whale header off-screen until another render. Re-anchor the
     // switch frame so the new header is painted into the live viewport.
-    const ink = instances.get(process.stdout) ?? instances.values().next().value
-    ink?.reanchorViewport()
-  }, [channel.agentId])
+    reanchorViewport()
+  }, [channel.agentId, reanchorViewport])
   const [selectionActive, setSelectionActive] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
@@ -1911,11 +1911,8 @@ export function Chat({
       // each expand and nothing removes them on collapse — rapid toggling
       // drifts the virtual↔scrollback mapping until writes misland
       // (garbled transcript, duplicated rows). Re-anchor the next frame:
-      // in-place viewport repaint, nothing added to scrollback. Lookup
-      // falls back to the only live instance for embedders whose stdout
-      // isn't process.stdout (test harnesses).
-      const ink = instances.get(process.stdout) ?? instances.values().next().value
-      ink?.reanchorViewport()
+      // in-place viewport repaint, nothing added to scrollback.
+      reanchorViewport()
     } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
