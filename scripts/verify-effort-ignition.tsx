@@ -142,7 +142,7 @@ function borderNode(effort: string | undefined): React.ReactNode {
     { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
     React.createElement(Text, null,
       ' ',
-      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false, columns: COLS })),
+      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false, columns: COLS, leadingColumns: 2 })),
   )
 }
 
@@ -186,6 +186,12 @@ function SweepDriver(): React.ReactNode {
     const spacedName = tierLetters.join(' ')
     check('act 2 label: letters settled at one-space gap',
       settled.includes(spacedName), settled.trim().slice(0, 24))
+    // 终态精确居中：字样中点字母落在终端几何中心列上。
+    const midLetter = tierLetters[Math.floor(tierLetters.length / 2)]!
+    const midAt = settled.indexOf(spacedName) + spacedName.indexOf(midLetter)
+    const terminalCenter = Math.round((COLS - 1) / 2)
+    check('act 2 label: settled dead-center on the terminal',
+      Math.abs(midAt - terminalCenter) <= 1, `mid at ${midAt}, center ${terminalCenter}`)
     check('act 2 label: no extra row — bottom border never moves',
       harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯')
     const labelColors = harness.fgColors(1)

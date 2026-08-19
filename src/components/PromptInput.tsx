@@ -1068,6 +1068,7 @@ export function PromptInput({
                   levels={channel.effortLevels}
                   onLight={isLightThemeActive(themeName)}
                   columns={columns}
+                  leadingColumns={3}
                 />
               </>
             ) : (

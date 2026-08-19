@@ -29,14 +29,18 @@ export function EffortTierBadge({
   levels,
   onLight,
   columns,
+  leadingColumns,
 }: {
   /** 当前思考强度档 id；`undefined` 表示路线未声明。 */
   effort: string | undefined
   /** 当前路线的档位表（低→高，末位为最高档）；未知时传 `undefined`。 */
   levels: readonly string[] | undefined
   onLight: boolean
-  /** 终端列数——居中偏移按它计算（纯文本流，不引入嵌套 Box）。 */
+  /** 终端列数——居中锚点按终端几何中心计算（纯文本流，不引入嵌套 Box）。 */
   columns: number
+  /** badge 文本流之前该行已被占据的列数（❯ 与块光标等）——居中换算成
+   *  badge 流内列时要扣掉，否则整体偏右一个前缀宽。 */
+  leadingColumns: number
 }): React.ReactNode {
   const clock = useContext(ClockContext)
   const [overlay, setOverlay] = useState<Overlay | null>(null)
@@ -97,11 +101,12 @@ export function EffortTierBadge({
   const easedWithFloor = 0.9 * eased + 0.1 * (1 - progress * progress)
   const gapF = GAP_END + (GAP_START - GAP_END) * easedWithFloor
   const letterCount = overlay.label.length
-  // 行心（整数列）：❯ 占 2 列、块光标 1 列之后可用区的中点。左右字母
-  // 严格镜像——Math.round 对 .5 恒向上，正负方向的舍入不对称会让左右
-  // 字母的跨格时刻错开（观感：一边快一边慢）。左字母的落列由右字母
-  // 的舍入结果镜像得出（2C − col），保证 M/X 每次同帧反向同跳。
-  const C = Math.round(3 + (columns - 3) / 2 - 0.5)
+  // 锚点是**终端几何中心**（不是 ❯/光标之后可用区的中心——那会整体
+  // 偏右约 1.5 格；可用区起点在左，其"中点"不含左部占位）。左右字母
+  // 严格镜像——Math.round 对 .5 恒向上，正负方向舍入不对称会让跨格
+  // 时刻错开；左字母的落列由右字母的舍入结果镜像得出（2C − col），
+  // M/X 每次同帧反向同跳，全程对称于终端中心。
+  const C = Math.round((columns - 1) / 2) - leadingColumns
   let spaced = ''
   let column = 0
   for (let i = 0; i < letterCount; i++) {
