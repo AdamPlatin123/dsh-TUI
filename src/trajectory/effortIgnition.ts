@@ -24,11 +24,11 @@ export const IGNITION_STYLES: readonly IgnitionStyle[] = ['wave', 'aurora', 'pul
 
 /** 三幕时间轴（ms）：扫光全长、字样启动（波至中段）、字样渐亮、渐隐起止。边框扫光与输入行字样徽标共用。 */
 export const IGNITION_TIMELINE = {
-  sweepMs: 800,
-  labelStartMs: 400,
+  sweepMs: 1200,
+  labelStartMs: 600,
   labelBrightenMs: 160,
-  fadeStartMs: 1100,
-  fadeEndMs: 1600,
+  fadeStartMs: 1500,
+  fadeEndMs: 2000,
 } as const
 
 /** 帧时长（ms），仅用于把墙钟时间折算成动画秒数，不创建任何定时器。 */
@@ -54,7 +54,7 @@ const BANDS: Record<IgnitionStyle, ReadonlyArray<readonly [number, number, numbe
 }
 
 /** 波形宽度参数（列）。 */
-const WAVE_HALF_WIDTH = 9
+const WAVE_HALF_WIDTH = 14
 const PULSE_HALF_WIDTH = 4.5
 
 /**

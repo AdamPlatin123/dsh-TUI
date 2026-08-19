@@ -1,7 +1,7 @@
 /**
  * EffortTierBadge — 输入行尾的档位字样徽标：三幕点焰的第二幕载体
  * （与 EffortInputBorder 的双框扫光同一时间轴、同一触发），切到最高
- * 思考强度档时光带行至中段，输入行居中浮现 `MAX`（当前档名大写，
+ * 思考强度档时光带行至中段，输入行居中浮现 `M A X`（当前档名大写、字母间隔，
  * 明亮蓝加粗，由暗渐亮），随后随图层整体渐隐让位——行数恒定，静
  * 止时完全不渲染；输入行有文字时不显示（绝不遮挡内容）。
  *
@@ -76,12 +76,14 @@ export function EffortTierBadge({
   const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
   const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
-  // 居中偏移：❯ 占 2 列、块光标占 1 列，其余可用宽度对半减去字样宽。
-  const offset = Math.max(0, Math.floor((columns - 3 - overlay.label.length) / 2) - 1)
+  // 字样字母间隔（M A X）与居中偏移：❯ 占 2 列、块光标占 1 列，
+  // 其余可用宽度对半减去带间隔的字样宽。
+  const spaced = overlay.label.split('').join(' ')
+  const offset = Math.max(0, Math.floor((columns - 3 - spaced.length) / 2) - 1)
   return (
     <Text bold color={color}>
       {' '.repeat(offset)}
-      {overlay.label}
+      {spaced}
     </Text>
   )
 }

@@ -167,16 +167,15 @@ function SweepDriver(): React.ReactNode {
       restText === '╭' + '─'.repeat(COLS - 2) + '╮' && harness.fgColors(0) <= 1)
     check('rest: exactly three rows — bottom border sits directly under the input row',
       harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯' && harness.rowText(3) === '')
-    // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 400).
+    // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 600).
     await sleep(450)
     check('act 1 sweep: a light band runs left→right on BOTH borders, no letters yet',
       harness.fgColors(0) >= 2 && harness.fgColors(2) >= 2, `${harness.fgColors(0)}/${harness.fgColors(2)} colours`)
-    // elapsed ≈ 950: the tier name shows at the END of the input row, and
-    // NO extra row appears — the row under the content row stays the bottom
-    // border for the whole show.
+    // elapsed ≈ 950: the tier name shows centered on the input row, and NO
+    // extra row appears — the row under it stays the bottom border.
     await sleep(650)
     const inputRow = harness.rowText(1)
-    const tierName = LEVELS[LEVELS.length - 1]!.toUpperCase()
+    const tierName = LEVELS[LEVELS.length - 1]!.toUpperCase().split('').join(' ')
     const at = inputRow.indexOf(tierName)
     check('act 2 label: the tier name emerged CENTERED on the input row',
       at >= Math.floor(COLS / 2) - 8 && at <= Math.ceil(COLS / 2) + 4, `col ${at}: ${inputRow.trim().slice(0, 20)}`)
