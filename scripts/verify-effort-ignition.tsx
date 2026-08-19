@@ -175,10 +175,17 @@ function SweepDriver(): React.ReactNode {
     // extra row appears — the row under it stays the bottom border.
     await sleep(650)
     const inputRow = harness.rowText(1)
-    const tierName = LEVELS[LEVELS.length - 1]!.toUpperCase().split('').join(' ')
-    const at = inputRow.indexOf(tierName)
-    check('act 2 label: the tier name emerged CENTERED on the input row',
-      at >= Math.floor(COLS / 2) - 8 && at <= Math.ceil(COLS / 2) + 4, `col ${at}: ${inputRow.trim().slice(0, 20)}`)
+    const tierLetters = LEVELS[LEVELS.length - 1]!.toUpperCase().split('')
+    const firstAt = inputRow.indexOf(tierLetters[0]!)
+    check('act 2 label: letters emerged CENTERED while still converging (gap > 1)',
+      tierLetters.every(letter => inputRow.includes(letter)) && firstAt >= Math.floor(COLS / 2) - 12,
+      `col ${firstAt}: ${inputRow.trim().slice(0, 24)}`)
+    // elapsed ≈ 1450: converge done (600+800), gap locked at 1, pre-fade.
+    await sleep(500)
+    const settled = harness.rowText(1)
+    const spacedName = tierLetters.join(' ')
+    check('act 2 label: letters settled at one-space gap',
+      settled.includes(spacedName), settled.trim().slice(0, 24))
     check('act 2 label: no extra row — bottom border never moves',
       harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯')
     const labelColors = harness.fgColors(1)

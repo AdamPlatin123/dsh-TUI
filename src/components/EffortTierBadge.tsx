@@ -1,7 +1,8 @@
 /**
  * EffortTierBadge — 输入行尾的档位字样徽标：三幕点焰的第二幕载体
  * （与 EffortInputBorder 的双框扫光同一时间轴、同一触发），切到最高
- * 思考强度档时光带行至中段，输入行居中浮现 `M A X`（当前档名大写、字母间隔，
+ * 思考强度档时光带行至中段，输入行居中浮现档名（当前档名大写，字母间距从
+ * 10 个空格减速聚拢到 1 个——Codex converge 语义的完整还原，
  * 明亮蓝加粗，由暗渐亮），随后随图层整体渐隐让位——行数恒定，静
  * 止时完全不渲染；输入行有文字时不显示（绝不遮挡内容）。
  *
@@ -14,9 +15,14 @@ import { Text } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import { rgbString } from '../trajectory/motion.js'
 import type { RGBColor } from './Spinner/spinnerUtils.js'
-import { IGNITION_TIMELINE, ignitionHues } from '../trajectory/effortIgnition.js'
+import { IGNITION_TIMELINE, easeOutCubic, ignitionHues } from '../trajectory/effortIgnition.js'
 
 type Overlay = { label: string; startedAtMs: number }
+
+/** 字母间距聚拢：从 10 个空格减速收敛到 1 个（ease-out，快收慢停）。 */
+const GAP_START = 10
+const GAP_END = 1
+const CONVERGE_MS = 800
 
 export function EffortTierBadge({
   effort,
@@ -76,9 +82,12 @@ export function EffortTierBadge({
   const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
   const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
-  // 字样字母间隔（M A X）与居中偏移：❯ 占 2 列、块光标占 1 列，
-  // 其余可用宽度对半减去带间隔的字样宽。
-  const spaced = overlay.label.split('').join(' ')
+  // 字母间距聚拢（Codex 的 converge 语义）：从 GAP_START 减速收敛到
+  // GAP_END（ease-out cubic——快收慢停），收敛完成时恰好完全亮起；
+  // 居中偏移随每帧的字样宽度重算——两侧同时向中间收拢。
+  const progress = Math.min(1, Math.max(0, (elapsedMs - IGNITION_TIMELINE.labelStartMs) / CONVERGE_MS))
+  const gap = Math.max(GAP_END, Math.round(GAP_END + (GAP_START - GAP_END) * (1 - easeOutCubic(progress))))
+  const spaced = overlay.label.split('').join(' '.repeat(gap))
   const offset = Math.max(0, Math.floor((columns - 3 - spaced.length) / 2) - 1)
   return (
     <Text bold color={color}>
