@@ -1,9 +1,9 @@
 /**
- * Effort ignition regression — the top-tier wave row under the prompt.
+ * Effort ignition regression — the three-act overlay on the prompt border.
  *
  * Part A asserts the math layer (waveform sampling, easings, envelope, the
  * per-column colour contract, boundary guards). Part B mounts the real
- * EffortIgnitionRow (one full-width ▁ line — the row always exists, dim at rest)
+ * EffortInputBorder (self-drawn ╭─╮ / ╰─╯ rows; the top row carries the show)
  * in a headless xterm, one harness per scenario, and asserts:
  *
  * - **Every style runs over the row, deterministically** — the component
@@ -28,7 +28,7 @@ const [
   React,
   { Terminal: XTerm },
   { render, Text },
-  { EffortIgnitionRow },
+  { EffortInputBorder },
   { ClockProvider },
   math,
 ] = await Promise.all([
@@ -36,7 +36,7 @@ const [
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
-  import('../src/components/EffortIgnitionRow.js'),
+  import('../src/components/EffortInputBorder.js'),
   import('../src/ink/components/ClockContext.js'),
   import('../src/trajectory/effortIgnition.js'),
 ])
@@ -86,7 +86,7 @@ check('line colors: some columns are painted mid-wave',
 check('random style: never repeats the previous one',
   Array.from({ length: 20 }, () => math.randomIgnitionStyle('wave')).every(style => style !== 'wave'))
 
-// --- Part B: the row layer — one full-width ▁ line, a bright wave runs over it
+// --- Part B: three acts on the prompt border, then back to nothing --------
 const LEVELS = ['low', 'medium', 'high'] as const
 const COLS = 60
 
@@ -110,7 +110,6 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
   }
   const rowText = (y: number): string =>
     term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? ''
-  /** Distinct truecolor foreground colours on a given row. */
   const fgColors = (y: number): number => {
     const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
     if (line === undefined) return 0
@@ -134,83 +133,88 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
   return { term, writes, rowText, fgColors, instance }
 }
 
-function rowNode(effort: string | undefined, style?: 'wave' | 'aurora' | 'pulse'): React.ReactNode {
-  return React.createElement(EffortIgnitionRow, { effort, levels: LEVELS, columns: COLS, onLight: false, style })
+function borderNode(effort: string | undefined): React.ReactNode {
+  return React.createElement(
+    EffortInputBorder,
+    { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
+    React.createElement(Text, null, 'row'),
+  )
 }
 
-function makeSweepDriver(style: 'wave' | 'aurora' | 'pulse') {
-  return function Driver(): React.ReactNode {
-    const [effort, setEffort] = React.useState<string>('medium')
-    React.useEffect(() => {
-      const timer = setTimeout(() => setEffort('high'), 300)
-      return () => clearTimeout(timer)
-    }, [])
-    return rowNode(effort, style)
-  }
+function SweepDriver(): React.ReactNode {
+  const [effort, setEffort] = React.useState<string>('medium')
+  React.useEffect(() => {
+    const timer = setTimeout(() => setEffort('high'), 300)
+    return () => clearTimeout(timer)
+  }, [])
+  return borderNode(effort)
 }
 
-async function runSweepScenario(style: 'wave' | 'aurora' | 'pulse') {
-  const harness = await makeHarness(4, React.createElement(makeSweepDriver(style)))
+// Act timings from the component: switch at t=300 → elapsed = t-300.
+//   sweep [0,800); letters appear from 400 (M) / 540 (A) / 680 (X), full at
+//   ~840; fade [1100,1600); gone at 1600.
+{
+  const harness = await makeHarness(4, React.createElement(SweepDriver))
   try {
     await sleep(150)
     const restText = harness.rowText(0)
-    check(`${style}: the row exists at rest, a full ▁ line`,
-      restText === '▁'.repeat(COLS), restText.slice(0, 10))
-    check(`${style}: rest is a single dim colour`, harness.fgColors(0) <= 1)
-    // Common on-screen sweep window at t=550ms (pulse's ring stays inside a
-    // 60-col row until ~665ms; wave's crest has entered; aurora always).
-    await sleep(400)
-    const midText = harness.rowText(0)
-    const swept = harness.fgColors(0)
+    check('rest: plain theme border, no letters, one colour',
+      restText === '╭' + '─'.repeat(COLS - 2) + '╮' && harness.fgColors(0) <= 1)
+    // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 400).
+    await sleep(450)
+    check('act 1 sweep: a light band runs left→right (≥2 colours), no letters yet',
+      harness.fgColors(0) >= 2 && !harness.rowText(0).includes('M'), harness.rowText(0).slice(24, 36))
+    // elapsed ≈ 950: all letters up and brightening done.
+    await sleep(650)
+    check('act 2 label: the tier name emerged on the border',
+      harness.rowText(0).includes(LEVELS[LEVELS.length - 1]!.toUpperCase().split('').join('─')), harness.rowText(0).slice(24, 36))
+    const labelColors = harness.fgColors(0)
+    check('act 2 label: letters carry the accent family', labelColors >= 2, `${labelColors} colours`)
+    // elapsed ≈ 1700 (past FADE_END 1600): everything gone, border identical to rest.
     harness.writes.length = 0
-    await sleep(420)
+    await sleep(1050)
     const stream = harness.writes.join('')
-    const repaints = [
-      ['erase line', /\x1b\[[0-2]?K/],
-      ['erase screen', /\x1b\[[0-3]?J/],
-      ['scroll up', /\x1b\[\d*S/],
-      ['scroll down', /\x1b\[\d*T/],
-    ] as const
-    const offenders = repaints.filter(([, pattern]) => pattern.test(stream)).map(([name]) => name)
-    check(`${style}: a bright gradient runs across the row`, swept >= 2, `${swept} colours`)
-    check(`${style}: text frozen while colours move`, midText === restText)
-    check(`${style}: no repaint escapes while sweeping`, offenders.length === 0,
-      offenders.length === 0 ? `${stream.length} bytes` : offenders.join(', '))
-    // Past every style's total (≤1300ms from the 300ms switch): back to rest.
-    await sleep(700)
-    check(`${style}: returns to the dim rest`,
-      harness.fgColors(0) <= 1 && harness.rowText(0) === restText)
+    const scroll = [/\x1b\[\d*S/, /\x1b\[\d*T/].some(pattern => pattern.test(stream))
+    check('act 3 fade: overlay and letters are gone, border back to rest',
+      harness.rowText(0) === restText && harness.fgColors(0) <= 1, harness.rowText(0).slice(24, 36))
+    check('lifecycle: no scroll sequences at any point', !scroll)
+    check('bottom border stays a single idle colour throughout', harness.fgColors(2) <= 1)
   } finally {
     harness.instance.unmount()
   }
 }
 
-for (const style of ['wave', 'aurora', 'pulse'] as const) {
-  await runSweepScenario(style)
-}
-
-// --- Negative paths: these must stay completely dim ---------------------------
+// --- Negative paths: no sweep, no letters, ever -------------------------------
 async function runDarkScenario(name: string, node: React.ReactNode) {
   const harness = await makeHarness(4, node)
   try {
     await sleep(300)
     harness.writes.length = 0
-    await sleep(1300)
+    await sleep(1800)
     const stream = harness.writes.join('')
-    const dim = harness.fgColors(0) <= 1 && !/\x1b\[38;2;.*\x1b\[38;2;/.test(stream)
-    check(`${name}: no ignition at all`, dim)
+    const top = harness.rowText(0)
+    const dim = harness.fgColors(0) <= 1 && !/[A-Z]/.test(top.slice(1, -1)) && !/\x1b\[38;2;.*\x1b\[38;2;/.test(stream)
+    check(`${name}: nothing plays`, dim)
   } finally {
     harness.instance.unmount()
   }
 }
 
-await runDarkScenario('cold mount on the top tier', rowNode('high'))
+await runDarkScenario('cold mount on the top tier', borderNode('high'))
 function SingleTierDriver(): React.ReactNode {
-  return React.createElement(EffortIgnitionRow, { effort: 'high', levels: ['high'], columns: COLS, onLight: false })
+  return React.createElement(
+    EffortInputBorder,
+    { effort: 'high', levels: ['high'], columns: COLS, onLight: false, idleColor: 'promptBorder' },
+    React.createElement(Text, null, 'row'),
+  )
 }
 await runDarkScenario('single-tier table', React.createElement(SingleTierDriver))
 function NoTableDriver(): React.ReactNode {
-  return React.createElement(EffortIgnitionRow, { effort: 'high', levels: undefined, columns: COLS, onLight: false })
+  return React.createElement(
+    EffortInputBorder,
+    { effort: 'high', levels: undefined, columns: COLS, onLight: false, idleColor: 'promptBorder' },
+    React.createElement(Text, null, 'row'),
+  )
 }
 await runDarkScenario('missing level table', React.createElement(NoTableDriver))
 function LeaveTopDriver(): React.ReactNode {
@@ -219,7 +223,7 @@ function LeaveTopDriver(): React.ReactNode {
     const timer = setTimeout(() => setEffort('medium'), 300)
     return () => clearTimeout(timer)
   }, [])
-  return rowNode(effort)
+  return borderNode(effort)
 }
 await runDarkScenario('leaving the top tier', React.createElement(LeaveTopDriver))
 
