@@ -2,7 +2,11 @@ import React from 'react'
 import { readFile, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
-import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { Box, Text, useInput, useTerminalSize, useTheme } from '../ui.js'
+import { EffortChargeGlyph } from './EffortChargeGlyph.js'
+import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortTierBadge } from './EffortTierBadge.js'
+import { isLightThemeActive } from '../theme.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
@@ -116,7 +120,7 @@ const BORDER_COLOR_MAP: Record<string, string> = {
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
  * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
- * cursor, Tab completes the selected command, Ctrl+X opens the draft in the
+ * cursor, Tab completes the selected command, Ctrl+G opens the draft in the
  * external editor ($VISUAL/$EDITOR), Escape clears (or closes the help
  * menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
@@ -143,6 +147,7 @@ export function PromptInput({
   controllerRef,
   borderColor,
 }: PromptInputProps) {
+  const [themeName] = useTheme()
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const valueRef = React.useRef(value)
@@ -188,7 +193,7 @@ export function PromptInput({
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /** True while the external editor owns the terminal (Ctrl+X round-trip). */
+  /** True while the external editor owns the terminal (Ctrl+G round-trip). */
   const editorBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
@@ -495,14 +500,14 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+X / Cmd+X: edit the current draft in $VISUAL/$EDITOR (issue #123,
+    // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
     // readline's edit-and-execute-command). The draft is written to a temp
     // file, the terminal is handed to the editor (Ink's alt-screen handoff),
     // and the saved text replaces the input when it differs. The util maps
     // every failure to an outcome, but the catch/finally here is the hard
     // guarantee: a rejected promise must never kill the process, and the
-    // busy flag must always clear or Ctrl+X stays locked forever.
-    if (isMod(key) && input === 'x') {
+    // busy flag must always clear or Ctrl+G stays locked forever.
+    if (key.ctrl && input === 'g') {
       editorBusyRef.current = true
       void (async () => {
         try {
@@ -1038,31 +1043,47 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      <Box
-        flexDirection="column"
-        alignItems="flex-start"
-        justifyContent="flex-start"
-        borderColor={channel.mode.plan === true ? 'planMode' : (borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : 'promptBorder')}
-        borderStyle="round"
-        borderLeft={false}
-        borderRight={false}
-        borderBottom
-        width="100%"
+      {/* The prompt's own top/bottom border rows, self-drawn so the effort
+          overlay can play on them (sweep → tier name → fade; see
+          EffortInputBorder). Idle colour keeps the plan-mode accent the old
+          Box border carried. */}
+      <EffortInputBorder
+        effort={channel.reasoningEffort}
+        levels={channel.effortLevels}
+        columns={columns}
+        onLight={isLightThemeActive(themeName)}
+        idleColor={channel.mode.plan === true ? 'planMode' : (borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : 'promptBorder')}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
-          <Text dimColor={channel.working}>❯ </Text>
+          <EffortChargeGlyph
+            effort={channel.reasoningEffort}
+            levels={channel.effortLevels}
+            working={channel.working}
+          />
           <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
-              <Text inverse> </Text>
+              <>
+                <Text inverse> </Text>
+                {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
+                    本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
+                    时不显示）。 */}
+                <EffortTierBadge
+                  effort={channel.reasoningEffort}
+                  levels={channel.effortLevels}
+                  onLight={isLightThemeActive(themeName)}
+                  columns={columns}
+                  leadingColumns={3}
+                />
+              </>
             ) : (
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
         </Box>
-      </Box>
+      </EffortInputBorder>
     </Box>
   )
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
+import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
@@ -48,8 +48,12 @@ import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
 import { t } from '../i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
+import type { TrackerConfig } from 'dsh-working-activity/status'
+import { featureOn } from 'dsh-working-activity/config'
+import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
 import { getHostCommandTrees } from './command-trees.js'
@@ -63,6 +67,7 @@ import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
+import { installedLineOf } from './contract.js'
 import { pluginsInfoLines } from './plugins-info.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
@@ -448,6 +453,9 @@ export interface Channel {
   readonly contextWindow: number | undefined
   /** Reasoning effort of the latest request header, when the adapter sets one. */
   readonly reasoningEffort: string | undefined
+  /** The live route's reasoning-effort level ids, low → high (the last entry
+   *  is the top tier). Consumed by top-tier-triggered UI (effort ignition). */
+  readonly effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits come from
    *  this, not the running totals — each request's input IS the context). */
   readonly lastUsage:
@@ -466,6 +474,10 @@ export interface Channel {
   /** Thinking-block display (`preview` = 2-3 line live stream + fold per
    *  step; `full` = expanded until turn end). */
   readonly thinkingFold: 'preview' | 'full'
+  /** Live tool-card background treatment. */
+  readonly toolBackground: ToolBackground
+  /** Live status-footer visibility and compactness preferences. */
+  readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -781,6 +793,8 @@ export interface ChannelState {
   contextWindow: number | undefined
   /** Reasoning effort of the latest request header, when the adapter sets one. */
   reasoningEffort: string | undefined
+  /** The live route's reasoning-effort level ids, low → high. */
+  effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits). */
   lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -797,10 +811,18 @@ export interface ChannelState {
   diffLayout: 'auto' | 'split' | 'unified'
   /** Thinking-block display (see the public Channel type). */
   thinkingFold: 'preview' | 'full'
+  /** Tool-card background treatment (see the public Channel type). */
+  toolBackground: ToolBackground
+  /** Status-footer preferences (see the public Channel type). */
+  statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   /** Apply a thinking-display change (see the public Channel type). */
   setThinkingFold(mode: 'preview' | 'full'): void
+  /** Apply a tool-card background change. */
+  setToolBackground(background: ToolBackground): void
+  /** Apply status-footer preference changes. */
+  setStatusBar(config: Partial<StatusBarConfig>): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -1226,6 +1248,10 @@ export function createChannel(
     /** Thinking-block display; default `preview` (2-3 line live preview,
      *  fold per step) — `full` keeps thinking expanded until turn end. */
     thinkingFold?: 'preview' | 'full'
+    /** Tool-card background treatment; default `none`. */
+    toolBackground?: ToolBackground
+    /** Status-footer field visibility and compactness. */
+    statusBar?: Partial<StatusBarConfig>
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -1547,6 +1573,12 @@ export function createChannel(
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   let interruptSeq = 0
+  // Cancellation is asynchronous: a fast second Esc can arrive after the
+  // driver has accepted the first abort but before its turn/end event lands.
+  // Do not cancel the same driver twice, or the second cancel can swallow the
+  // replacement work queued by interruptAndDeliver and leave the UI gated on
+  // a working flag that has not observed turn/end yet.
+  let cancelInFlight = false
   /** The llm runtime seam (dsh-llm LlmRuntime): route metadata resolution. */
   const llmRuntime = ctx.get('llm') as
     | {
@@ -1577,6 +1609,7 @@ export function createChannel(
     if (preferredEffort === undefined || llmRuntime === undefined) return
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
       selection.current = {
         provider: state.provider,
@@ -1587,6 +1620,30 @@ export function createChannel(
       // Route metadata resolution is best-effort; a failure just leaves the
       // provider default in effect.
     }
+  }
+
+  /** Best-effort refresh of the live route's effort-level table for
+   *  top-tier-triggered UI (effort ignition): fire-and-forget on route
+   *  changes (bind/model switch/resume); the /effort paths refresh it
+   *  authoritatively via resolveEfforts. */
+  let effortLevelsGeneration = 0
+  const refreshEffortLevels = (): void => {
+    if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
+    // 代际保护：快速连续切路由时并发的 resolveModelInfo 可能乱序返回，
+    // 只有最新一代的解析才允许落表；落表后 emit 让 useSyncExternalStore
+    // 消费者立刻可见（否则要等下一次无关 emit）。
+    const generation = ++effortLevelsGeneration
+    void llmRuntime
+      .resolveModelInfo(state.provider, state.model)
+      .then(info => {
+        if (generation !== effortLevelsGeneration) return
+        state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+        state.emit()
+      })
+      .catch(() => {
+        // Route metadata resolution is best-effort; a failure keeps the
+        // previous table until the next /effort interaction clears it.
+      })
   }
 
   /** Resolve the live route's effort levels + adapter default through the
@@ -1603,6 +1660,7 @@ export function createChannel(
     if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       return {
         efforts: info.reasoning?.efforts ?? [],
         defaultEffort: info.reasoning?.defaultEffort,
@@ -1674,6 +1732,35 @@ export function createChannel(
     return true
   }
 
+  /** One composer image accompanying a registry-command line: structural
+   *  mirror of rc.8's `EncodedImageAttachment` (`@deepseek-ai/dsh-attachment/
+   *  types`). Kept local so older installs never resolve rc.8-only types. */
+  type RegistryCommandImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  interface RegistryCommandImage {
+    mediaType: RegistryCommandImageMediaType
+    data: string
+    name?: string
+  }
+  /** Legacy command-service execute (rc.7 and older): (agent, line, signal). */
+  type CommandExecuteLegacy = (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
+  /** rc.8 command-service execute: composer images precede the signal. */
+  type CommandExecuteWithImages = (
+    agent: Agent,
+    line: string,
+    images: readonly RegistryCommandImage[],
+    signal: AbortSignal,
+  ) => Promise<CommandExecution | undefined>
+
+  /** Whether the installed command service takes composer images: rc line
+   *  gate with a structural fallback, so a failed manifest probe (bundlers,
+   *  exotic loaders) still lands on the 4-param rc.8 shape at runtime. */
+  const commandServiceSupportsImages = (service: CommandRuntime): boolean => {
+    const line = installedLineOf('@deepseek-ai/dsh-commands')
+    if (line !== undefined) return line >= 8
+    return typeof (service.execute as { length?: number } | undefined)?.length === 'number'
+      && (service.execute as { length: number }).length >= 4
+  }
+
   /** Run one DSH registry command (`/plan`, …) on the live agent; the text
    *  of its result, '' when the result is textless, undefined when the
    *  command is not registered, and the error message when it throws. */
@@ -1735,17 +1822,75 @@ export function createChannel(
       return t('command-invoke-denied-owner', { name, owner: owner.componentId })
     }
     try {
-      const execution = await commandService.execute(
-        agent,
-        `/${name}${rawInput}`,
-        new AbortController().signal,
-      )
+      const signal = new AbortController().signal
+      const line = `/${name}${rawInput}`
+      const images = await registryCommandImages(commandService, definition, line, signal)
+      // rc.8 moved the signal to the 4th parameter and added composer
+      // images; older lines (rc.7/rc.6) take (agent, line, signal).
+      const execution = images === undefined
+        ? await (commandService.execute as unknown as CommandExecuteLegacy)(agent, line, signal)
+        : await (commandService.execute as unknown as CommandExecuteWithImages)(agent, line, images.images, signal)
+      if (images !== undefined && images.dropped.length > 0) {
+        // Loud-drop policy mirrors the submit pipeline (mentions-missing):
+        // a referenced image that never reached the command must be visible.
+        state.notify(t('mentions-missing', { paths: images.dropped.join(' ') }), {
+          color: 'warning',
+          timeoutMs: 4000,
+        })
+      }
       // `undefined` = not registered; a handler error surfaces as its
       // message so the user sees why the command failed.
       return execution?.result.text ?? ''
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     }
+  }
+
+  /** Encode the staged `@`-mention images the user pasted for THIS command
+   *  line into rc.8's `EncodedImageAttachment` payloads; undefined = the
+   *  installed dsh-commands line predates composer images (rc.7/rc.6), so
+   *  the caller uses the legacy 3-arg invoke. Matches the submit pipeline's
+   *  token rule (expandMentions): a staged image attaches only when the
+   *  line references its token. A command that does not declare
+   *  `input.images` gets NO images — rc.8 admission settles such a batch
+   *  as an error, and upstream sends images only to image-capable commands.
+   *  A failing read drops just that image (reported via the returned
+   *  tokens) while the command still runs. */
+  const registryCommandImages = async (
+    service: CommandRuntime,
+    definition: unknown,
+    line: string,
+    signal: AbortSignal,
+  ): Promise<{ images: RegistryCommandImage[]; dropped: string[] } | undefined> => {
+    if (!commandServiceSupportsImages(service)) return undefined
+    const declaresImages = (definition as { input?: { images?: boolean } } | undefined)?.input?.images === true
+    if (!declaresImages || stagedImages.size === 0) return { images: [], dropped: [] }
+    const store = mentionAttachments(ctx) as
+      | { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> }
+      | undefined
+    if (typeof store?.readImage !== 'function') return { images: [], dropped: [] }
+    const images: RegistryCommandImage[] = []
+    const dropped: string[] = []
+    for (const [token, attachment] of stagedImages) {
+      if (!line.includes(token)) continue
+      try {
+        const stored = await store.readImage(attachment, signal)
+        if (stored?.data instanceof Uint8Array && stored.data.byteLength > 0) {
+          images.push({
+            mediaType: attachment.mediaType,
+            data: Buffer.from(stored.data).toString('base64'),
+            name: attachment.name,
+          })
+        } else {
+          dropped.push(token)
+        }
+      } catch {
+        // One unreadable staged image is dropped — same loud policy as the
+        // submit pipeline's mentions-missing warning (deliverUserText).
+        dropped.push(token)
+      }
+    }
+    return { images, dropped }
   }
 
   // Session-mode folds: last-wins projections over the session log. The
@@ -1854,6 +1999,7 @@ export function createChannel(
   }
 
   const state: ChannelState = {
+    effortLevels: undefined,
     version: 0,
     rows: [],
     status: 'starting',
@@ -1884,6 +2030,8 @@ export function createChannel(
     activityFrames: options.activityFrames,
     diffLayout: options.diffLayout ?? 'auto',
     thinkingFold: options.thinkingFold ?? 'preview',
+    toolBackground: normalizeToolBackground(options.toolBackground),
+    statusBar: normalizeStatusBar(options.statusBar),
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -2038,17 +2186,22 @@ export function createChannel(
     cancel() {
       // Keep the staged queue: an interrupt aborts the running turn but the
       // queued/steered messages are delivered as the next turn (web parity).
+      // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
+      // until the aborted turn has produced its terminal event.
+      if (cancelInFlight) return
+      cancelInFlight = true
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
     interruptAndDeliver(texts: readonly string[]): number {
       const queued = texts.map(text => text.trim()).filter(text => text !== '')
-      if (queued.length === 0) return 0
+      if (queued.length === 0 || cancelInFlight) return 0
       // No keepInbox: the parked copies are dropped (their discard events
       // retire the preview), then each text is re-queued as a fresh
       // followup. dsh-agent's cancel-convergence wake latch accepts this
       // wake immediately after cancel and starts it once the aborted turn
       // retires; waiting for whenIdle is unsafe because it also follows
       // replacement work and may never settle.
+      cancelInFlight = true
       agent.cancel({ kind: 'user' })
       const token = ++interruptSeq
       const deliver = (): void => {
@@ -2416,6 +2569,11 @@ export function createChannel(
       state.lastUsage = undefined
       state.workingActivity = undefined
       state.contextWindow = undefined
+      // Route changed: a stale tier table would let top-tier UI fire on the
+      // wrong level (or never fire on the real one); clear and re-resolve.
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -2535,10 +2693,16 @@ export function createChannel(
       streaming = undefined
       reasoning = undefined
       // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-      // keep it out of the next turn's settle logs and revive cache.
+      // keep it out of the next turn's settle logs and revive cache. Event
+      // sequence numbers restart in the fresh session, so its dedupe ledgers
+      // must not retain the old session's sequence ids.
       sealedReasoning.length = 0
       lastReasoningRow = undefined
       toolCards.clear()
+      handledAssistantMessages.clear()
+      handledAssistantChunks.clear()
+      assistantRowsByStep.clear()
+      lastTextDelta.clear()
       nextRowId = 0
       state.rows.length = 0
       // Goal/todo/title are session-scoped; the replay re-derives them for
@@ -2566,7 +2730,13 @@ export function createChannel(
       state.tpsSamples = []
       state.lastUsage = undefined
       state.workingActivity = undefined
+      state.loadedContext = undefined
       state.contextWindow = undefined
+      // Route changed: a stale tier table would let top-tier UI fire on the
+      // wrong level (or never fire on the real one); clear and re-resolve.
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -2748,6 +2918,11 @@ export function createChannel(
       state.lastUsage = undefined
       state.workingActivity = undefined
       state.contextWindow = undefined
+      // Route changed: a stale tier table would let top-tier UI fire on the
+      // wrong level (or never fire on the real one); clear and re-resolve.
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -2763,6 +2938,8 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      // Model-switch quip rides the fresh tracker (pi parity).
+      activityTracker.onModelSwitch(model)
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -2834,6 +3011,21 @@ export function createChannel(
     setThinkingFold(mode) {
       if (mode === state.thinkingFold) return
       state.thinkingFold = mode
+      state.emit()
+    },
+    setToolBackground(background) {
+      const normalized = normalizeToolBackground(background)
+      if (normalized === state.toolBackground) return
+      state.toolBackground = normalized
+      state.emit()
+    },
+    setStatusBar(config) {
+      const next = normalizeStatusBar({ ...state.statusBar, ...config })
+      const changed = Object.keys(next).some(key =>
+        next[key as keyof StatusBarConfig] !== state.statusBar[key as keyof StatusBarConfig],
+      )
+      if (!changed) return
+      state.statusBar = next
       state.emit()
     },
     setActivityFrames(name) {
@@ -2958,11 +3150,14 @@ export function createChannel(
       // snapshot() over list(): only a COMPLETE observation is authoritative
       // (same contract as the skill-command merge above) — a partial catalog
       // must surface as "failed", not as a misleading near-empty picker.
-      const registry = skillRegistryFor(agent)
+      const target = agent
+      const registry = skillRegistryFor(target)
       if (registry === undefined) return []
       try {
-        const observation = await registry.snapshot(skillViewOptions(agent))
-        if (!observation.complete) return undefined
+        const observation = await registry.snapshot(skillViewOptions(target))
+        if (target !== agent || !observation.complete) {
+          return undefined
+        }
         return observation.skills.map(skill => ({
           name: skill.name,
           description: skill.description,
@@ -3313,6 +3508,8 @@ export function createChannel(
           .compactNow(agent, signal)
           .then((result) => {
             state.notify(result ? t('compact-done') : t('compact-nothing'))
+            // Compaction quip rides the next thinking rotation (pi parity).
+            if (result) activityTracker.onCompact('done')
           })
           .catch((error: unknown) => {
             state.notify(
@@ -4025,6 +4222,38 @@ ${output}
     | undefined
   /** Tool cards by callId, so tool/result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
+  /**
+   * Session events are delivered live and can also be replayed around a
+   * reconnect. A repeated sealed message must not create a second assistant
+   * row for the same durable sequence number.
+   */
+  const handledAssistantMessages = new Set<number>()
+  const handledAssistantChunks = new Set<number>()
+  const assistantRowsByStep = new Map<string, ChatRow>()
+  const lastTextDelta = new Map<ChatRow, string>()
+  const stepKey = (turn: number, step: number): string => `${turn}:${step}`
+
+  /** Append a stream delta idempotently. Providers normally send a pure
+   * delta, but reconnect/proxy paths can resend a cumulative prefix or a
+   * delta whose beginning overlaps the previous tail. Merge the overlap
+   * instead of blindly concatenating it into the visible transcript. */
+  const appendTextDelta = (row: ChatRow, delta: string): void => {
+    if (delta === '') return
+    if (lastTextDelta.get(row) === delta) return
+    lastTextDelta.set(row, delta)
+    if (delta.startsWith(row.text)) {
+      row.text = delta
+      return
+    }
+    const maxOverlap = Math.min(row.text.length, delta.length, 4096)
+    for (let size = maxOverlap; size > 0; size--) {
+      if (row.text.endsWith(delta.slice(0, size))) {
+        row.text += delta.slice(size)
+        return
+      }
+    }
+    row.text += delta
+  }
 
   /** The host-plane tools registry (dsh-tools). Resolved once; absent in
    *  bare embedders — every presenter call soft-fails to undefined and the
@@ -4078,11 +4307,21 @@ ${output}
     (content ?? []).find(block => block.type === 'text')?.text.trim() ?? ''
 
   const ensureStreaming = (seq?: number): ChatRow => {
-    if (streaming === undefined) {
-      streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
-      nextRowId += 1
-      state.rows.push(streaming)
+    if (streaming !== undefined) return streaming
+    // A reconnect can replay the first delta after the sealed message was
+    // already observed. Reuse that durable row instead of opening a second
+    // assistant bubble for the same event sequence.
+    const existing = seq === undefined
+      ? undefined
+      : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
+    if (existing !== undefined) {
+      existing.streaming = true
+      streaming = existing
+      return existing
     }
+    streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
+    nextRowId += 1
+    state.rows.push(streaming)
     return streaming
   }
 
@@ -4228,6 +4467,13 @@ ${output}
    *  using it would rebuild a second thinking block per step. */
   let replaying = false
   const replayEvents = (events: readonly SessionEvent[]): void => {
+    // Event sequence numbers restart with a replacement session; reset the
+    // idempotency ledger before replay so an old session cannot suppress a
+    // legitimate message in the new transcript.
+    handledAssistantMessages.clear()
+    handledAssistantChunks.clear()
+    assistantRowsByStep.clear()
+    lastTextDelta.clear()
     replaying = true
     try {
       for (const event of prepareReplayEvents(events)) renderEvent(event)
@@ -4316,6 +4562,8 @@ ${output}
         break
       }
       case 'assistant/chunk': {
+        if (handledAssistantChunks.has(event.seq)) break
+        handledAssistantChunks.add(event.seq)
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
           if (chunk.text) {
@@ -4323,12 +4571,19 @@ ${output}
             // window (see foldLiveReasoning) — before this text grows the
             // transcript and pushes the block into scrollback.
             foldLiveReasoning('first text token')
-            ensureStreaming(event.seq).text += chunk.text
-            state.responseChars += chunk.text.length
+            const key = stepKey(event.data.turn, event.data.step)
+            const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
+            assistantRowsByStep.set(key, row)
+            streaming = row
+            row.streaming = true
+            const before = row.text.length
+            appendTextDelta(row, chunk.text)
+            state.responseChars += Math.max(0, row.text.length - before)
           }
         } else if (chunk.type === 'reasoning-delta') {
           if (chunk.text) {
-            ensureReasoning(event.seq, event.data.turn, event.data.step).text += chunk.text
+            const row = ensureReasoning(event.seq, event.data.turn, event.data.step)
+            appendTextDelta(row, chunk.text)
           }
         }
         const step = tpsStep
@@ -4351,6 +4606,8 @@ ${output}
         break
       }
       case 'assistant/message': {
+        if (handledAssistantMessages.has(event.seq)) break
+        handledAssistantMessages.add(event.seq)
         const text = textOf(event.data.message.content)
         // Replay without chunk deltas (prepareReplayEvents drops settled
         // ones): rebuild the reasoning row from the sealed message's
@@ -4380,8 +4637,23 @@ ${output}
         // anyway leaves an empty `●` bullet in the transcript. A pre-existing
         // streaming row always has text (ensureStreaming is only reached on
         // non-empty text deltas), so only create one when text arrives.
-        const row = streaming ?? (text ? ensureStreaming(event.seq) : undefined)
+        // Key the step→row ledger only when the event carries a durable
+        // turn/step; a message without them must never collide onto a
+        // previous step's row (a bare `undefined:undefined` key would make
+        // every turn/step-less message reuse the FIRST one's assistant row).
+        const msgTurn = event.data.turn
+        const msgStep = event.data.step
+        const msgKey = msgTurn !== undefined && msgStep !== undefined
+          ? stepKey(msgTurn, msgStep)
+          : undefined
+        const row = (msgKey !== undefined ? assistantRowsByStep.get(msgKey) : undefined) ?? streaming ??
+          (text
+            ? ([...state.rows].reverse().find(candidate =>
+                candidate.kind === 'assistant' && candidate.seq === event.seq,
+              ) ?? ensureStreaming(event.seq))
+            : undefined)
         if (row !== undefined) {
+          if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
@@ -4540,6 +4812,7 @@ ${output}
         break
       }
       case 'turn/start': {
+        cancelInFlight = false
         state.working = true
         state.turnStart = Date.now()
         state.responseChars = 0
@@ -4555,6 +4828,7 @@ ${output}
         break
       }
       case 'turn/end': {
+        cancelInFlight = false
         settleStreaming()
         state.working = false
         state.activeToolCount = 0
@@ -4686,11 +4960,39 @@ ${output}
   // Live subscription list and activity timer, rebound to every replacement
   // agent so no status from the previous session can leak across a swap.
   let agentSubscriptions: Array<() => void> = []
-  let activityTracker = new ActivityTracker({
-    phrases: true,
-    detailLimit: 40,
-    showIdle: false,
-  })
+  /** Tracker knobs + custom actions from the persisted pi-style config
+   *  (`~/.dsh-tui/working-activity.json`); a missing file means lively
+   *  defaults (all eggs on). */
+  const activityPrefsSnapshot = (): {
+    config: TrackerConfig
+    customActions?: Readonly<Record<string, readonly string[]>>
+  } => {
+    const cfg = readActivityConfig()
+    if (cfg === undefined) {
+      return { config: { phrases: true, detailLimit: 40, showIdle: false } }
+    }
+    return {
+      config: {
+        phrases: featureOn(cfg, 'phrases'),
+        detailLimit: 40,
+        showIdle: false,
+        features: {
+          rareEggs: featureOn(cfg, 'rareEggs'),
+          weekend: featureOn(cfg, 'weekend'),
+          holidays: featureOn(cfg, 'holidays'),
+          nightPhrases: featureOn(cfg, 'nightPhrases'),
+        },
+        customPhrases: cfg.customPhrases,
+        showTokPerSec: cfg.showTokPerSec,
+        workRemindAt: cfg.workRemindAt,
+      },
+      customActions: cfg.customActions,
+    }
+  }
+  let activityTracker = (() => {
+    const prefs = activityPrefsSnapshot()
+    return new ActivityTracker(prefs.config, Date.now, prefs.customActions)
+  })()
   let activityTickTimer: NodeJS.Timeout | undefined
 
   const stopActivityTick = (): void => {
@@ -4713,11 +5015,8 @@ ${output}
   const bindAgent = (): void => {
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
-    activityTracker = new ActivityTracker({
-      phrases: true,
-      detailLimit: 40,
-      showIdle: false,
-    })
+    const prefs = activityPrefsSnapshot()
+    activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
     activityTracker.onAgentStatus(agent.status)
     renderWorkingActivity()
     activityTickTimer = setInterval(() => {
@@ -4807,6 +5106,14 @@ ${output}
         // publish never throws into this arm.
         messageObserver?.publish(session, event)
         activityTracker.onSessionEvent(event)
+        // Interrupt quip: an aborted/interrupted turn ends the round; the
+        // comeback copy shows on the next thinking rotation (pi parity).
+        if ((event as { type: string }).type === 'turn/end') {
+          const reason = (event.data as { reason?: { kind?: string } }).reason
+          if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
+            activityTracker.onInterrupted()
+          }
+        }
         renderWorkingActivity()
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
@@ -4876,6 +5183,8 @@ ${output}
           // only show a branch for sessions this install actually used — which
           // is exactly what the column claims.
           noteBranch(agent.session.id, branch)
+          // Feed the working line so git tools can show ` · git <branch>`.
+          activityTracker.onGitBranch(branch)
           state.emit()
         }
       })

@@ -291,9 +291,9 @@ jobs:
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
 
-      # 外部编辑器回归（issue #123）：Ctrl+X 的 $VISUAL/$EDITOR 解析
-      # （引号拆分、优先级、vi 兜底）与临时文件往返（edited/unchanged/
-      # 非零退出/启动失败）。假编辑器进程，无需 TTY。
+      # 外部编辑器回归（issue #123）：Ctrl+G 的 $VISUAL/$EDITOR 解析
+      # （引号拆分、优先级、未配置时 unavailable——无 vi 兜底）与临时文件
+      # 往返（edited/unchanged/非零退出/启动失败）。假编辑器进程，无需 TTY。
       - run: node scripts/verify-external-editor.mjs
 
       # 外部编辑器 TTY 交接回归（issue #123 实机冒烟）：恢复后 transcript
@@ -305,6 +305,10 @@ jobs:
       # ←/→ 实时生效/Esc 关闭、状态栏 effort 段与模式段、三次 backtab
       # 完整循环。
       - run: node scripts/verify-effort-slider-ui.mjs
+
+      # /thinking 显示语义回归（issue #317）：中英文文案必须明确只影响
+      # 思考过程显示，切换立即生效且不得改变模型 reasoning effort。
+      - run: node --import tsx/esm scripts/verify-thinking-display.tsx
 
       # 主题解析回归：内置主题完整性、parseCustomTheme 拒绝畸形/不安全项、
       # displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
@@ -320,6 +324,13 @@ jobs:
       # 查询过滤、时序⇄热点切换，以及备用屏进出后主屏逐字节还原、
       # scrollback 零增量、动效帧只含 SGR。
       - run: node --import tsx/esm scripts/verify-trace-scene.tsx
+
+      # 最高档思考强度点焰回归：数学层（波形/缓动/包络/逐列色契约）+
+      # 场景（headless xterm）：三幕（双框同步扫光/档名居中聚拢/渐隐
+      # 归零）断言帧间文本恒定、零行级 repaint、行数恒定、负路径全暗。
+      - run: node --import tsx/esm scripts/verify-effort-ignition.tsx
+      # 前缀充能回归：四态 + 充能窗内真实前景色采样（暗→全值单调）。
+      - run: node --import tsx/esm scripts/verify-effort-accent.tsx
 
       # 缩放重排回归（实机反馈：打开长会话后最大化窗口）：判据是终局等价
       # ——缩放后的物理终端必须等于在新尺寸上全新渲染的同一状态。缩放会让

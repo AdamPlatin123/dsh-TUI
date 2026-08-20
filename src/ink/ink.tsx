@@ -35,7 +35,7 @@ import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt
 import { applySearchHighlight } from './searchHighlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, SGR_RESET } from './termio/csi.js';
+import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
@@ -740,9 +740,22 @@ export default class Ink {
     // and no move is emitted.
     const decl = this.cursorDeclaration;
     const rect = decl !== null ? nodeCache.get(decl.node) : undefined;
+    // Main-screen inline mode stores node rectangles in frame coordinates,
+    // while the physical terminal only exposes the viewport tail once the
+    // frame is taller than the terminal. Convert the declared row to that
+    // visible coordinate system before emitting the relative cursor move.
+    // Without this subtraction a long streaming frame asks the terminal to
+    // move to an off-screen row; terminals clamp it at the bottom, leaving
+    // the virtual and physical cursor origins out of sync for the next diff.
+    // Offset is exactly the rows pushed into scrollback: H - V when the frame
+    // outgrows the viewport, 0 when it fits (H <= V). A +1 here would nudge a
+    // just-fitting frame (H === V) up one row, misplacing the input caret.
+    const visibleFrameOffset = this.altScreenActive
+      ? 0
+      : Math.max(0, frame.screen.height - frame.viewport.height);
     const target = decl !== null && rect !== undefined ? {
       x: rect.x + decl.relativeX,
-      y: rect.y + decl.relativeY
+      y: rect.y + decl.relativeY - visibleFrameOffset
     } : null;
     const parked = this.displayCursor;
     // Diagnostics: the resolved park target per frame (DSH_TUI_DEBUG only).
@@ -922,6 +935,30 @@ export default class Ink {
       // repaint() resets frontFrame to 0×0. Without this flag the next
       // frame's blit optimization copies from that empty screen and the
       // diff sees no content. onRender resets the flag at frame end.
+      this.prevFrameContaminated = true;
+    }
+    this.onRender();
+  }
+
+  /**
+   * Establish a genuinely fresh terminal page: clear both the visible screen
+   * and native scrollback, reset frame correspondence, then redraw the current
+   * React tree. This is intentionally stronger than Ctrl+L/forceRedraw(),
+   * which preserves history; use it only at a destructive UI boundary such as
+   * `/new`, where showing the previous conversation above the new session is
+   * misleading.
+   */
+  clearScrollbackAndRedraw(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    // Keep 3J outside synchronized output. Windows Terminal can relocate the
+    // viewport when erase-buffer commands execute inside BSU/ESU.
+    this.options.stdout.write(
+      SGR_RESET + ERASE_SCROLLBACK + ERASE_SCREEN + CURSOR_HOME,
+    );
+    if (this.altScreenActive) {
+      this.resetFramesForAltScreen();
+    } else {
+      this.repaint();
       this.prevFrameContaminated = true;
     }
     this.onRender();

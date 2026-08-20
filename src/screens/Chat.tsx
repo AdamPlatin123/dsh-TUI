@@ -320,8 +320,6 @@ export function Chat({
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
   const [thinkingOpen, setThinkingOpen] = React.useState(false)
   const [thinkingFocus, setThinkingFocus] = React.useState(0)
-  /** Mid-conversation toggle waiting for Enter confirmation (CC semantics). */
-  const [thinkingConfirm, setThinkingConfirm] = React.useState<boolean | null>(null)
   /** ctrl+r history search dialog (ported from CC's HistorySearchDialog). */
   const [historyOpen, setHistoryOpen] = React.useState(false)
   const [historyQuery, setHistoryQuery] = React.useState('')
@@ -388,6 +386,18 @@ export function Chat({
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
+  /**
+   * The context panel changes the height of the main-screen transcript by a
+   * large amount. In inline mode that invalidates the renderer's previous
+   * scrollback/layout correspondence; asking it to repaint from the physical
+   * viewport prevents the collapsed frame from reusing stale blank cells.
+   */
+  const toggleLoadedContext = React.useCallback(() => {
+    setLoadedContextOpen(previous => !previous)
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.invalidatePrevFrame()
+    ink?.reanchorViewport()
+  }, [])
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -795,7 +805,25 @@ export function Chat({
         // non-destructive — no CC-style "press /new again" confirmation.
         setHelpOpen(false)
         void channel.newSession().then((ok) => {
-          if (ok) channel.notify(t('new-session-started'))
+          if (!ok) return
+          // A new session is a fresh terminal page, not merely an emptied
+          // transcript. Reset view-local state, return the ScrollBox to the
+          // top, then clear native scrollback and repaint the whale homepage.
+          setExpanded(false)
+          setExpandedRows(new Set())
+          setSelectedId(null)
+          setSelectionActive(false)
+          setShowAllMessages(false)
+          setLoadedContextOpen(false)
+          handle?.scrollTo(0)
+          channel.notify(t('new-session-started'))
+          const ink = instances.get(process.stdout) ?? instances.values().next().value
+          // Wait one task so React commits the empty transcript/homepage tree;
+          // clearing before that would immediately repaint the old session.
+          setTimeout(() => {
+            handle?.scrollTo(0)
+            ink?.clearScrollbackAndRedraw()
+          }, 0)
         })
         return true
       }
@@ -1456,6 +1484,16 @@ export function Chat({
     // CLOSE the scene also reached the chat:cancel branch below whenever a
     // turn was in flight — closing the view and killing the turn in one key.
     if (sceneOpen || channel.pluginScene !== undefined) return
+    // Mouse wheel scrolls the transcript even while a question/approval/
+    // dialog panel is open — those panels own arrow/Enter/Esc keys, but the
+    // transcript above them should still be scrollable in fullscreen mode.
+    // Events only arrive with mouse tracking on; inline mode never sees
+    // them, so this is a no-op there.
+    if (key.wheelUp || key.wheelDown) {
+      handle?.scrollBy(key.wheelUp ? -3 : 3)
+      event.stopImmediatePropagation()
+      return
+    }
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
     // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
@@ -1465,16 +1503,6 @@ export function Chat({
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
-    // Mouse wheel scrolls the transcript — in fullscreen there is no
-    // terminal scrollback (alt-screen), so this is the only way back.
-    // Imperative scrollBy: no React re-render per notch (CC semantics).
-    // Events only arrive with mouse tracking on; inline mode never sees
-    // them, so this is a no-op there.
-    if (key.wheelUp || key.wheelDown) {
-      handle?.scrollBy(key.wheelUp ? -3 : 3)
-      event.stopImmediatePropagation()
-      return
-    }
     // Esc clears a settled mouse selection first (CC precedence), ahead of
     // every other Esc meaning below (close pickers, interrupt the turn).
     // hasSelection() is an imperative read — no subscription needed.
@@ -1533,29 +1561,13 @@ export function Chat({
       return
     }
     if (thinkingOpen) {
-      if (thinkingConfirm !== null) {
-        // Confirmation state: Enter applies, Esc backs out to the select.
-        if (plainReturn) {
-          const enabled = thinkingConfirm
-          setThinkingVisible(enabled)
-          setThinkingConfirm(null)
-          setThinkingOpen(false)
-          channel.notify(t('thinking-toggled', { state: enabled ? t('thinking-on') : t('thinking-off') }))
-        } else if (key.escape) {
-          setThinkingConfirm(null)
-        }
-      } else if (key.upArrow || key.downArrow) {
+      if (key.upArrow || key.downArrow) {
         setThinkingFocus(index => (index === 0 ? 1 : 0))
       } else if (plainReturn) {
-        const enabled = thinkingFocus === 0
-        const midConversation = channel.rows.some(row => row.kind === 'assistant')
-        if (midConversation && enabled !== thinkingVisible) {
-          setThinkingConfirm(enabled)
-        } else {
-          setThinkingVisible(enabled)
-          setThinkingOpen(false)
-          channel.notify(t('thinking-toggled', { state: enabled ? t('thinking-on') : t('thinking-off') }))
-        }
+        const visible = thinkingFocus === 0
+        setThinkingVisible(visible)
+        setThinkingOpen(false)
+        channel.notify(t('thinking-toggled', { state: visible ? t('thinking-on') : t('thinking-off') }))
       } else if (key.escape) {
         setThinkingOpen(false)
       }
@@ -1882,7 +1894,7 @@ export function Chat({
       // Ctrl+P toggles the startup loaded-context panel while it is on
       // screen (transcript still empty); once rows take over and the
       // panel disappears the key has nothing left to do.
-      setLoadedContextOpen(previous => !previous)
+      toggleLoadedContext()
       return
     }
     if (isMod(key) && input === 'r' && !helpOpen) {
@@ -2101,7 +2113,7 @@ export function Chat({
           <LoadedContextPanel
             context={channel.loadedContext}
             open={loadedContextOpen}
-            onToggle={() => { setLoadedContextOpen(previous => !previous) }}
+            onToggle={toggleLoadedContext}
           />
         )}
         <MessageList
@@ -2115,6 +2127,7 @@ export function Chat({
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
+          toolBackground={channel.toolBackground}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
@@ -2263,7 +2276,6 @@ export function Chat({
             <ThinkingToggle
               currentValue={thinkingVisible}
               focusIndex={thinkingFocus}
-              confirmationPending={thinkingConfirm}
             />
           )}
           {workspacePickerOpen && workspaceTargets.length > 0 && (
@@ -2384,19 +2396,15 @@ function StickyPromptHeader({
   text: string
   onClick: () => void
 }): React.ReactNode {
-  const [hover, setHover] = React.useState(false)
   return (
     <Box
       flexShrink={0}
       width="100%"
       height={1}
       paddingRight={1}
-      backgroundColor={hover ? 'userMessageBackgroundHover' : 'userMessageBackground'}
-      onMouseEnter={() =>{  setHover(true) }}
-      onMouseLeave={() =>{  setHover(false) }}
       onClick={onClick}
     >
-      <Text color="subtle" wrap="truncate-end">
+      <Text color="briefLabelYou" bold wrap="truncate-end">
         {POINTER} {text}
       </Text>
     </Box>
