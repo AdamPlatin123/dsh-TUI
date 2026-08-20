@@ -36,6 +36,8 @@ interface PendingApproval {
   readonly snapshot: Omit<ApprovalSnapshot, 'key'>
   resolve: (outcome: ApprovalOutcome) => void
   onAbort: () => void
+  /** Idempotent cleanup — removes the abort listener. */
+  cleanup: () => void
 }
 
 const COMMAND_CLIP = 500
@@ -169,6 +171,7 @@ export class ApprovalStore {
         },
         resolve,
         onAbort: () => {
+          pending.cleanup()
           if (this.active === pending) {
             this.active = undefined
             this.rebuildSnapshot()
@@ -180,6 +183,7 @@ export class ApprovalStore {
           if (at >= 0) this.queue.splice(at, 1)
           pending.resolve('cancelled')
         },
+        cleanup: () => req.signal?.removeEventListener('abort', pending.onAbort),
       }
       req.signal?.addEventListener('abort', pending.onAbort, { once: true })
       this.queue.push(pending)
@@ -203,6 +207,7 @@ export class ApprovalStore {
   decide(outcome: 'allowed-once' | 'rejected'): void {
     const pending = this.active
     if (pending === undefined) return
+    pending.cleanup()
     this.active = undefined
     this.rebuildSnapshot()
     pending.resolve(outcome)
@@ -217,10 +222,14 @@ export class ApprovalStore {
    */
   settleAll(outcome: ApprovalOutcome): void {
     const active = this.active
+    active?.cleanup()
     this.active = undefined
     this.rebuildSnapshot()
     active?.resolve(outcome)
-    for (const pending of this.queue.splice(0)) pending.resolve(outcome)
+    for (const pending of this.queue.splice(0)) {
+      pending.cleanup()
+      pending.resolve(outcome)
+    }
     this.emit()
   }
 }

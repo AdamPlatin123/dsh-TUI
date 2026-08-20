@@ -18,6 +18,7 @@ import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
 import type { ApprovalSnapshot } from '../../dsh-adapter/approvals.js'
+import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
 
 export type ApprovalPanelProps = {
   /** The approval to render (from the ApprovalStore snapshot). */
@@ -54,19 +55,36 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
 
   const optionLabels = [t('approval-yes'), t('approval-no')]
 
-  const titleTool = approval.filePath !== undefined
-    ? `${approval.toolName} ${approval.filePath}`
-    : approval.toolName
+  // Sanitize untrusted fields to prevent ANSI injection.
+  const TOOL_NAME_LIMIT = 40
+  const FILE_PATH_LIMIT = 200
+  const COMMAND_LINE_LIMIT = 200
+  const REASON_LINE_LIMIT = 500
+
+  const safeToolName = cleanRenderText(approval.toolName, TOOL_NAME_LIMIT)
+  const safeFilePath = approval.filePath !== undefined
+    ? cleanRenderText(approval.filePath, FILE_PATH_LIMIT)
+    : undefined
+  const safeCommand = approval.command !== undefined
+    ? approval.command.split('\n').map(line => cleanRenderText(line, COMMAND_LINE_LIMIT)).join('\n')
+    : undefined
+  const safeReason = approval.reason !== undefined
+    ? approval.reason.split('\n').map(line => cleanRenderText(line, REASON_LINE_LIMIT)).join('\n')
+    : undefined
+
+  const titleTool = safeFilePath !== undefined
+    ? `${safeToolName} ${safeFilePath}`
+    : safeToolName
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
       <Divider color="permission" title={t('approval-waiting', { tool: titleTool })} padding={4} />
       <Box flexDirection="column" marginTop={1}>
-        {approval.command !== undefined && (
+        {safeCommand !== undefined && (
           <Box flexDirection="column" paddingX={2}>
-            {approval.command.split('\n').map((line, index) => {
-              const isOld = line.startsWith('  - ')
-              const isNew = line.startsWith('  + ')
+            {safeCommand.split('\n').map((line, index) => {
+              const isOld = /^\s*- /.test(line)
+              const isNew = /^\s*\+ /.test(line)
               return (
                 <Text
                   key={`cmd-${index}`}
@@ -80,9 +98,9 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
             })}
           </Box>
         )}
-        {approval.reason !== undefined && (
+        {safeReason !== undefined && (
           <Text dimColor wrap="wrap">
-            {approval.reason}
+            {safeReason}
           </Text>
         )}
         <Text dimColor>{t('approval-proceed')}</Text>
