@@ -64,7 +64,7 @@ jobs:
       - run: node --import tsx/esm scripts/verify-askpanel-layout.tsx
 
       # 问卷切题 scrollback 回归：长题切到短题时不得把启动画再次写入视口。
-      - run: node --import tsx/esm scripts/verify-question-scrollback.tsx
+      - run: pnpm verify:question-scrollback
 
       - run: node --import tsx/esm scripts/repro-toolcards.tsx
       - run: node --import tsx/esm scripts/repro-diff-split.tsx

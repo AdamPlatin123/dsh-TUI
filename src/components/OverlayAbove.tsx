@@ -22,7 +22,7 @@ export function OverlayAbove({
   children: React.ReactNode
   /** 防止面板高过可用区域时探出帧顶（短会话 + 高列表）。 */
   maxHeight?: number | undefined
-  /** 面板底边相对锚点的位置；默认浮在锚点上方。 */
+  /** 面板底边相对定位容器底边的行数（或百分比）。 */
   bottom?: number | `${number}%` | undefined
 }): React.ReactNode {
   return (

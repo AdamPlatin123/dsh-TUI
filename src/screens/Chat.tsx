@@ -313,6 +313,41 @@ export function Chat({
   const [themeIndex, setThemeIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
+  const questionAnchorNodeRef = React.useRef<DOMElement | null>(null)
+  const questionAnchorRef = React.useCallback((node: DOMElement | null) => {
+    questionAnchorNodeRef.current = node
+  }, [])
+  const [questionAvailableRows, setQuestionAvailableRows] = React.useState(
+    () => Math.max(1, terminalRows - 2),
+  )
+  const [questionStatusRows, setQuestionStatusRows] = React.useState(1)
+  // Absolute overlays do not participate in Yoga height, so the status
+  // container remains a stable anchor while a question is open. Measure its
+  // physical top within the current terminal viewport instead of treating the
+  // terminal's full height as usable: inline frames can be shorter or already
+  // scrolled, while fullscreen frames usually expose nearly every row.
+  React.useLayoutEffect(() => {
+    const element = questionAnchorNodeRef.current
+    if (!element?.yogaNode) return
+    let absoluteTop = element.yogaNode.getComputedTop()
+    let parent = element.parentNode
+    while (parent) {
+      if (parent.yogaNode) {
+        absoluteTop += parent.yogaNode.getComputedTop()
+      }
+      parent = parent.parentNode
+    }
+    // When the inline frame is taller than the terminal, its bottom chrome is
+    // still painted at the viewport bottom. In that case absoluteTop is a
+    // content-space coordinate and must be capped by the physical rows above
+    // the measured status container. For a shorter frame, absoluteTop itself
+    // is the tighter bound (there is no content to cover in the blank tail).
+    const statusRows = Math.max(0, Math.ceil(element.yogaNode.getComputedHeight()))
+    const viewportRowsAbove = terminalRows - statusRows
+    const next = Math.max(1, Math.floor(Math.min(absoluteTop, viewportRowsAbove)))
+    setQuestionStatusRows(previous => previous === statusRows ? previous : statusRows)
+    setQuestionAvailableRows(previous => previous === next ? previous : next)
+  })
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
   const [thinkingOpen, setThinkingOpen] = React.useState(false)
@@ -1501,8 +1536,9 @@ export function Chat({
     if (helpOpen) return
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
-    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
-    // else should see these keys).
+    // ↑/↓/Space/Tab/Enter/Esc). PromptInput remains mounted behind a
+    // questionnaire to preserve its draft/height, but selectionActive makes
+    // its listener inert.
     if (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null) return
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
@@ -2092,6 +2128,8 @@ export function Chat({
     activityPickerOpen || (effortSliderOpen && effortOptions.length > 1) ||
     (presetPickerOpen && presetOptions.length > 0) || themePickerOpen || historyOpen ||
     rewindOpen || searchOpen || tipsOpen
+  const questionOverlayOpen = questionSnapshot !== null && approvalSnapshot === null
+    && dialogSnapshot === null && !tipsOpen && btw === null
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
@@ -2206,85 +2244,99 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
-        {approvalSnapshot !== null ? (
-          <ApprovalPanel
-            key={approvalSnapshot.key}
-            approval={approvalSnapshot}
-            onDecide={outcome => approvals.decide(outcome)}
-          />
-        ) : dialogSnapshot !== null ? (
-          <ExtensionDialog
-            key={dialogSnapshot.key}
-            dialog={dialogSnapshot}
-            onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
-            onCancel={() => dialogs.cancel(dialogSnapshot.key)}
-          />
-        ) : tipsOpen ? (
-          <Box flexDirection="column" marginTop={1}>
-            <TipsPanel onClose={() => setTipsOpen(false)} />
-          </Box>
-        ) : btw !== null ? (
-          <Box flexDirection="column" marginTop={1}>
-            <BtwPanel
-              question={btw.question}
-              answer={btw.answer}
-              error={btw.error}
-              streaming={!btw.done}
-              onClose={closeBtw}
-              onCopy={() => {
-                void setClipboard(btw.answer ?? '').then(raw => { if (raw) writeRaw?.(raw) })
-                channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
-              }}
+        <Box flexDirection="column" width="100%">
+          {approvalSnapshot !== null ? (
+            <ApprovalPanel
+              key={approvalSnapshot.key}
+              approval={approvalSnapshot}
+              onDecide={outcome => approvals.decide(outcome)}
             />
-          </Box>
-        ) : questionSnapshot !== null ? (
-          <>
-            {/* Keep the empty PromptInput's four-row seat while the question
-                floats over it. An in-flow questionnaire changes the whole
-                inline frame height; a tall first question then pushes the
-                splash into scrollback and the following short question paints
-                another copy into the viewport during shrink recovery. */}
-            <Box height={3} marginTop={1} width="100%">
-              <OverlayAbove bottom={0} maxHeight={Math.max(terminalRows - 2, 8)}>
+          ) : dialogSnapshot !== null ? (
+            <ExtensionDialog
+              key={dialogSnapshot.key}
+              dialog={dialogSnapshot}
+              onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
+              onCancel={() => dialogs.cancel(dialogSnapshot.key)}
+            />
+          ) : tipsOpen ? (
+            <Box flexDirection="column" marginTop={1}>
+              <TipsPanel onClose={() => setTipsOpen(false)} />
+            </Box>
+          ) : btw !== null ? (
+            <Box flexDirection="column" marginTop={1}>
+              <BtwPanel
+                question={btw.question}
+                answer={btw.answer}
+                error={btw.error}
+                streaming={!btw.done}
+                onClose={closeBtw}
+                onCopy={() => {
+                  void setClipboard(btw.answer ?? '').then(raw => { if (raw) writeRaw?.(raw) })
+                  channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
+                }}
+              />
+            </Box>
+          ) : (
+            <Box flexDirection="column" width="100%">
+              {/* Keep PromptInput mounted at its real multiline height while the
+                  opaque questionnaire floats over it. This preserves the draft,
+                  caret and exact frame height across open/advance/close. */}
+              <PromptInput
+                channel={channel}
+                helpOpen={helpOpen}
+                onToggleHelp={() => { setHelpOpen(previous => !previous) }}
+                onRunCommand={runCommand}
+                selectionActive={promptSelectionActive || questionSnapshot !== null}
+                fillText={historyFill}
+                onFillConsumed={() => { setHistoryFill(null) }}
+                onRewindRequest={openRewind}
+                controllerRef={promptControllerRef}
+              />
+            </Box>
+          )}
+          {/* A one-row anchor with a compensating negative margin marks the
+              exact prompt/StatusLine boundary without changing frame height.
+              When fewer than ten answer rows remain it may cover nonessential
+              status fields so the focused answer and controls stay actionable. */}
+          <Box height={1} marginTop={-1} flexShrink={0} width="100%">
+            {questionOverlayOpen && questionSnapshot !== null && (
+              <OverlayAbove
+                bottom={questionAvailableRows < 10 ? 0 : questionStatusRows}
+                maxHeight={questionAvailableRows}
+              >
                 <AskUserQuestionPanel
                   key={questionSnapshot.key}
                   question={questionSnapshot.question}
                   position={questionSnapshot.position}
                   total={questionSnapshot.total}
                   answered={questionSnapshot.answered}
+                  availableRows={questionAvailableRows}
                   onAnswer={selection => questionStore.answerCurrent(selection)}
                   onCancel={() => questionStore.cancelCurrent()}
                 />
               </OverlayAbove>
-            </Box>
-          </>
-        ) : (
-          <PromptInput
-            channel={channel}
-            helpOpen={helpOpen}
-            onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
-            onRunCommand={runCommand}
-            selectionActive={promptSelectionActive}
-            fillText={historyFill}
-            onFillConsumed={() =>{  setHistoryFill(null) }}
-            onRewindRequest={openRewind}
-            controllerRef={promptControllerRef}
-          />
-        )}
-        <StatusLine
-          channel={channel}
-          selectionActive={selectionActive}
-          helpOpen={helpOpen}
-          wake={
-            wakeBand === undefined
-              ? undefined
-              : {
-                  band: wakeBand,
-                  hint: trajectorySeen ? undefined : `${modLabel}t`,
-                  tick: Math.floor(wakeTime / 120),
-                }
-          }
-        />
+            )}
+          </Box>
+          {/* Measure every StatusLine row, including optional context and
+              supplemental rows. The question overlay is anchored to the
+              prompt immediately above this later-painted status container. */}
+          <Box ref={questionAnchorRef} flexDirection="column" width="100%">
+            <StatusLine
+              channel={channel}
+              selectionActive={selectionActive}
+              helpOpen={helpOpen}
+              wake={
+                wakeBand === undefined
+                  ? undefined
+                  : {
+                      band: wakeBand,
+                      hint: trajectorySeen ? undefined : `${modLabel}t`,
+                      tick: Math.floor(wakeTime / 120),
+                    }
+              }
+            />
+          </Box>
+        </Box>
         {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在本 chrome Box 顶边，向上
             覆盖转录尾部行，自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，
             把帧顶行滚进 scrollback 并在关闭重绘时二次写入（每切一次 /model 多
