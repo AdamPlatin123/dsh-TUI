@@ -4,13 +4,9 @@ import type { Frame } from './frame.js'
 import { consumeAbsoluteRemovedFlag } from './node-cache.js'
 import Output from './output.js'
 import renderNodeToOutput, {
-  didAbsoluteLayoutShift,
-  getScrollDrainNode,
-  getScrollHint,
+  createRenderContext,
+  createRendererState,
   resetAbsoluteRecomposePass,
-  resetLayoutShifted,
-  resetScrollDrainNode,
-  resetScrollHint,
 } from './render-node-to-output.js'
 import { createScreen, type StylePool } from './screen.js'
 
@@ -46,6 +42,7 @@ export default function createRenderer(
   // Reuse Output across frames so charCache (tokenize + grapheme clustering)
   // persists — most lines don't change between renders.
   let output: Output | undefined
+  const rendererState = createRendererState()
   return options => {
     const { frontFrame, backFrame, isTTY, terminalWidth, terminalRows } =
       options
@@ -80,6 +77,7 @@ export default function createRenderer(
         )
       }
       return {
+        layoutShifted: false,
         screen: createScreen(
           terminalWidth,
           0,
@@ -122,9 +120,7 @@ export default function createRenderer(
       output = new Output({ width, height, stylePool, screen })
     }
 
-    resetLayoutShifted()
-    resetScrollHint()
-    resetScrollDrainNode()
+    const renderContext = createRenderContext(rendererState)
 
     // prevFrameContaminated: selection overlay mutated the returned screen
     // buffer post-render (in ink.tsx), resetFramesForAltScreen() replaced it
@@ -137,12 +133,13 @@ export default function createRenderer(
     // earlier in tree order), so their blits would restore the removed
     // node's pixels. hasRemovedChild only shields direct siblings.
     // Normal-flow removals don't paint cross-subtree and are fine.
-    const absoluteRemoved = consumeAbsoluteRemovedFlag()
+    const absoluteRemoved = consumeAbsoluteRemovedFlag(node)
     renderNodeToOutput(node, output, {
       prevScreen:
         absoluteRemoved || options.prevFrameContaminated
           ? undefined
           : prevScreen,
+      context: renderContext,
     })
 
     // An absolute overlay can cover cells owned by unrelated clean subtrees.
@@ -151,10 +148,13 @@ export default function createRenderer(
     // the previous overlay. Repeat only this transition frame without blits so
     // normal-flow content and the overlay are composited in current tree order.
     // Steady-state frames keep the cached O(changed cells) path above.
-    if (didAbsoluteLayoutShift()) {
+    if (renderContext.absoluteLayoutShifted) {
       output.reset(width, height, screen)
-      resetAbsoluteRecomposePass()
-      renderNodeToOutput(node, output, { prevScreen: undefined })
+      resetAbsoluteRecomposePass(renderContext)
+      renderNodeToOutput(node, output, {
+        prevScreen: undefined,
+        context: renderContext,
+      })
     }
 
     const renderedScreen = output.get()
@@ -163,12 +163,14 @@ export default function createRenderer(
     // root blit would skip the subtree. markDirty walks ancestors so the
     // next frame descends. Done AFTER render so the clear-dirty at the end
     // of renderNodeToOutput doesn't overwrite this.
-    const drainNode = getScrollDrainNode()
+    const drainNode = renderContext.scrollDrainNode
     if (drainNode) markDirty(drainNode)
 
     return {
-      scrollHint: options.altScreen ? getScrollHint() : null,
+      layoutShifted: renderContext.layoutShifted,
+      scrollHint: options.altScreen ? renderContext.scrollHint : null,
       scrollDrainPending: drainNode !== null,
+      followScroll: renderContext.followScroll,
       screen: renderedScreen,
       viewport: {
         width: terminalWidth,
