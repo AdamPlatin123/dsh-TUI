@@ -348,6 +348,11 @@ export function Chat({
   }
   /** /tips usage-tips overlay: pure UI state, no session side effects. */
   const [tipsOpen, setTipsOpen] = React.useState(false)
+  /**
+   * Hidden `/deepseek` easter egg: each invocation bumps this key so the
+   * logo header remounts and replays the whale spout + text shimmer.
+   */
+  const [logoNonce, setLogoNonce] = React.useState(0)
   React.useEffect(() => () => btwAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
@@ -1166,6 +1171,18 @@ export function Chat({
           if (controller.signal.aborted) return
           setBtw(prev => (prev ? { ...prev, answer: result.answer ?? prev.answer, error: result.error, done: true } : prev))
         })
+        return true
+      }
+      case 'deepseek': {
+        // Hidden easter egg: replay the logo header's whale spout + text
+        // shimmer. The command is intentionally not in the suggestion/help
+        // catalogs; PromptInput recognizes it through HIDDEN_COMMAND_NAMES.
+        setHelpOpen(false)
+        setLogoNonce(n => n + 1)
+        // Bring the logo back into view if the transcript has scrolled.
+        setTimeout(() => {
+          handle?.scrollTo(0)
+        }, 0)
         return true
       }
       case 'tips':
@@ -2089,6 +2106,7 @@ export function Chat({
       )}
       <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
+          key={logoNonce}
           model={channel.model}
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}

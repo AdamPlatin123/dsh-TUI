@@ -12,7 +12,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { parseCommandName } from '../commands.js'
+import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { isMod } from '../utils/modifiers.js'
@@ -364,16 +364,19 @@ export function PromptInput({
   }
 
   /**
-   * Execute a slash command (built-in or plugin-registered) when the input
-   * resolves to one: the name parses as the first token so `/plan off`
-   * dispatches `plan` with its argument text, and the merged command list
-   * (locals + registry) decides whether the line is a command at all.
+   * Execute a slash command (built-in, plugin-registered, or hidden) when
+   * the input resolves to one: the name parses as the first token so
+   * `/plan off` dispatches `plan` with its argument text, and the merged
+   * command list (locals + registry) decides whether the line is a command
+   * at all. Hidden commands are recognized even though they are intentionally
+   * absent from the suggestion/help catalogs.
    */
   const tryRunCommand = (text: string): boolean => {
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
     const known = channel.commandList.some(command => command.name === parsed.name)
+      || isHiddenCommandName(parsed.name)
     if (!known) return false
     const handled = onRunCommand(parsed.name, parsed.rawInput)
     if (handled) {
@@ -571,10 +574,15 @@ export function PromptInput({
       }
       if (channel.working && value.trim() !== '') {
         // CC's immediate-command semantics: /btw is exempt from steering —
-        // the side question never interrupts the running turn. Every other
-        // input keeps the steer behavior so /new /model etc. stay idle-only.
+        // the side question never interrupts the running turn. Hidden
+        // UI-only easter eggs (e.g. /deepseek) are also safe to run while
+        // streaming. Every other input keeps the steer behavior so /new
+        // /model etc. stay idle-only.
         const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-        if (parsed?.name === 'btw' && channel.commandList.some(c => c.name === 'btw')) {
+        if (parsed !== undefined && (
+          (parsed.name === 'btw' && channel.commandList.some(c => c.name === 'btw'))
+          || isHiddenCommandName(parsed.name)
+        )) {
           tryRunCommand(value)
           return
         }
