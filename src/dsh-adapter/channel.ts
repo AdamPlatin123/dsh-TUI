@@ -478,6 +478,8 @@ export interface Channel {
   readonly toolBackground: ToolBackground
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
+  /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
+  readonly whale: boolean
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -823,6 +825,10 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
+  /** Whale header art switch (see the public Channel type). */
+  whale: boolean
+  /** Apply a whale-visibility change (see the public Channel type). */
+  setWhale(visible: boolean): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -1252,6 +1258,8 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
+    /** Show the header's pixel whale art; default on. */
+    whale?: boolean
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -2032,6 +2040,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
+    whale: options.whale !== false,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -2194,17 +2203,16 @@ export function createChannel(
     },
     interruptAndDeliver(texts: readonly string[]): number {
       const queued = texts.map(text => text.trim()).filter(text => text !== '')
-      if (queued.length === 0 || cancelInFlight) return 0
+      if (queued.length === 0) return 0
       // No keepInbox: the parked copies are dropped (their discard events
       // retire the preview), then each text is re-queued as a fresh
       // followup. dsh-agent's cancel-convergence wake latch accepts this
       // wake immediately after cancel and starts it once the aborted turn
       // retires; waiting for whenIdle is unsafe because it also follows
-      // replacement work and may never settle.
-      // `Agent.cancel()` is a no-op while idle. Do not leave the latch set in
-      // that case: a plugin may veto this re-queue, and without a subsequent
-      // turn/start or turn/end event there would be no boundary to clear it.
-      if (agent.status === 'running') {
+      // replacement work and may never settle. If cancellation is already
+      // in flight, keep the existing abort and still replace the pending
+      // interrupt delivery; fake/embedded agents may not emit turn/end.
+      if (!cancelInFlight) {
         cancelInFlight = true
         agent.cancel({ kind: 'user' })
       }
@@ -3031,6 +3039,11 @@ export function createChannel(
       )
       if (!changed) return
       state.statusBar = next
+      state.emit()
+    },
+    setWhale(visible) {
+      if (visible === state.whale) return
+      state.whale = visible
       state.emit()
     },
     setActivityFrames(name) {

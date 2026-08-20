@@ -34,6 +34,10 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
       - run: pnpm install --frozen-lockfile
 
       # lib/ is not checked in. Compile it once from a clean output directory;
@@ -50,6 +54,7 @@ jobs:
       # Keep every main/types/bin/exports target inside the published tarball
       # and smoke-import the two runtime entry points.
       - run: pnpm verify:package
+      - run: pnpm verify:bun-package
 
       # 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
       # （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
@@ -244,6 +249,8 @@ jobs:
 
       - run: node --import tsx/esm scripts/verify-channel-goal-todo.mjs
 
+      - run: node --import tsx/esm scripts/verify-whale-toggle.mjs
+
       # 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
       # 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
       # ● 前缀、内容为空的行。
@@ -290,6 +297,11 @@ jobs:
       # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
+
+      # /help 长命令面回归（issue #368）：80×24/80×18/60×18 均须保留提示，
+      # ↑/↓、翻页、Home/End 与滚轮可达首尾且不滚动底层 transcript；关闭重开
+      # 回顶，pending 预览只在 help 关闭后恢复，组合键不改写背后的 Chat 状态。
+      - run: node --import tsx/esm scripts/verify-help-scroll.tsx
 
       # 外部编辑器回归（issue #123）：Ctrl+G 的 $VISUAL/$EDITOR 解析
       # （引号拆分、优先级、未配置时 unavailable——无 vi 兜底）与临时文件
