@@ -91,6 +91,14 @@ export interface PromptInputProps {
   onRewindRequest?(): void
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
+  /** User-selected border color name (from /color command). */
+  borderColor?: string
+}
+
+/** Map user color names to theme keys. */
+const BORDER_COLOR_MAP: Record<string, string> = {
+  blue: 'promptBorder', green: 'planMode', red: 'error', yellow: 'warning',
+  purple: 'autoAccept', orange: 'fastMode', pink: 'bashBorder', cyan: 'toolDotRead',
 }
 
 /**
@@ -133,6 +141,7 @@ export function PromptInput({
   onFillConsumed,
   onRewindRequest,
   controllerRef,
+  borderColor,
 }: PromptInputProps) {
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
@@ -1033,7 +1042,7 @@ export function PromptInput({
         flexDirection="column"
         alignItems="flex-start"
         justifyContent="flex-start"
-        borderColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
+        borderColor={channel.mode.plan === true ? 'planMode' : (borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : 'promptBorder')}
         borderStyle="round"
         borderLeft={false}
         borderRight={false}
