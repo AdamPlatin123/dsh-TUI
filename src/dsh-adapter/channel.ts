@@ -2188,7 +2188,7 @@ export function createChannel(
       // queued/steered messages are delivered as the next turn (web parity).
       // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
       // until the aborted turn has produced its terminal event.
-      if (cancelInFlight) return
+      if (cancelInFlight || agent.status !== 'running') return
       cancelInFlight = true
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
@@ -2201,8 +2201,13 @@ export function createChannel(
       // wake immediately after cancel and starts it once the aborted turn
       // retires; waiting for whenIdle is unsafe because it also follows
       // replacement work and may never settle.
-      cancelInFlight = true
-      agent.cancel({ kind: 'user' })
+      // `Agent.cancel()` is a no-op while idle. Do not leave the latch set in
+      // that case: a plugin may veto this re-queue, and without a subsequent
+      // turn/start or turn/end event there would be no boundary to clear it.
+      if (agent.status === 'running') {
+        cancelInFlight = true
+        agent.cancel({ kind: 'user' })
+      }
       const token = ++interruptSeq
       const deliver = (): void => {
         // A second interrupt while the abort is still settling must not

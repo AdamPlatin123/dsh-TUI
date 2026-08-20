@@ -421,7 +421,7 @@ await sleep(800)
     event.text === '插队文本' ? { cancel: true, reason: '插队被拦截' } : undefined)
   const before = captured.followupTexts.length
   channel.interruptAndDeliver(['插队文本'])
-  await sleep(700) // the fake has no whenIdle → 200ms fallback timer + decision
+  await sleep(700) // the fake agent is idle; cancel is a no-op, then the decision settles
   check('interruptAndDeliver: the tui/input veto applies to the Ctrl+Enter path',
     captured.followupTexts.length === before && notified('插队被拦截'))
   dispose()
