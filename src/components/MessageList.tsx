@@ -568,6 +568,7 @@ function TranscriptRow({
           marginTop={addMargin ? 1 : 0}
           width="100%"
           backgroundColor={background}
+          ref={ref}
         >
           <Box minWidth={2}>
             <Text color="text">●</Text>
