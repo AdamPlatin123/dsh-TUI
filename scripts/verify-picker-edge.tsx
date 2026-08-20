@@ -85,6 +85,7 @@ async function mountAt(cols: number) {
     const texts: string[] = []
     let wrapped = 0
     let focusVisible = false
+    let tickVisible = false
     for (let y = 0; y < ROWS; y++) {
       const line = buf.getLine(y)
       if (line === undefined) { texts.push(''); continue }
@@ -92,6 +93,7 @@ async function mountAt(cols: number) {
       const text = line.translateToString(true)
       texts.push(text)
       if (text.includes('❯')) focusVisible = true
+      if (text.includes('✓')) tickVisible = true
     }
     // The picker is bare-mounted: blank rows above/below the pane are layout
     // padding. The invariant is INSIDE the pane — between the title row and
@@ -103,7 +105,7 @@ async function mountAt(cols: number) {
     if (titleAt >= 0 && footerAt > titleAt) {
       innerBlanks = texts.slice(titleAt, footerAt).filter(text => text === '').length
     }
-    return { wrapped, innerBlanks, focusVisible, titleAt, footerAt }
+    return { wrapped, innerBlanks, focusVisible, tickVisible, titleAt, footerAt }
   }
   const instance = await render(
     React.createElement(ModelPicker, {
@@ -129,10 +131,12 @@ for (const cols of [58, 61]) {
     check(`${cols} cols: no phantom blank rows inside the pane`, before.innerBlanks <= 1, `${before.innerBlanks} blank`)
     check(`${cols} cols: title and footer on screen`, before.titleAt >= 0 && before.footerAt > before.titleAt)
     check(`${cols} cols: focus indicator visible`, before.focusVisible)
+    check(`${cols} cols: selection tick visible`, before.tickVisible)
     const after = await m.frame(20)
     check(`${cols} cols: page turn keeps zero wrapped rows`, after.wrapped === 0, `${after.wrapped} wrapped`)
     check(`${cols} cols: page turn keeps pane and focus`,
       after.innerBlanks <= 1 && after.titleAt >= 0 && after.focusVisible)
+    check(`${cols} cols: page turn keeps selection tick`, after.tickVisible)
   } finally {
     m.instance.unmount()
   }
