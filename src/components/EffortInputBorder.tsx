@@ -28,7 +28,13 @@ import { IGNITION_TIMELINE, ignitionLineColors } from '../trajectory/effortIgnit
 
 type Overlay = { label: string; startedAtMs: number }
 
-/** 边框行（顶/底共用同一色段序列——同步变色）。 */
+/** 边框行（顶/底共用同一色段序列——同步变色）。
+ *
+ * 布局稳定性（窄终端/多行输入/动画期间的真实事故修复）：行高恒为 1、
+ * 不参与弹性压缩、超宽截断不换行——否则边框文本会被 Yoga 换行/压
+ * 缩，输入框实际高度与渲染器记录的高度漂移，inline 模式按错误高度
+ * 清旧帧即污染 scrollback（横线跑位、正文位移、残留、重复渲染）。
+ */
 function BorderRow({
   left,
   right,
@@ -41,15 +47,17 @@ function BorderRow({
   idleColor: keyof Theme | Color
 }): React.ReactNode {
   return (
-    <Text>
-      <Text color={idleColor}>{left}</Text>
-      {runs.map((run, i) => (
-        <Text key={i} color={run.color}>
-          {run.glyph}
-        </Text>
-      ))}
-      <Text color={idleColor}>{right}</Text>
-    </Text>
+    <Box height={1} flexShrink={0} overflow="hidden" width="100%">
+      <Text wrap="truncate-end">
+        <Text color={idleColor}>{left}</Text>
+        {runs.map((run, i) => (
+          <Text key={i} color={run.color}>
+            {run.glyph}
+          </Text>
+        ))}
+        <Text color={idleColor}>{right}</Text>
+      </Text>
+    </Box>
   )
 }
 
@@ -124,7 +132,10 @@ export function EffortInputBorder({
       flexShrink={0}
     >
       <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} />
-      {children}
+      {/* 内容区同样不参与压缩——输入框高度只随输入行数变化。 */}
+      <Box flexShrink={0} width="100%">
+        {children}
+      </Box>
       <BorderRow left="╰" right="╯" runs={runs} idleColor={idleColor} />
     </Box>
   )

@@ -118,8 +118,10 @@ export function EffortTierBadge({
     spaced += ' '.repeat(Math.max(0, at - column)) + overlay.label[i]!
     column = at + 1
   }
+  // 防换行：聚拢期间字样宽度逐帧变化，若在窄终端参与换行会改变
+  // 输入框高度（同 EffortInputBorder 的布局稳定性注记）。
   return (
-    <Text bold color={color}>
+    <Text bold color={color} wrap="truncate-end">
       {spaced}
     </Text>
   )
