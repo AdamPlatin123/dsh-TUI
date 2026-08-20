@@ -160,7 +160,7 @@ export function Chat({
   extensionShortcuts,
   onExit,
   onUpdate,
-  fullscreen = false,
+  fullscreen: fullscreenProp = false,
   trajectorySeen: trajectorySeenProp,
 }: {
   channel: Channel
@@ -186,10 +186,9 @@ export function Chat({
   onUpdate?: () => void
   /**
    * True when the host already wrapped this tree in `<AlternateScreen>`
-   * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
-   * scene and the session browser: entering the alt
-   * screen a second time is harmless, but the inner unmount's DEC 1049 exit
-   * would drop the whole app back to the main screen.
+   * (`fullscreen: true`). Used as a fallback when the channel has no live
+   * `fullscreen` field (headless embeds / tests). Production Chat reads
+   * `channel.fullscreen` so `/tui` can hot-swap without remounting.
    */
   fullscreen?: boolean
   /**
@@ -775,6 +774,53 @@ export function Chat({
         setHelpOpen(false)
         setThemeIndex(Math.max(0, getThemeOptions().findIndex(option => option.value === themeName)))
         setThemePickerOpen(true)
+        return true
+      }
+      case 'tui': {
+        // Claude Code `/tui fullscreen` / `/tui default`: hot-swap the
+        // alternate screen and persist to settings.yaml `dsh-tui.fullscreen`.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        const current = channel.fullscreen ?? fullscreenProp
+        const modeLabel = (value: boolean) => value ? t('tui-mode-fullscreen') : t('tui-mode-inline')
+        const persistFullscreen = (value: boolean): void => {
+          const settingsHost = channel.settingsHost()
+          const tuiView = settingsHost?.listNamespaces().find(entry => entry.ns === 'dsh-tui')
+          if (settingsHost === undefined || tuiView === undefined) return
+          void settingsHost
+            .write('dsh-tui', [{ op: 'set', path: ['fullscreen'], value }], tuiView.revision)
+            .catch(() => {})
+        }
+        if (parts[0] === 'status' || parts.length === 0) {
+          setHelpOpen(false)
+          channel.pushLocal('/tui', [
+            t('tui-current', { mode: modeLabel(current) }),
+            t('tui-switch-hint'),
+            t('tui-persist-hint'),
+          ])
+          return true
+        }
+        const token = parts[0]!.toLowerCase()
+        if (parts.length > 1 || (token !== 'fullscreen' && token !== 'default' && token !== 'inline')) {
+          setHelpOpen(false)
+          channel.notify(
+            token === 'fullscreen' || token === 'default' || token === 'inline'
+              ? t('tui-usage')
+              : t('tui-unknown', { mode: parts[0]! }),
+            { color: token === 'fullscreen' || token === 'default' || token === 'inline' ? 'warning' : 'error' },
+          )
+          return true
+        }
+        const next = token === 'fullscreen'
+        setHelpOpen(false)
+        persistFullscreen(next)
+        if (current === next) {
+          channel.notify(t('tui-already', { mode: modeLabel(next) }), { color: 'success' })
+          return true
+        }
+        channel.setFullscreen(next)
+        const ink = instances.get(process.stdout) ?? instances.values().next().value
+        ink?.clearTextSelection()
+        channel.notify(t('tui-switched', { mode: modeLabel(next) }), { color: 'success' })
         return true
       }
       case 'new': {
@@ -1986,6 +2032,9 @@ export function Chat({
   // crash reports to the transcript and closes the scene instead of taking
   // the whole TUI down through ink's app-level boundary.
   const pluginScene = channel.pluginScene
+  const fullscreen = channel.fullscreen ?? fullscreenProp
+  const wrapDisplay = (node: React.ReactNode, overlay: boolean): React.ReactNode =>
+    fullscreen || overlay ? <AlternateScreen>{node}</AlternateScreen> : node
   if (pluginScene !== undefined) {
     const node = (
       <PluginSceneBoundary
@@ -2003,7 +2052,7 @@ export function Chat({
         })}
       </PluginSceneBoundary>
     )
-    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+    return wrapDisplay(node, true)
   }
 
   // The browser is a screen, not an overlay: it REPLACES the conversation
@@ -2020,8 +2069,8 @@ export function Chat({
       />
     )
     // Inline hosts enter the alternate screen for the duration; full-screen
-    // hosts are already in it and must not nest a second one.
-    return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+    // hosts wrap once at the Chat root and must not nest a second one.
+    return wrapDisplay(browser, true)
   }
 
   // The settings screen follows the browser's rule exactly: it REPLACES the
@@ -2029,7 +2078,7 @@ export function Chat({
   // is no transcript underneath to be repainted or bled through.
   if (settingsOpen) {
     const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
-    return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
+    return wrapDisplay(screen, true)
   }
 
   /** Prompt input is inert while a modal dialog owns the keyboard. */
@@ -2048,7 +2097,7 @@ export function Chat({
   // whole app back to the main screen.
   if (sceneOpen) {
     const scene = <TrajectoryScene channel={channel} build={trajectory} onClose={closeScene} />
-    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+    return wrapDisplay(scene, true)
   }
 
   // 浮层整体挂载条件：必须与内部各面板的可见条件精确同值。关闭时把
@@ -2063,7 +2112,7 @@ export function Chat({
     (presetPickerOpen && presetOptions.length > 0) || themePickerOpen || historyOpen ||
     rewindOpen || searchOpen || tipsOpen
 
-  return (
+  return wrapDisplay(
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
       {!isSticky && channel.lastUserText && (
         <StickyPromptHeader
@@ -2230,6 +2279,7 @@ export function Chat({
         )}
         <StatusLine
           channel={channel}
+          fullscreen={fullscreen}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
           wake={
@@ -2357,7 +2407,8 @@ export function Chat({
         </OverlayAbove>
         )}
       </Box>
-    </Box>
+    </Box>,
+    false,
   )
 }
 

@@ -140,7 +140,7 @@ terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm /
 ghostty / tmux); macOS's built-in Terminal.app consumes `⌘` shortcuts itself,
 so keep using `Ctrl`.
 
-**Mouse** (`fullscreen: true` fullscreen mode; off by default, enabled by the profile patch layer)
+**Mouse** (`fullscreen: true` fullscreen mode; toggle with `/tui fullscreen`)
 
 | Action | Function |
 |---|---|

@@ -139,7 +139,7 @@ npm install -g @deepseek-harness-tui/dsh-tui@<profile-version>
 `⌘` 需终端支持扩展键盘协议（iTerm2 / kitty / WezTerm / ghostty / tmux）；
 macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctrl`。
 
-**鼠标（`fullscreen: true` 全屏模式；默认关，profile 补丁层覆盖开启）**
+**鼠标（`fullscreen: true` 全屏模式；可用 `/tui fullscreen` 打开）**
 
 | 操作 | 功能 |
 |---|---|

@@ -26,11 +26,14 @@ import {
  */
 export function StatusLine({
   channel,
+  fullscreen = false,
   selectionActive = false,
   helpOpen = false,
   wake,
 }: {
   channel: Channel
+  /** Live display mode: always shown at the left of the model/context row. */
+  fullscreen?: boolean
   selectionActive?: boolean
   helpOpen?: boolean
   /**
@@ -121,6 +124,9 @@ export function StatusLine({
   }
 
   const leftParts = [
+    <Text key="display" color="inactiveShimmer">
+      {fullscreen ? t('tui-mode-fullscreen') : t('tui-mode-inline')}
+    </Text>,
     ...(statusBar.model
       ? [<Text key="model" color="inactiveShimmer">{channel.model}</Text>]
       : []),

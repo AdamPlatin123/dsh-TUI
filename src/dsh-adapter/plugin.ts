@@ -37,7 +37,7 @@ import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { withHostRootCapability } from './host-access.js'
-import { render, ThemeProvider, AlternateScreen } from '../ui.js'
+import { render, ThemeProvider } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -364,6 +364,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     statusBar: config.statusBar,
+    fullscreen: config.fullscreen === true,
     handle,
   })
   // Register the dsh-tui settings namespace so the /settings screen can
@@ -398,6 +399,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
         lang: Schema.union(['zh', 'en']),
+        // No default: unset keeps cordis.yml `fullscreen` as the fallback,
+        // so `/tui` / `/settings` writes are distinguishable from the
+        // composition default.
+        fullscreen: Schema.boolean(),
       }),
     )
     type SettingsValue = {
@@ -406,6 +411,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       statusBar?: Partial<StatusBarConfig>
+      fullscreen?: boolean
     }
     const applyLayout = (value: SettingsValue): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
@@ -427,6 +433,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+      channel.setFullscreen(typeof value.fullscreen === 'boolean' ? value.fullscreen : config.fullscreen === true)
     }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
@@ -506,6 +513,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
             { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
           ],
+        },
+        {
+          path: ['fullscreen'],
+          label: 'Fullscreen',
+          descriptions: { zh: '全屏显示' },
+          hint: 'Use the alternate screen with in-app scrolling and mouse selection. `/tui` writes the same field.',
+          hintDescriptions: { zh: '使用备用屏，应用内滚动和鼠标选区。`/tui` 写入同一字段。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            return value === true || value === false ? String(value) : String(config.fullscreen === true)
+          },
         },
         {
           path: ['statusBar', 'compact'],
@@ -707,7 +725,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         void finishExit(
           ctx,
           instance,
-          config.fullscreen === true,
           undefined,
           `dsh-tui crashed: ${message}`,
           () => disposeRootAndExit(ctx, 1),
@@ -723,7 +740,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         void finishExit(
           ctx,
           instance,
-          config.fullscreen === true,
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
           () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
@@ -752,7 +768,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void finishExit(
         ctx,
         instance,
-        config.fullscreen === true,
         hint,
         undefined,
         () => disposeRootAndExit(ctx, 0),
@@ -772,9 +787,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
     // Full-screen surfaces inside Chat — the trajectory scene and the session
-    // browser — enter the alt screen themselves in inline mode; in fullscreen
-    // the tree is already wrapped below, so they must not nest.
-    fullscreen: config.fullscreen === true,
+    // browser — enter the alt screen themselves in inline mode; Chat wraps
+    // itself when channel.fullscreen is on, so they must not nest.
+    fullscreen: channel.fullscreen,
     onExit: () => handleExit(),
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
@@ -816,14 +831,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       })
     },
   })
-  // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
-  // tracking), which turns on in-app text selection (copy-on-select via
-  // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
-  // mode leaves the mouse to the terminal emulator's native selection.
   const tree = React.createElement(
     ThemeProvider,
     null,
-    config.fullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
+    chat,
   )
   instance = await render(tree, { exitOnCtrlC: false })
 
@@ -1041,7 +1052,6 @@ type InkShutdownState = {
 async function finishExit(
   ctx: Context,
   instance: Awaited<ReturnType<typeof render>> | undefined,
-  fullscreen: boolean,
   notice: string | undefined,
   stderrNotice: string | undefined,
   done: () => void,
@@ -1051,6 +1061,7 @@ async function finishExit(
     if (runtime === undefined && instance !== undefined) {
       ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
     }
+    const fullscreen = instances.get(process.stdout)?.isAltScreenActive === true
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
 
     try {

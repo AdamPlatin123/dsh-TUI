@@ -478,6 +478,10 @@ export interface Channel {
   readonly toolBackground: ToolBackground
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
+  /** Live fullscreen (alternate-screen) display mode. */
+  readonly fullscreen: boolean
+  /** Switch fullscreen on or off without remounting the session. */
+  setFullscreen(value: boolean): void
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -815,6 +819,10 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
+  /** Fullscreen display mode (see the public Channel type). */
+  fullscreen: boolean
+  /** Apply a fullscreen change (see the public Channel type). */
+  setFullscreen(value: boolean): void
   /** Apply a diff-layout change (see the public Channel type). */
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   /** Apply a thinking-display change (see the public Channel type). */
@@ -1252,6 +1260,8 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
+    /** Fullscreen (alternate-screen) display; default off. */
+    fullscreen?: boolean
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -1998,6 +2008,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
+    fullscreen: options.fullscreen === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -2008,6 +2019,12 @@ export function createChannel(
     commandList: LOCAL_COMMANDS,
     commandCompletions(input: string) {
       return completeCommands(input, state.commandList, (path) => {
+        if (path.length === 1 && path[0] === 'tui') {
+          return [
+            { name: 'fullscreen', description: 'Enter fullscreen (alternate screen)', descriptionKey: 'cmd-desc-tui-fullscreen' },
+            { name: 'default', description: 'Return to inline (default) mode', descriptionKey: 'cmd-desc-tui-default', aliases: ['inline'] },
+          ]
+        }
         if (path.length === 1 && path[0] === 'workspace') {
           const builtins: CommandCompletionNode[] = [
             { name: 'resume', description: 'Switch to another workspace', descriptionKey: 'cmd-desc-workspace-resume' },
@@ -2987,6 +3004,11 @@ export function createChannel(
       )
       if (!changed) return
       state.statusBar = next
+      state.emit()
+    },
+    setFullscreen(value) {
+      if (value === state.fullscreen) return
+      state.fullscreen = value
       state.emit()
     },
     setActivityFrames(name) {

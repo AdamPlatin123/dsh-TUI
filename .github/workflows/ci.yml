@@ -72,6 +72,9 @@ jobs:
       - run: node --import tsx/esm scripts/repro-settings.tsx
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
+      # inline 重锚残影：帧高涨过视口再缩回后，空闲自愈的 viewport 重锚曾按
+      # 当前帧高定位视口顶部，把已进 scrollback 的行重画回视口并被再推一份。
+      - run: node --import tsx/esm scripts/repro-reanchor-ghost.tsx
 
       # 消息列表虚拟化回归：连续高度校正的嵌套更新上限（#129, React #185）、
       # 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
@@ -290,6 +293,10 @@ jobs:
       # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
+
+      # /tui 显示模式回归：子命令补全、settings.yaml dsh-tui.fullscreen 写入、
+      # StatusLine 最左 fullscreen/inline 标签。
+      - run: node --import tsx/esm scripts/verify-tui-mode.tsx
 
       # 外部编辑器回归（issue #123）：Ctrl+G 的 $VISUAL/$EDITOR 解析
       # （引号拆分、优先级、未配置时 unavailable——无 vi 兜底）与临时文件

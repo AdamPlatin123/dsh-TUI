@@ -162,6 +162,11 @@ export default class Ink {
     displayCursor: { x: number; y: number } | null;
     columns: number;
     rows: number;
+    // The renderer's view of how deep the main screen's scrollback is (see
+    // LogUpdate's peakHeight). DEC 1049 restores the scroll position along
+    // with the pixels, so this travels with the frame — the exit path's
+    // log.reset() would otherwise drop it.
+    peakHeight: number;
   } | null = null;
   // True when the previous frame's screen buffer cannot be trusted for
   // blit — selection overlay mutated it, resetFramesForAltScreen()
@@ -981,7 +986,8 @@ export default class Ink {
         frontFrame: this.frontFrame,
         displayCursor: this.displayCursor,
         columns: this.terminalColumns,
-        rows: this.terminalRows
+        rows: this.terminalRows,
+        peakHeight: this.log.peakHeight()
       };
       this.resetFramesForAltScreen();
     } else {
@@ -991,6 +997,7 @@ export default class Ink {
         this.frontFrame = saved.frontFrame;
         this.displayCursor = saved.displayCursor;
         this.log.reset();
+        this.log.restorePeakHeight(saved.peakHeight);
         // The main React subtree may have changed while the alternate screen
         // was mounted. Disable blitting once, but keep the restored frame as
         // the diff baseline that matches the terminal's physical contents.
