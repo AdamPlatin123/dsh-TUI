@@ -107,6 +107,15 @@ jobs:
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
       - run: node --import tsx/esm scripts/verify-keys.tsx
 
+      # IME 光标锚定回归：物理光标必须停在输入 caret 上（问答面板输入
+      # 行、CJK 宽字符、历史搜索浮层）。
+      - run: node --import tsx/esm scripts/verify-ime-cursor.tsx
+
+      # PromptInput 折行光标回归（perf/prompt-input-wrap）：窄终端折行/
+      # Home/窗口滚动下，caret 行位随光标移动更新（抓 useMemo 依赖回归），
+      # 硬件光标与反色 caret 格重合。
+      - run: node --import tsx/esm scripts/verify-prompt-wrap-caret.tsx
+
       # 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
       # 回复只进 querier，不回显成终端残影。
       - run: node --import tsx/esm scripts/verify-terminal-queries.tsx

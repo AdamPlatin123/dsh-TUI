@@ -927,8 +927,10 @@ export function PromptInput({
   // 换行去重（长输入每键性能）：此前渲染体每键做 4 遍全量换行（全文 1
   // + 光标前缀 3），每遍逐字符 stringWidth——数千字符后单键即超帧预算。
   // 现在只做 2 遍且各自记忆化：纯光标移动（←/→/Home/End/行间）不重包
-  // 装全文，输入未变时前缀行也零重算。所有光标量从 prefixRows 派生，
-  // 数学与原三处调用点逐位等价（verify-ime-cursor 逐格锁定）。
+  // 装全文，value 与 cursor 均未变时前缀行也零重算。所有光标量从
+  // prefixRows 派生，数学与原三处调用点逐位等价（verify-prompt-wrap-caret
+  // 锁定：折行边界/Home/窗口滚动的行位断言抓 memo 依赖回归——重合断言
+  // 对 stale 派生量自洽不敏感，行位变化才是真判据）。
   const visualLines = React.useMemo(
     () => wrapToWidth(value, inputWidth),
     [value, inputWidth],
