@@ -924,8 +924,23 @@ export function PromptInput({
   // the window of visual lines with the caret row always visible (CC's
   // maxVisibleLines behavior with automatic wrapping).
   const inputWidth = Math.max(10, columns - 3)
-  const visualLines = wrapToWidth(value, inputWidth)
-  const caretVisualLine = wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
+  // 换行去重（长输入每键性能）：此前渲染体每键做 4 遍全量换行（全文 1
+  // + 光标前缀 3），每遍逐字符 stringWidth——数千字符后单键即超帧预算。
+  // 现在只做 2 遍且各自记忆化：纯光标移动（←/→/Home/End/行间）不重包
+  // 装全文，输入未变时前缀行也零重算。所有光标量从 prefixRows 派生，
+  // 数学与原三处调用点逐位等价（verify-ime-cursor 逐格锁定）。
+  const visualLines = React.useMemo(
+    () => wrapToWidth(value, inputWidth),
+    [value, inputWidth],
+  )
+  const prefixRows = React.useMemo(
+    () => wrapToWidth(value.slice(0, cursor), inputWidth),
+    [value, cursor, inputWidth],
+  )
+  const caretVisualLine = prefixRows.length - 1
+  const caretPrefixRow = prefixRows[prefixRows.length - 1] ?? ''
+  const caretCharCol = caretPrefixRow.length
+  const caretVisualCol = stringWidth(caretPrefixRow)
   const windowStart = Math.max(
     0,
     Math.min(
@@ -944,19 +959,6 @@ export function PromptInput({
   //   occupy TWO terminal columns, so the raw char count would park the
   //   cursor mid-character and Windows Terminal would paint the IME
   //   preedit (pinyin) over the surrounding text).
-  const caretCharCol = () => {
-    const before = value.slice(0, cursor)
-    const rows = wrapToWidth(before, inputWidth)
-    const last = rows[rows.length - 1] ?? ''
-    return last.length
-  }
-  const caretVisualCol = () => {
-    const before = value.slice(0, cursor)
-    const rows = wrapToWidth(before, inputWidth)
-    const last = rows[rows.length - 1] ?? ''
-    return stringWidth(last)
-  }
-
   const rendered = visibleLines.map((line, index) => {
     const absoluteLine = windowStart + index
     if (absoluteLine !== caretVisualLine) {
@@ -967,7 +969,7 @@ export function PromptInput({
       )
     }
     // Caret row: invert the char at the caret column (solid block).
-    const col = caretCharCol()
+    const col = caretCharCol
     const before = line.slice(0, col)
     const at = line[col] ?? ' '
     const after = line.slice(col + 1)
@@ -992,7 +994,7 @@ export function PromptInput({
   // relative to the value box the ref attaches to.
   const valueBoxRef = useDeclaredCursor({
     line: caretVisualLine - windowStart,
-    column: caretVisualCol(),
+    column: caretVisualCol,
     active: !selectionActive,
   })
 
@@ -1144,6 +1146,22 @@ export function PromptInput({
  * stringWidth). Used by the input renderer so long lines wrap instead of
  * truncating, with exact caret-row mapping.
  */
+// 单字符宽度缓存：wrapToWidth 逐字符调用 stringWidth，无缓存时长输入
+// 每键 O(N) 次全量测量（CJK/emoji 常数更大）。上限整清（同
+// line-width-cache.ts 的既有模式）—— Unicode 码位空间远大于上限，
+// 淘汰策略只需防无界增长，整清后热字符自然重填。
+const CHAR_WIDTH_CACHE = new Map<string, number>()
+const CHAR_WIDTH_CACHE_LIMIT = 4096
+function charWidth(ch: string): number {
+  let cached = CHAR_WIDTH_CACHE.get(ch)
+  if (cached === undefined) {
+    cached = stringWidth(ch)
+    if (CHAR_WIDTH_CACHE.size >= CHAR_WIDTH_CACHE_LIMIT) CHAR_WIDTH_CACHE.clear()
+    CHAR_WIDTH_CACHE.set(ch, cached)
+  }
+  return cached
+}
+
 function wrapToWidth(text: string, width: number): string[] {
   const rows: string[] = []
   for (const line of text.split('\n')) {
@@ -1154,7 +1172,7 @@ function wrapToWidth(text: string, width: number): string[] {
     let current = ''
     let currentWidth = 0
     for (const ch of line) {
-      const w = stringWidth(ch)
+      const w = charWidth(ch)
       if (currentWidth + w > width && current !== '') {
         rows.push(current)
         current = ch
