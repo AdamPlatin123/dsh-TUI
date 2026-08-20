@@ -102,6 +102,10 @@ jobs:
       # （30 行终端 30 个模型，焦点在索引 0 不可见），且 yoga 挤压会产生
       # 零高丢行——焦点必须始终随窗口在屏。
       - run: node --import tsx/esm scripts/repro-picker-windowing.tsx
+      # 压边截断回归（#396）：长名在终端最后一格截断时选中 ✓ 计入截断
+      # 预算、行恒 1 不换行——断言零 wrapped 行、Pane 内无幽灵空行、翻页
+      # 后标题/页脚/焦点仍在屏。
+      - run: node --import tsx/esm scripts/verify-picker-edge.tsx
 
       # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
