@@ -112,6 +112,12 @@ export function getScrollDrainNode(): DOMElement | null {
 // scrolls, eventually clipping at the top). The frontFrame screen buffer
 // still holds the old content at that point — captureScrolledRows reads
 // from it before the front/back swap to preserve the text for copy.
+// Wheel drains report here too (issue #438): the pendingScrollDelta drain
+// below records its SIGNED per-frame delta (negative = content moved
+// down, wheel-up) so the selection follows wheel scrolls as well. Only
+// one event per frame — a frame that both follows AND drains reports the
+// follow (the follow branch clears pending first, so the drain
+// contributes nothing that frame).
 /**
  * At-bottom follow scroll recorded this frame: the scroll delta and
  * viewport bounds, consumed by ink.tsx to translate the active text
@@ -921,6 +927,28 @@ function renderNodeToOutput(
         // only after clamp so a wasted no-op frame isn't scheduled.
         if (scrollTop !== cur) node.pendingScrollDelta = undefined
         if (node.pendingScrollDelta !== undefined) scrollDrainNode = node
+        // Wheel-drain selection translate (#438): the drain moved content
+        // by (scrollTop - scrollTopBeforeFollow) rows this frame, minus
+        // what at-bottom follow already reported above (followDelta is 0
+        // unless the follow branch fired — and when it did, it cleared
+        // pendingScrollDelta, so the drain contributed nothing). Record
+        // the remainder as a follow-scroll event with a SIGNED delta so
+        // ink.tsx re-anchors any active selection to the text. Without
+        // this, wheel scrolling leaves the highlight pinned to screen
+        // rows and copy-on-select grabs whatever scrolled under it.
+        // scrollTo/scrollToElement jumps never contribute: they write
+        // scrollTop before scrollTopBeforeFollow is captured. Multi-frame
+        // drains record per-frame portions; the selection's virtual-row
+        // tracking accumulates the clamp overshoot across frames.
+        const wheelDelta = scrollTop - scrollTopBeforeFollow - followDelta
+        if (wheelDelta !== 0 && !followScroll) {
+          const wheelVpTop = node.scrollViewportTop ?? 0
+          followScroll = {
+            delta: wheelDelta,
+            viewportTop: wheelVpTop,
+            viewportBottom: wheelVpTop + innerHeight - 1
+          }
+        }
         // A manual scroll that lands exactly on the bottom re-pins sticky
         // IMMEDIATELY on this frame — the follow-block restore above only
         // fires when a later frame happens, but an idle stream (turn done,

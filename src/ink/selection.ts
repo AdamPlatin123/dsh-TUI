@@ -676,10 +676,12 @@ export function shiftAnchor(
  * the selection is text-anchored at both ends — both must move. The
  * isDragging check in ink.tsx picks which shift to apply.
  *
- * If both ends would shift strictly BELOW minRow (unclamped), the selected
- * text has scrolled entirely off the top. Clear it — otherwise a single
- * inverted cell lingers at the viewport top as a ghost (native terminals
- * drop the selection when it leaves scrollback). Landing AT minRow is
+ * If both ends would shift strictly BELOW minRow or strictly ABOVE maxRow
+ * (unclamped), the selected text has scrolled entirely off the viewport —
+ * off the top via streaming follow / wheel-down, off the bottom via
+ * wheel-up. Clear it — otherwise a single inverted cell lingers at the
+ * edge as a ghost (native terminals drop the selection when it leaves
+ * scrollback). Landing AT the edge row is
  * still valid: that cell holds the correct text. Returns true if the
  * selection was cleared so the caller can notify React-land subscribers
  * (useHasSelection) — the caller is inside onRender so it can't use
@@ -710,7 +712,13 @@ export function shiftSelectionForFollow(
   const rawFocus = s.focus
     ? (s.virtualFocusRow ?? s.focus.row) + dRow
     : undefined
-  if (rawAnchor < minRow && rawFocus !== undefined && rawFocus < minRow) {
+  // Both ends strictly past the same edge = selection fully scrolled off
+  // (top: follow/wheel-down; bottom: wheel-up). Symmetric clear — a
+  // clamped-to-edge pair would render as a 1-row ghost highlight.
+  if (
+    (rawAnchor < minRow && rawFocus !== undefined && rawFocus < minRow) ||
+    (rawAnchor > maxRow && rawFocus !== undefined && rawFocus > maxRow)
+  ) {
     clearSelection(s)
     return true
   }
