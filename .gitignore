@@ -9,3 +9,4 @@ package-lock.json
 AGENTS.md
 .dsh-prompt-debug.json
 HANDOVER.md
+.local/
