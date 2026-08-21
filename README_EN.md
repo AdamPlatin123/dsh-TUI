@@ -89,6 +89,16 @@ commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 `dsh-tui --resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.
 
+### Herdr
+
+Run `dsh-tui` directly in a [Herdr](https://herdr.dev) pane; no extra setup is
+required. dsh-TUI reports `idle`, `working`, and `blocked` through Herdr's local
+integration API and marks questionnaires and tool approvals as `blocked`. The
+integration is completely inactive outside Herdr. `herdr agent start --kind
+dsh-tui`, session identity, and automatic restoration after a Herdr server
+restart still require a native dsh-TUI agent kind upstream; manually launched
+panes already retain, reconnect, and expose their live state.
+
 For running dsh-TUI inside VS Code — directly in the integrated terminal or
 via the `dsh-tui-vscode` companion extension (real-integrated-terminal
 sessions, an experience almost identical to the official Claude Code
@@ -111,17 +121,26 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 
 | Key | Action |
 |---|---|
-| `Enter` | Send (`Shift+Enter` for a newline, or `Ctrl+J` when the terminal cannot report modified Enter); executes the selected item when a command menu is open |
+| `Enter` | Idle = send (`Shift+Enter` for a newline, or `Ctrl+J` when the terminal cannot report modified Enter; `Option+Enter` is the fallback on macOS Terminal.app, issue #110); **while the model is working = steer** (inject a next-step boundary without interrupting); executes the selected item when a command menu is open |
+| `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
+| `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
+| `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
 | `Ctrl+C` | Interrupt the current turn; press twice while idle to exit |
 | `Esc` | Close the command/file menu; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+R` | History search |
 | `/` | In-session full-text search (`n`/`N` to jump) |
-| `Tab` / `Enter` | Command / `@` file completion (keep drilling into directories) |
 | `Ctrl+V` | Paste text or files from the file manager; images show as `[Image #N]` and are sent as durable attachments |
-| `Ctrl+X` | Edit the current input with `$VISUAL`/`$EDITOR` (e.g. nvim); content is filled back in on save and exit |
-| `?` | Keybinding menu |
+| `Ctrl+G` | Edit the current input with `$VISUAL`/`$EDITOR` (e.g. nvim); content is filled back in on save and exit |
+| `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
+| `Ctrl+P` | Toggle the startup loaded-context panel (effective while the panel is on screen) |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Logical line start / end; `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
+| `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
+| `Ctrl+U` / `Ctrl+K` | Delete before the cursor (to line start) / after the cursor (to line end) |
+| `Ctrl+W` | Delete the previous word |
+
+**Three delivery modes while the model is working**: `Enter` = steer (inject a next-step boundary, no interruption) · `Tab` = follow-up (queued after the current turn) · `Ctrl+Enter` = interrupt (break in and send immediately).
 
 **macOS modifier keys**: the `Ctrl+<key>` bindings above also work with `⌘<key>`
 on macOS (e.g. `⌘V` paste, `⌘O` expand details, `⌘Enter` send immediately);
@@ -137,8 +156,13 @@ so keep using `Ctrl`.
 |---|---|
 | Drag to select | In-app text selection, **copied on release** (OSC 52 with native `wl-copy`/`xclip`/`xsel` fallback; `load-buffer -w` inside tmux); the selection is cleared after copying and a "Copied N characters" notice pops up |
 | Double / triple click | Select word / line, copied on selection just the same |
-| Scroll wheel | Scroll the message list |
+| Scroll wheel | Only with fullscreen mouse tracking: scroll Help while it is open, otherwise scroll messages (±3 lines per notch); default inline mode does not deliver wheel events to the TUI |
 | `Esc` | Cancel an in-progress drag selection (no copy) |
+| Single-click a message line | Expand/collapse that line |
+| Click "load earlier messages" / "ctrl+e show previous N" | Load earlier messages / expand all |
+| Click the StickyHeader / "↓ N new messages" | Jump back to the pinned message / scroll to the bottom |
+| Click a hyperlink | Open it in your browser |
+| Keyboard selection extension | With a selection active, `Shift+←/→/↑/↓/Home/End` extends or shrinks it (wrapping across lines) |
 
 **Questionnaires** (when the model fires `ask_user_question`)
 
@@ -148,19 +172,21 @@ so keep using `Ctrl`.
 | `Space` | Toggle multi-select options |
 | `Tab` | Switch to a custom answer (type directly without picking an option) |
 | `Enter` | Submit the current selection |
-| `Esc` | Abort the question (the model receives ASK_ABORTED and can continue the conversation) |
+| `Esc` / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
 
 **Local commands** (a full replica of the CC command set, all routed through the official DSH pipeline)
 
 | Group | Commands |
 |---|---|
-| Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline |
-| Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md |
-| Model | `/model` picker · `/thinking` thinking display · `/tokens` token details · `/theme` theme picker · `/lang` zh/en UI switch (also selectable in `/settings`) |
+| Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
+| Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
+| Model | `/model` picker (**switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr_comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
-| Other | `/agents` subagent list · `/update` auto-update and restart · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
-| Registry | `/plan` `/goal` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
+| Other | `/agents` subagent list · `/skills` skills directory · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
+| Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
+
+> Unknown commands are sent to the model as ordinary messages (e.g. in a composition where `/permission` is not mounted).
 
 ## Documentation
 
@@ -270,6 +296,12 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - `/vim` `/connect` `/hooks` are CC-named placeholders: the corresponding
   capabilities have no equivalent mechanism on the DSH side, and the commands give an
   explicit explanation rather than staying silent.
+- The `/thinking` display toggle is **not persisted**; restarts and new sessions fall
+  back to the default.
+- `/compact` is unavailable under the `minimal` preset (that preset does not compose
+  compaction).
+- `/update` works only when started via `dsh --profile` and is refused while a turn is
+  running.
 
 See [Architecture and limitations](docs/architecture.en.md) for the complete list of
 known limitations and the security boundary.
@@ -285,8 +317,10 @@ pnpm smoke
 ```
 
 `lib/types/` is ignored generated output. `pnpm build` recompiles it from a
-clean output directory and runs the build gates. npm Git URL installs generate
-the same runtime through `prepare`. Rendering, questionnaire, or tool-card
+clean output directory and runs the build gates. **Git URL installs are not supported** (the source manifest keeps
+`@dsh-std/*` as workspace deps, `vendor/dsh-std` is a submodule, and pnpm ≥11 refuses
+git-hosted `prepare` scripts by default); install the registry package:
+`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`. Rendering, questionnaire, or tool-card
 changes also require the relevant regression scripts.
 
 ## Plugin Ecosystem

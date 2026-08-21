@@ -20,6 +20,8 @@ export type Theme = {
   autoAccept: string
   bashBorder: string
   claude: string
+  toolNameMutate: string
+  toolNameExec: string
   claudeShimmer: string
   claudeBlue_FOR_SYSTEM_SPINNER: string
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: string
@@ -113,6 +115,15 @@ export type Theme = {
   rainbow_blue_shimmer: string
   rainbow_indigo_shimmer: string
   rainbow_violet_shimmer: string
+  // Subagent message colors
+  subagentBullet: string
+  subagentDescription: string
+  subagentModel: string
+  subagentElapsed: string
+  subagentToolName: string
+  subagentStatusRunning: string
+  subagentStatusCompleted: string
+  subagentStatusFailed: string
 }
 
 /** The built-in theme names, in display order. */
@@ -171,6 +182,8 @@ const darkTheme: Theme = {
   autoAccept: rgb('#B3A0D4'), // Soft violet
   bashBorder: rgb('#D194AE'), // Mist rose
   claude: rgb('#7DA1DE'), // Accent Soft — mist brand blue
+  toolNameMutate: rgb('#E5C07B'), // soft gold — Edit/Write (warm accent)
+  toolNameExec: rgb('#56B6C2'), // mist cyan — Bash/exec tools
   claudeShimmer: rgb('#ABC2EC'), // Border Blue for shimmer effect
   claudeBlue_FOR_SYSTEM_SPINNER: rgb('#7DA1DE'),
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#ABC2EC'),
@@ -206,16 +219,16 @@ const darkTheme: Theme = {
   toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
   toolDotWeb: rgb('#7DA1DE'), // mist blue — web search/fetch
   toolDotTask: rgb('#D194AE'), // mist rose — subagent/jobs
-  syntaxKeyword: rgb('#8FA8E8'), // mist blue
-  syntaxString: rgb('#9FBF8F'), // soft sage
-  syntaxComment: rgb('#6B7280'), // neutral grey
-  syntaxNumber: rgb('#D9A97E'), // warm tan
-  syntaxFunction: rgb('#82B8C7'), // cyan blue
-  syntaxType: rgb('#B39DDB'), // soft violet
+  syntaxKeyword: rgb('#78A0D6'), // muted anchor blue
+  syntaxString: rgb('#79AD91'), // mist green, distinct without neon saturation
+  syntaxComment: rgb('#74808D'), // neutral blue-grey
+  syntaxNumber: rgb('#C89B70'), // softened warm amber
+  syntaxFunction: rgb('#6FAEB5'), // muted cyan
+  syntaxType: rgb('#A98FBF'), // softened violet
   syntaxVariable: rgb('#C9D1D9'), // near-text
   syntaxOperator: rgb('#93A1B0'), // blue grey
   syntaxPunctuation: rgb('#7A8694'), // dim blue grey
-  syntaxConstant: rgb('#D98C9B'), // soft rose
+  syntaxConstant: rgb('#C98291'), // softened rose
   red_FOR_SUBAGENTS_ONLY: rgb('#D4685E'),
   blue_FOR_SUBAGENTS_ONLY: rgb('#7496D6'),
   green_FOR_SUBAGENTS_ONLY: rgb('#66B285'),
@@ -228,8 +241,8 @@ const darkTheme: Theme = {
   chromeYellow: rgb('#D8B270'),
   clawd_body: rgb('#D98A63'), // Warm mascot orange
   clawd_background: rgb('#000000'),
-  userMessageBackground: rgb('#292D36'),
-  userMessageBackgroundHover: rgb('#343945'),
+  userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
+  userMessageBackgroundHover: rgb('#3B5BDB'), // hover/expand: blue block with gold text
   messageActionsBackground: rgb('#2E333D'),
   selectionBg: rgb('#3B4A66'), // Mist-blue tint on dark
   bashMessageBackgroundColor: rgb('#2C3038'),
@@ -238,7 +251,7 @@ const darkTheme: Theme = {
   rate_limit_empty: rgb('#3C414B'),
   fastMode: rgb('#E09A58'),
   fastModeShimmer: rgb('#EAB478'),
-  briefLabelYou: rgb('#ABC2EC'),
+  briefLabelYou: rgb('#FFDF80'),
   briefLabelClaude: rgb('#7DA1DE'),
   rainbow_red: rgb('#D98F8A'),
   rainbow_orange: rgb('#D9A97E'),
@@ -254,6 +267,14 @@ const darkTheme: Theme = {
   rainbow_blue_shimmer: rgb('#AFBFE2'),
   rainbow_indigo_shimmer: rgb('#BFB4DE'),
   rainbow_violet_shimmer: rgb('#D1B4D1'),
+  subagentBullet: rgb('#D194AE'),
+  subagentDescription: rgb('#E8E6E0'),
+  subagentModel: rgb('#8D95A6'),
+  subagentElapsed: rgb('#8D95A6'),
+  subagentToolName: rgb('#7DA1DE'),
+  subagentStatusRunning: rgb('#7DA1DE'),
+  subagentStatusCompleted: rgb('#82B89D'),
+  subagentStatusFailed: rgb('#DA8A93'),
 }
 
 /**
@@ -266,6 +287,8 @@ const lightTheme: Theme = {
   autoAccept: rgb('#9B86B8'), // Muted violet (from surface-alt pink-mist)
   bashBorder: rgb('#C07A93'), // Muted rose (from surface-alt pink-mist)
   claude: rgb('#3F6CC4'), // Primary Blue — brand
+  toolNameMutate: rgb('#8A6A00'), // deep gold - Edit/Write (warm accent)
+  toolNameExec: rgb('#0F7A8A'), // deep cyan - Bash/exec tools
   claudeShimmer: rgb('#5E88CC'), // Accent Blue for shimmer effect
   claudeBlue_FOR_SYSTEM_SPINNER: rgb('#3F6CC4'),
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#5E88CC'),
@@ -301,16 +324,16 @@ const lightTheme: Theme = {
   toolDotWrite: rgb('#7A5CA8'),
   toolDotWeb: rgb('#4A63A8'),
   toolDotTask: rgb('#B04A5A'),
-  syntaxKeyword: rgb('#4A63A8'),
-  syntaxString: rgb('#4E7A4E'),
-  syntaxComment: rgb('#8A8F98'),
-  syntaxNumber: rgb('#A96B32'),
-  syntaxFunction: rgb('#3F7E8F'),
-  syntaxType: rgb('#7A5CA8'),
+  syntaxKeyword: rgb('#3F68B5'), // clear primary blue without neon saturation
+  syntaxString: rgb('#3F805F'), // readable muted green
+  syntaxComment: rgb('#7D858F'), // neutral blue-grey
+  syntaxNumber: rgb('#A7652B'), // warm amber accent
+  syntaxFunction: rgb('#2E7E8A'), // muted cyan
+  syntaxType: rgb('#7E55A4'), // softened violet
   syntaxVariable: rgb('#343945'),
   syntaxOperator: rgb('#5B6672'),
   syntaxPunctuation: rgb('#9AA0A8'),
-  syntaxConstant: rgb('#B04A5A'),
+  syntaxConstant: rgb('#A84472'), // muted rose accent
   red_FOR_SUBAGENTS_ONLY: rgb('#BE5A52'),
   blue_FOR_SUBAGENTS_ONLY: rgb('#3F6CC4'),
   green_FOR_SUBAGENTS_ONLY: rgb('#4E9675'),
@@ -323,8 +346,8 @@ const lightTheme: Theme = {
   chromeYellow: rgb('#C99A3F'),
   clawd_body: rgb('#D98A63'), // Warm mascot orange
   clawd_background: rgb('#F6F3ED'),
-  userMessageBackground: rgb('#EEE5D2'), // Surface
-  userMessageBackgroundHover: rgb('#E4D9E5'), // Surface Alt
+  userMessageBackground: '', // user turn: no fill in light mode, gold text only
+  userMessageBackgroundHover: rgb('#DCE4FB'), // subtle blue tint on hover/expand
   messageActionsBackground: rgb('#E4D9E5'),
   selectionBg: rgb('#D5DEF2'), // Mist-blue tint on warm white
   bashMessageBackgroundColor: rgb('#EAE1D3'),
@@ -333,7 +356,7 @@ const lightTheme: Theme = {
   rate_limit_empty: rgb('#DDD5C7'),
   fastMode: rgb('#D98E4A'),
   fastModeShimmer: rgb('#E2A465'),
-  briefLabelYou: rgb('#5E88CC'),
+  briefLabelYou: rgb('#A67600'),
   briefLabelClaude: rgb('#3F6CC4'),
   rainbow_red: rgb('#D98888'),
   rainbow_orange: rgb('#D9A276'),
@@ -349,6 +372,14 @@ const lightTheme: Theme = {
   rainbow_blue_shimmer: rgb('#A9BCE0'),
   rainbow_indigo_shimmer: rgb('#B7AFD8'),
   rainbow_violet_shimmer: rgb('#CFB0CC'),
+  subagentBullet: rgb('#C07A93'),
+  subagentDescription: rgb('#343945'),
+  subagentModel: rgb('#8991A0'),
+  subagentElapsed: rgb('#8991A0'),
+  subagentToolName: rgb('#3F6CC4'),
+  subagentStatusRunning: rgb('#3F6CC4'),
+  subagentStatusCompleted: rgb('#4E9675'),
+  subagentStatusFailed: rgb('#C65D6B'),
 }
 
 /**
@@ -363,6 +394,8 @@ const darkAnsiTheme: Theme = {
   autoAccept: 'ansi:magentaBright',
   bashBorder: 'ansi:magentaBright',
   claude: 'ansi:blueBright',
+  toolNameMutate: 'ansi:yellowBright',
+  toolNameExec: 'ansi:cyanBright',
   claudeShimmer: 'ansi:blueBright',
   claudeBlue_FOR_SYSTEM_SPINNER: 'ansi:blueBright',
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: 'ansi:blueBright',
@@ -420,8 +453,8 @@ const darkAnsiTheme: Theme = {
   chromeYellow: 'ansi:yellowBright',
   clawd_body: 'ansi:redBright',
   clawd_background: 'ansi:black',
-  userMessageBackground: 'ansi:blackBright',
-  userMessageBackgroundHover: 'ansi:white',
+  userMessageBackground: '',
+  userMessageBackgroundHover: 'ansi:blue',
   messageActionsBackground: 'ansi:blackBright',
   selectionBg: 'ansi:blue',
   bashMessageBackgroundColor: 'ansi:black',
@@ -430,7 +463,7 @@ const darkAnsiTheme: Theme = {
   rate_limit_empty: 'ansi:white',
   fastMode: 'ansi:redBright',
   fastModeShimmer: 'ansi:redBright',
-  briefLabelYou: 'ansi:blueBright',
+  briefLabelYou: 'ansi:yellowBright',
   briefLabelClaude: 'ansi:blueBright',
   rainbow_red: 'ansi:red',
   rainbow_orange: 'ansi:redBright',
@@ -446,6 +479,14 @@ const darkAnsiTheme: Theme = {
   rainbow_blue_shimmer: 'ansi:cyanBright',
   rainbow_indigo_shimmer: 'ansi:blueBright',
   rainbow_violet_shimmer: 'ansi:magentaBright',
+  subagentBullet: 'ansi:magentaBright',
+  subagentDescription: 'ansi:whiteBright',
+  subagentModel: 'ansi:white',
+  subagentElapsed: 'ansi:white',
+  subagentToolName: 'ansi:cyanBright',
+  subagentStatusRunning: 'ansi:blueBright',
+  subagentStatusCompleted: 'ansi:greenBright',
+  subagentStatusFailed: 'ansi:redBright',
 }
 
 /**
@@ -480,6 +521,28 @@ export function getTheme(themeName: ThemeName): Theme {
  * (markdown inline code) resolves user themes through getActiveTheme().
  */
 let customThemeResolver: ((name: string) => Theme | undefined) | undefined
+
+/**
+ * Whether the active theme's RESOLVED palette renders on a light background.
+ * Keyed off the resolved palette's IDENTITY for the built-ins (auto resolves
+ * to the shared light/dark instance, so this covers auto-with-light-terminal
+ * that theme-NAME comparisons miss) and off the ink-text luminance for
+ * custom themes (light palettes pair with dark ink). The palette's
+ * `background` field is a badge fill, not the terminal background — never a
+ * lightness signal. Colour-pair variants (effort ignition hues) consume this.
+ */
+export function isLightThemeActive(themeName: ThemeName): boolean {
+  const theme = getTheme(themeName)
+  if (theme === lightTheme) return true
+  if (theme === darkTheme || theme === darkAnsiTheme) return false
+  // 自定义主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
+  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
+  const ink = theme.text
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
+  if (rgb === null) return false
+  const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
+  return 0.299 * r + 0.587 * g + 0.114 * b < 140
+}
 
 /**
  * Register the custom-theme resolver. Called once by ThemeProvider; the

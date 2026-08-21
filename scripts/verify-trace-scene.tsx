@@ -28,7 +28,7 @@ process.env.FORCE_COLOR = '3'
 // to agree with.
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { TrajectoryScene }, { Chat }, { QuestionStore }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { TrajectoryScene }, { Chat }, { QuestionStore }, { stringWidth }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -37,6 +37,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Traj
     import('../src/screens/TrajectoryScene.js'),
     import('../src/screens/Chat.js'),
     import('../src/dsh-adapter/questions.js'),
+    import('../src/ink/stringWidth.js'),
   ])
 const { miniWakeWidth } = await import('../src/components/trajectory/MiniWake.js')
 const traj = await import('../src/dsh-adapter/trajectory/index.js')
@@ -180,6 +181,23 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     notifications: [],
     activityEnabled: false,
     contextBarEnabled: true,
+    statusBar: {
+      compact: true,
+      model: true,
+      thinking: true,
+      cwd: true,
+      contextUsage: true,
+      cache: true,
+      tokens: false,
+      tps: false,
+      gitBranch: false,
+      sessionTitle: false,
+      mode: false,
+      contextBar: false,
+      activity: false,
+      trajectory: true,
+      shortcutHint: false,
+    },
     activityFrames: [],
     loadedContext: undefined,
     goal: undefined,
@@ -370,7 +388,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // Scrollback accounting. Leaving the alternate screen makes the terminal
   // restore the main buffer, and Ink then repaints once because its front
   // frame was blanked — one frame per ROUND TRIP in inline mode, the same cost
-  // the Ctrl+X editor handoff already pays. What must never happen is growth
+  // the Ctrl+G editor handoff already pays. What must never happen is growth
   // that scales with USE: the old inline overlay churned the frame on every
   // keystroke, and that is the family this view exists to escape.
   const perTrip = (rowsOf() - scrollbackBefore) / 20
@@ -516,25 +534,28 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // The settle paint is throttled behind the ink frame clock — poll for the
   // markers instead of racing a fixed sleep.
   let lines: string[] = []
+  let firstIndex = -1
   let secondIndex = -1
-  for (let attempt = 0; attempt < 25 && secondIndex < 0; attempt++) {
-    await sleep(80)
+  let gap = Number.POSITIVE_INFINITY
+  for (let attempt = 0; attempt < 50; attempt++) {
     const buffer = term.buffer.active
     lines = Array.from({ length: buffer.length }, (_, row) =>
       buffer.getLine(row)?.translateToString(true) ?? '',
     )
     secondIndex = lines.findLastIndex(line => line.includes('SECOND RESPONSE SECTION'))
-  }
-  let firstIndex = -1
-  for (let index = secondIndex - 1; index >= 0; index--) {
-    if (lines[index]?.includes('FIRST RESPONSE SECTION')) {
-      firstIndex = index
-      break
+    firstIndex = -1
+    for (let index = secondIndex - 1; index >= 0; index--) {
+      if (lines[index]?.includes('FIRST RESPONSE SECTION')) {
+        firstIndex = index
+        break
+      }
     }
+    gap = firstIndex < 0 || secondIndex < 0
+      ? Number.POSITIVE_INFINITY
+      : lines.slice(firstIndex + 1, secondIndex).filter(line => line.trim() === '').length
+    if (firstIndex >= 0 && secondIndex >= 0 && gap <= 1) break
+    await sleep(80)
   }
-  const gap = firstIndex < 0 || secondIndex < 0
-    ? Number.POSITIVE_INFINITY
-    : lines.slice(firstIndex + 1, secondIndex).filter(line => line.trim() === '').length
   check(
     'reasoning that settles in the trajectory leaves no blank answer gap',
     firstIndex >= 0 && secondIndex >= 0 && gap <= 1,
@@ -580,6 +601,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     React.createElement(Chat, {
       channel: makeChannel({
         traceEvents: () => EVENTS,
+        statusBar: {
+          ...makeChannel().statusBar as Record<string, unknown>,
+          shortcutHint: true,
+        },
         // One row only: the harness terminal is short, and a longer
         // transcript scrolls the failed card out of the visible window.
         rows: [failedRow],
@@ -597,6 +622,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   const startup = screen()
   check('the startup tip teaches the trajectory key', /ctrl\+t|⌘t/.test(startup), '')
+  // The script pins DSH_TUI_LANG=zh, so the hint reads `? 查看快捷键`.
+  check('the idle shortcuts hint appears exactly once',
+    (startup.match(/\? 查看快捷键/g) ?? []).length === 1,
+    `${(startup.match(/\? 查看快捷键/g) ?? []).length}`)
 
   // B — the wake strip lives on the hint row, and every assertion below is
   // scoped to that row on purpose: the startup tip also names the key, so a
@@ -617,9 +646,19 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   stdin.write('\x14')
   await sleep(400)
   stdin.write('q')
-  await sleep(500)
-  const after = screen()
-  const afterStatus = hintRowOf(after)
+  // Closing the alternate screen restores the main frame first; the hint
+  // retirement and wake repaint may land on a later Ink frame. Poll for the
+  // actual settled condition instead of racing a fixed post-close delay.
+  let after = screen()
+  let afterStatus = hintRowOf(after)
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const hintRetired = !/ctrl\+t|⌘t/.test(afterStatus)
+    const wakePresent = /[▁▂▃▄▅▆▇█]/.test(afterStatus)
+    if (hintRetired && wakePresent && !(after.match(/看完整轨迹|full trajectory/g) ?? []).length) break
+    await sleep(80)
+    after = screen()
+    afterStatus = hintRowOf(after)
+  }
   check('the footnote clears once the trajectory has been opened',
     (after.match(/看完整轨迹|full trajectory/g) ?? []).length === 0, '')
   check('the key hint retires once the trajectory has been opened',
@@ -653,6 +692,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       React.createElement(Chat, {
         channel: makeChannel({
           traceEvents: () => EVENTS,
+          statusBar: {
+            ...makeChannel().statusBar as Record<string, unknown>,
+            shortcutHint: true,
+          },
           rows: [],
           // A long CJK title is the case that truncates first, so it is the
           // one that shows a wrong container width soonest.
@@ -666,20 +709,30 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
     )
     for (const value of instances.values()) instances.set(process.stdout, value)
-    await sleep(420)
-
-    const rows = screen().split('\n')
-    const hintRow = rows.find(line => /[▁▂▃▄▅▆▇█▶·]/.test(line) && (line.includes('shortcuts') || line.includes('快捷键')))
+    let hintRow: string | undefined
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const rows = screen().split('\n')
+      hintRow = rows.find(line => /[▁▂▃▄▅▆▇█▶·]/.test(line) && (line.includes('shortcuts') || line.includes('快捷键')))
+      const settledAtRight = hintRow !== undefined
+        && stringWidth(hintRow.replace(/\s+$/, '')) === cols - 1
+      if (settledAtRight || miniWakeWidth(cols) === 0) break
+      await sleep(80)
+    }
     if (hintRow === undefined) {
       // Below `miniWakeWidth`'s floor the strip is meant to be absent; above
       // it, a missing row is itself the failure.
       check(`wake strip present at ${cols} cols`, miniWakeWidth(cols) === 0, 'no hint row with a wake')
     } else {
-      const right = hintRow.replace(/\s+$/, '').length
-      // paddingX={2} on the status line, so the last usable cell is cols - 2.
+      // Terminal geometry is measured in display cells, not JavaScript code
+      // units: the localized `查看快捷键` hint contains wide CJK glyphs. Using
+      // `.length` under-counts the row by one cell per glyph and made all five
+      // widths fail after the status hint became localized.
+      const right = stringWidth(hintRow.replace(/\s+$/, ''))
+      // paddingX={1} on the status line leaves its last occupied cell at
+      // terminal width - 1.
       check(
         `wake sits at the right margin at ${cols} cols`,
-        right >= cols - 2 && right <= cols,
+        right === cols - 1,
         `ends at ${right}, terminal is ${cols}`,
       )
     }

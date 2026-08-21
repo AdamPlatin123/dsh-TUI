@@ -1,6 +1,8 @@
 import React from 'react'
-import { Box, Text } from '../../ui.js'
+import { Box, Text, useTerminalSize } from '../../ui.js'
 import { POINTER } from '../../cc/figures.js'
+import { stringWidth } from '../../ink/stringWidth.js'
+import { wrapWidth } from '../../sessions/format.js'
 
 type Props = {
   text: string
@@ -8,41 +10,46 @@ type Props = {
   addMargin: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  /** Row expanded on its own (persistent hover-grey background, CC). */
-  isExpanded?: boolean
   onClick?(): void
 }
 
 /**
- * User prompt bubble: `❯ text` on the theme's userMessageBackground grey
- * (mirroring Claude Code's `messages/UserPromptMessage.tsx` +
- * `HighlightedThinkingText.tsx`, with the ultrathink rainbow removed).
+ * User prompt bubble: `❯ text` in bold briefLabelYou gold with no background
+ * fill (Kimi Code style: the user turn gets a distinct bold tint so it reads
+ * apart from assistant text; only selection mode paints a highlight).
  */
 export function UserPromptMessage({
   text,
   addMargin,
   isSelected = false,
-  isExpanded = false,
   onClick,
 }: Props): React.ReactNode {
+  const { columns } = useTerminalSize()
+  const promptPrefix = `${POINTER} `
+  const prefixWidth = stringWidth(promptPrefix)
+  // Wrap here instead of letting Ink wrap the whole Text node. Ink starts an
+  // automatic continuation at column zero, while a prompt needs a hanging
+  // indent for both explicit newlines and width-based visual lines.
+  // Leave a small safety margin for the ScrollBox edge/scrollbar. The Text
+  // nodes below are explicitly wrapped, so they must never be wrapped again by
+  // Ink; a second wrap would move the continuation back to column zero.
+  const lines = wrapWidth(text, Math.max(1, columns - prefixWidth - 3))
+  const continuationIndent = ' '.repeat(prefixWidth)
+
   return (
     <Box
       flexDirection="column"
       marginTop={addMargin ? 1 : 0}
-      backgroundColor={
-        isSelected
-          ? 'messageActionsBackground'
-          : isExpanded
-            ? 'userMessageBackgroundHover'
-            : 'userMessageBackground'
-      }
+      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       paddingRight={1}
       onClick={onClick}
     >
-      <Text>
-        <Text color="subtle">{POINTER} </Text>
-        <Text color="text">{text}</Text>
-      </Text>
+      {lines.map((line, index) => (
+        <Text key={index} color="briefLabelYou" bold wrap="truncate-end">
+          {index === 0 ? `${POINTER} ` : continuationIndent}
+          {line}
+        </Text>
+      ))}
     </Box>
   )
 }

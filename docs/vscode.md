@@ -12,7 +12,7 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
    实现，扩展已上架 VS Code Marketplace。
 2. **内置集成终端直接运行** —— 零安装，秒级可用，适合不想装扩展的场景。
 
-> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.7.1**，建议
+> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.8.3**，建议
 > 0.7.0+）；`dsh-tui-vscode` 指 companion 扩展（当前 **0.5.1**）。两者版本
 > 独立、各自发布。扩展的完整说明见其仓库
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)
@@ -202,15 +202,18 @@ commit-msg）由仓库 `.githooks/` 分发。
    dsh-tui --resume
    ```
 
+   > `-c` / `--continue` 与 `--resume` 等价；`dsh-tui --resume <id>`（或
+   > `--resume=<id>`，0.7.0 起）恢复指定会话。
+
 dsh-TUI 对 xterm.js（VS Code / Cursor / code-server）有专门的兼容路径：
 truecolor 配色、OSC 8 链接（由 VS Code 直接渲染为可点击）、OSC 52 剪贴板
 （首次使用 VS Code 会弹授权提示）、同步输出与平滑刷屏——这些在
 `src/ink/` 中按 `TERM_PROGRAM=vscode` 探测分支处理。流式 Markdown、工具卡、
 滚动、双击 Esc 时间回溯等行为与独立终端一致。
 
-### 让 `Ctrl+X` 用 VS Code 编辑当前输入
+### 让 `Ctrl+G` 用 VS Code 编辑当前输入
 
-TUI 的 `Ctrl+X` 走 `$VISUAL`/`$EDITOR`。想让它在 VS Code 里编辑，把
+TUI 的 `Ctrl+G` 走 `$VISUAL`/`$EDITOR`。想让它在 VS Code 里编辑，把
 `code -w` 写进终端环境（`settings.json` 中按平台设置，键名
 `terminal.integrated.env.<platform>`）：
 

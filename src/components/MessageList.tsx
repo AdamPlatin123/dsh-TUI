@@ -1,13 +1,15 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolResultView } from '../dsh-adapter/channel.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow } from '../dsh-adapter/channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
+import { SubagentMessage } from './Chat/SubagentMessage.js'
+import { isMinimalMode } from '../minimalMode.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
@@ -15,11 +17,12 @@ import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
+import type { ToolBackground } from '../tuiDisplayPrefs.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
- * markdown, thinking folded to `∴ Thinking (ctrl+o to expand)`, tool calls as
+ * markdown, thinking folded to `⚓ Thinking (ctrl+o to expand)`, tool calls as
  * status-dot cards. `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.
@@ -50,6 +53,8 @@ export function MessageList({
   model,
   diffLayout = 'auto',
   thinkingFold = 'preview',
+  toolBackground = 'none',
+  activityFrames,
   showAll,
   onToggleAll,
   onLoadOlder,
@@ -72,6 +77,11 @@ export function MessageList({
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Thinking-block display mode from channel (`preview`/`full`). */
   thinkingFold?: 'preview' | 'full'
+  /** Tool-card background treatment from the live channel settings. */
+  toolBackground?: ToolBackground
+  /** Working-activity preset name from the channel; drives the subagent
+   *  card's running glyph so both indicators follow one setting. */
+  activityFrames?: string
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log (CC-style "load
@@ -104,6 +114,7 @@ export function MessageList({
     ? rows
     : rows.slice(hiddenCount)
   ).filter(row => thinkingVisible || row.kind !== 'reasoning')
+
   // CC addMargin: every rendered block gets a 1-row top margin except the
   // first. Pre-pass over the FULL list so a windowed row keeps the exact
   // spacing it would have in a fully-mounted list.
@@ -115,12 +126,11 @@ export function MessageList({
       prev = row.kind
     }
   }
-  // CC's expanded rows keep a persistent hover-grey background (VirtualItem:
-  // `expanded ? userMessageBackgroundHover : undefined`).
+  // Selection keeps its highlight; expanded rows render with no fill (the
+  // diff line tints inside cards are the only backgrounds in the transcript).
   const rowBackground = (rowId: number) => {
     const isSelected = selectedId === rowId
     if (isSelected) return 'messageActionsBackground'
-    if (expandedRows.has(rowId)) return 'userMessageBackgroundHover'
     return undefined
   }
 
@@ -406,6 +416,7 @@ export function MessageList({
         // spacing; only the very first row of the whole list has none.
           const addMargin = margins.get(row.id) === true
           const tool = row.tool
+          const subagent = row.kind === 'subagent' ? row.subagent : undefined
           return (
             <MemoRow
               key={row.id}
@@ -423,6 +434,8 @@ export function MessageList({
               model={model}
               diffLayout={diffLayout}
               thinkingFold={thinkingFold}
+              toolBackground={toolBackground}
+              activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
               toolName={tool?.name}
@@ -438,6 +451,7 @@ export function MessageList({
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               nowSec={tool?.status === 'running' ? nowSec : undefined}
+              subagent={subagent}
               onToggleRow={onToggleRow}
               setRowRef={setRowRef}
             />
@@ -473,7 +487,10 @@ type MemoRowProps = {
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
   thinkingFold: 'preview' | 'full'
-  background: 'messageActionsBackground' | 'userMessageBackgroundHover' | undefined
+  toolBackground: ToolBackground
+  /** Working-activity preset name; drives the subagent card's running glyph. */
+  activityFrames: string | undefined
+  background: 'messageActionsBackground' | undefined
   // ToolRow, flattened: the channel writes status/result fields in place,
   // so passing the object itself would make mutations invisible to memo.
   toolCallId: string | undefined
@@ -495,6 +512,9 @@ type MemoRowProps = {
   /** Second-resolution clock, forwarded only while the tool runs so the
    *  live elapsed label ticks; settled rows never receive a changing prop. */
   nowSec: number | undefined
+  // SubagentRow, stable ref (subagent lifecycle events update the store, not
+  // the row ref itself, so a plain ref compare stays correct).
+  subagent: SubagentRow | undefined
   onToggleRow: (rowId: number) => void
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
@@ -514,6 +534,8 @@ function TranscriptRow({
   model,
   diffLayout,
   thinkingFold,
+  toolBackground,
+  activityFrames,
   background,
   toolCallId,
   toolName,
@@ -528,6 +550,7 @@ function TranscriptRow({
   toolResultView,
   toolStartedAt,
   toolDurationMs,
+  subagent,
   onToggleRow,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
@@ -549,7 +572,6 @@ function TranscriptRow({
             text={text}
             addMargin={addMargin}
             isSelected={isSelected}
-            isExpanded={isExpanded}
             onClick={onClick}
           />
         </Box>
@@ -562,6 +584,7 @@ function TranscriptRow({
           marginTop={addMargin ? 1 : 0}
           width="100%"
           backgroundColor={background}
+          ref={ref}
         >
           <Box minWidth={2}>
             <Text color="text">●</Text>
@@ -605,6 +628,7 @@ function TranscriptRow({
           <AssistantThinkingMessage
             thinking={text}
             addMargin={addMargin}
+            streaming={streaming}
             preview={
               streaming &&
               thinkingFold === 'preview' &&
@@ -657,6 +681,7 @@ function TranscriptRow({
             isExpanded={isExpanded}
             footnote={toolFootnote}
             diffLayout={diffLayout}
+            toolBackground={toolBackground}
           />
         </Box>
       )
@@ -708,6 +733,19 @@ function TranscriptRow({
           )}
         </Box>
       )
+    case 'subagent':
+      if (!subagent) return null
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <SubagentMessage
+            subagent={subagent}
+            addMargin={addMargin}
+            activityFrames={activityFrames}
+            isExpanded={isExpanded}
+            onClick={() => onToggleRow(rowId)}
+          />
+        </Box>
+      )
   }
 }
 
@@ -731,14 +769,19 @@ export function LogoHeader({
   model,
   effort,
   cwd,
+  whale = true,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
+  whale?: boolean
 }): React.ReactNode {
+  // Minimal mode drops the whole splash (whale art AND wordmark) — only the
+  // transcript and a bare status bar remain.
+  if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} />
     </Box>
   )
 }

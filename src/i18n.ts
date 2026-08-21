@@ -90,6 +90,11 @@ const dict = {
   'subagent-running': { zh: ' 运行中', en: ' running' },
   'subagent-archived': { zh: ' 已归档', en: ' archived' },
   'subagent-query-failed': { zh: '查询失败 · {{err}}', en: 'Query failed · {{err}}' },
+  'subagent-tools': { zh: '工具', en: 'Tools' },
+  'subagent-expand-hint': { zh: '按 Enter 展开完整输出', en: 'Press Enter to expand full output' },
+  'subagent-status-running': { zh: '运行中', en: 'running' },
+  'subagent-status-completed': { zh: '已完成', en: 'completed' },
+  'subagent-status-failed': { zh: '失败', en: 'failed' },
   'agent-preset-switched': { zh: 'Agent preset 已切换：{{preset}}', en: 'Agent preset switched: {{preset}}' },
   'context-low-warning': { zh: '上下文即将耗尽（剩余 {{percent}}%）· 运行 /clear 或新建会话', en: 'Context low ({{percent}}% remaining) · Run /clear or start a new session' },
   'rewind-unavailable': { zh: '回退不可用——会话服务未加载', en: 'Rewind unavailable — session services not loaded' },
@@ -249,11 +254,13 @@ const dict = {
   'btw-hint-done': { zh: '↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制', en: '↑/↓ scroll · Space/Enter/Esc dismiss · c copy' },
   'btw-llm-unavailable': { zh: '侧问不可用（llm 服务未挂载）', en: 'Side question unavailable (llm service not mounted)' },
   'exit-press-again': { zh: '再次按 Ctrl+C 退出', en: 'Press Ctrl+C again to exit' },
+  'esc-again-rewind': { zh: '再次按 Esc 时间回溯', en: 'Press Esc again to rewind' },
+  'esc-again-clear': { zh: '再次按 Esc 清空', en: 'Press Esc again to clear' },
   'new-session-started': { zh: '已新建会话', en: 'New session started' },
   'command-not-found': { zh: '/{{name}}：没有这个命令', en: '/{{name}}: no such command' },
-  'thinking-toggled': { zh: '思考模式：{{state}}', en: 'Thinking {{state}}' },
-  'thinking-on': { zh: '开启', en: 'on' },
-  'thinking-off': { zh: '关闭', en: 'off' },
+  'thinking-toggled': { zh: '思考过程：{{state}}', en: 'Thinking display: {{state}}' },
+  'thinking-on': { zh: '显示', en: 'shown' },
+  'thinking-off': { zh: '隐藏', en: 'hidden' },
   'tokens-usage': { zh: 'Tokens：{{in}} 输入 · {{out}} 输出', en: 'Tokens: {{in}} in · {{out}} out' },
   'tokens-usage-context': { zh: '{{usage}} · 上下文 {{percent}}%', en: '{{usage}} · {{percent}}% of context' },
 
@@ -303,10 +310,8 @@ const dict = {
 
   // ── components/LogoV2.tsx ───────────────────────────────────────────
   'logo-tagline': { zh: '探索未至之境！', en: 'Explore the uncharted!' },
-  'logo-tip-model': { zh: '切换模型', en: 'switch model' },
-  'logo-tip-help': { zh: '查看命令', en: 'view commands' },
-  'logo-tip-tab': { zh: '自动补全', en: 'autocomplete' },
   'logo-tip-prefix': { zh: '提示：', en: 'Tip: ' },
+  'logo-tip-more': { zh: '更多技巧', en: 'more tips' },
 
   // ── components/PromptInput.tsx ──────────────────────────────────────
   'input-sent-after-turn': { zh: '已发送，当前回合结束后处理', en: 'Sent, processed after the current turn' },
@@ -317,7 +322,7 @@ const dict = {
   'input-empty': { zh: '输入为空，没有可发送的内容', en: 'Empty input, nothing to send' },
   'input-interrupt-immediate': { zh: '已打断当前回合，正在立即处理', en: 'Interrupted current turn, processing immediately' },
   'input-clipboard-empty': { zh: '剪贴板为空', en: 'Clipboard is empty' },
-  'input-editor-unavailable': { zh: '未找到可用编辑器，请设置 $EDITOR（或 $VISUAL）环境变量', en: 'No editor available — set the $EDITOR (or $VISUAL) environment variable' },
+  'input-editor-unavailable': { zh: '错误：未配置编辑器。请设置 $VISUAL 或 $EDITOR 环境变量。', en: 'Error: No editor configured. Set $VISUAL or $EDITOR environment variable.' },
   'input-editor-failed': { zh: '外部编辑器失败：{{name}}', en: 'External editor failed: {{name}}' },
   'input-clipboard-read-failed': { zh: '读取剪贴板失败', en: 'Failed to read the clipboard' },
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
@@ -357,8 +362,14 @@ const dict = {
   'help-word-jumps': { zh: '{{mod}}←/→ 按词跳转', en: '{{mod}}←/→ for word jumps' },
   'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
-  'help-open-editor': { zh: 'ctrl+x 打开编辑器', en: 'ctrl+x to open editor' },
+  'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
+  'help-scroll-hint': {
+    zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',
+    en: '↑/↓ scroll · PgUp/PgDn page · Home/End jump · Esc close',
+  },
+  'tips-title': { zh: '使用技巧（快捷键 · 命令 · 工作流 · 个性化 · 避坑）', en: 'Usage tips (shortcuts · commands · workflow · display · gotchas)' },
+  'tips-hint': { zh: '↑/↓ 滚动 · Esc 关闭', en: '↑/↓ scroll · Esc to close' },
 
   // ── components/InterruptedByUser.tsx ────────────────────────────────
   'interrupted-by-user': { zh: '已打断 ', en: 'Interrupted ' },
@@ -384,6 +395,7 @@ const dict = {
   'settings-title': { zh: '插件设置', en: 'Plugin settings' },
   'settings-unavailable': { zh: '设置服务未挂载——只读', en: 'settings service absent — read-only' },
   'settings-empty': { zh: '没有可配置的插件设置（尚无插件注册设置区块）', en: 'No configurable plugin settings (no plugin has registered a section)' },
+  'settings-group-empty': { zh: '此分组没有可配置字段', en: 'No configurable fields in this group' },
   'settings-section-unavailable': { zh: '命名空间未注册', en: 'namespace not served' },
   'settings-readonly-heading': { zh: '其他设置命名空间（只读）', en: 'Other settings namespaces (read-only)' },
   'settings-readonly-hint': { zh: '以上命名空间尚无 TUI 设置区块，可手工编辑 {{path}}', en: 'No TUI section for these namespaces yet — edit {{path}} by hand' },
@@ -400,7 +412,8 @@ const dict = {
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
   'settings-discarded': { zh: '已放弃所有未保存的修改', en: 'Discarded all unsaved edits' },
-  'settings-hint-list': { zh: '**Enter** 编辑/切换 · s 保存 · d 放弃 · Esc 放弃/退出', en: '**Enter** edit/toggle · s save · d discard · Esc discard/exit' },
+  'settings-hint-list': { zh: '**Enter** 进入/编辑/切换 · s 保存 · d 放弃 · Esc 放弃/退出', en: '**Enter** open/edit/toggle · s save · d discard · Esc discard/exit' },
+  'settings-hint-group': { zh: '**Enter** 编辑/切换 · s 保存 · d 放弃 · Esc 返回', en: '**Enter** edit/toggle · s save · d discard · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
 
   // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
@@ -442,6 +455,9 @@ const dict = {
   'hint-select-exit': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** to select · Esc to exit' },
   'hint-fill-exit': { zh: '**Enter** 填入命令 · Esc 退出', en: '**Enter** to insert · Esc to exit' },
   'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
+  'statusline-hint-select': { zh: 'esc 返回输入', en: 'esc to return to input' },
+  'statusline-hint-working': { zh: 'esc 中断', en: 'esc to interrupt' },
+  'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
@@ -525,14 +541,12 @@ const dict = {
   'ext-dialog-no': { zh: '否', en: 'No' },
 
   // ── components/ThinkingToggle.tsx + messages/AssistantThinkingMessage.tsx ──
-  'thinking-title': { zh: '切换思考模式', en: 'Toggle thinking mode' },
-  'thinking-subtitle': { zh: '为本会话启用或关闭思考。', en: 'Enable or disable thinking for this session.' },
-  'thinking-enabled': { zh: '启用', en: 'Enabled' },
-  'thinking-enabled-desc': { zh: 'DeepSeek 会在回复前先思考', en: 'DeepSeek will think before responding' },
-  'thinking-disabled': { zh: '关闭', en: 'Disabled' },
-  'thinking-disabled-desc': { zh: 'DeepSeek 不做扩展思考，直接回复', en: 'DeepSeek will respond without extended thinking' },
-  'thinking-mid-warning': { zh: '在对话中途切换思考模式会增加延迟，并可能降低质量。建议在会话开始时设置。', en: 'Changing thinking mode mid-conversation will increase latency and may reduce quality. For best results, set this at the start of a session.' },
-  'thinking-proceed': { zh: '要继续吗？', en: 'Do you want to proceed?' },
+  'thinking-title': { zh: '思考过程显示', en: 'Thinking display' },
+  'thinking-subtitle': { zh: '只控制思考过程是否显示，不改变模型的思考行为。', en: 'Only controls whether reasoning is shown; it does not change model behavior.' },
+  'thinking-enabled': { zh: '显示', en: 'Shown' },
+  'thinking-enabled-desc': { zh: '在对话中显示 DeepSeek 的思考过程', en: "Show DeepSeek's reasoning in the conversation" },
+  'thinking-disabled': { zh: '隐藏', en: 'Hidden' },
+  'thinking-disabled-desc': { zh: '隐藏思考过程；模型仍会照常思考', en: 'Hide reasoning; the model will still think as usual' },
   'thinking-label': { zh: '思考', en: 'Thinking' },
 
   // ── components/HistorySearchDialog.tsx ──────────────────────────────
@@ -591,6 +605,35 @@ const dict = {
   'approval-yes': { zh: '允许（仅本次）', en: 'Yes, allow once' },
   'approval-no': { zh: '拒绝', en: 'No' },
   'approval-hint': { zh: '↑/↓ 选择 · Enter 确认 · Esc 拒绝', en: '↑/↓ select · Enter confirm · Esc reject' },
+
+  // ── components/Subagent*.tsx ────────────────────────────────────────
+  'subagent-model': { zh: '模型', en: 'Model' },
+  'subagent-duration': { zh: '时长', en: 'Duration' },
+  'subagent-status-label': { zh: '状态', en: 'Status' },
+  'subagent-status-cancelled': { zh: '已取消', en: 'Cancelled' },
+  'subagent-count-running': { zh: '运行中', en: 'running' },
+  'subagent-count-completed': { zh: '已完成', en: 'completed' },
+  'subagent-count-failed': { zh: '失败', en: 'failed' },
+  'subagent-running-label': { zh: '运行中', en: 'Running' },
+  'subagent-started': { zh: '开始时间', en: 'Started' },
+  'subagent-completed': { zh: '完成时间', en: 'Completed' },
+  'subagent-id': { zh: 'ID', en: 'ID' },
+  'subagent-error-label': { zh: '错误', en: 'Error' },
+  'subagent-output-label': { zh: '输出', en: 'Output' },
+  'subagent-no-output': { zh: '暂无输出', en: 'No output yet' },
+  'subagent-dashboard-title': { zh: ' 子代理面板 ', en: ' Subagent Dashboard ' },
+  'subagent-dashboard-hint-basic': { zh: '↑/↓ 浏览 · Esc 关闭', en: '↑/↓ browse · Esc close' },
+  'subagent-dashboard-hint-detail': { zh: '↑/↓ 选择 · Enter 查看详情 · Esc 关闭', en: '↑/↓ select · Enter view detail · Esc close' },
+  'subagent-detail-hint-basic': { zh: '↑/↓ 滚动 · Enter/Esc 返回', en: '↑/↓ scroll · Enter/Esc back' },
+  'subagent-detail-hint-enhanced': { zh: '↑/↓ 滚动 · X 中断 · Esc 返回', en: '↑/↓ scroll · X interrupt · Esc back' },
+  'subagent-card-prefix': { zh: '子代理：', en: 'Subagent: ' },
+  'subagent-tab-summary': { zh: '摘要', en: 'Summary' },
+  'subagent-no-summary': { zh: '暂无摘要', en: 'No summary yet' },
+  'subagent-no-tools': { zh: '暂无工具调用', en: 'No tool calls' },
+  'subagent-hint-page': { zh: '切页', en: 'page' },
+  'subagent-hint-scroll': { zh: '滚动', en: 'scroll' },
+  'subagent-hint-back': { zh: '返回', en: 'back' },
+  'subagent-empty-hint': { zh: '让主代理发起 Task 后，子代理会出现在这里', en: 'Subagents appear here once the main agent starts Task delegations' },
 
   // ── components/questions/PlanReviewPanel.tsx ────────────────────────
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },
@@ -678,7 +721,7 @@ const dict = {
   'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
-  'cmd-desc-thinking': { zh: '切换扩展思考显示' },
+  'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
   'cmd-desc-tokens': { zh: '查看会话 token 用量' },
   // Account / policy
   'cmd-desc-provider': { zh: '添加模型提供方（内置目录或自定义 API 端点）' },
@@ -762,6 +805,23 @@ const dict = {
   },
   'traj-empty': { zh: '暂无轨迹事件', en: 'No trajectory events yet' },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
+  
+  // ── subagent UI ──────────────────────────────────────────────────────
+  'subagent.unnamed': { zh: '未命名子代理', en: 'Unnamed subagent' },
+  'subagent.no-model': { zh: '未知模型', en: 'Unknown model' },
+  'subagent.status.running': { zh: '运行中', en: 'Running' },
+  'subagent.status.completed': { zh: '已完成', en: 'Completed' },
+  'subagent.status.failed': { zh: '失败', en: 'Failed' },
+  'subagent.status.pending': { zh: '等待中', en: 'Pending' },
+  'subagent.dashboard.title': { zh: '子代理面板', en: 'Subagent Dashboard' },
+  'subagent.dashboard.stats': { zh: '运行中: {{running}} · 已完成: {{completed}} · 失败: {{failed}}', en: 'Running: {{running}} · Completed: {{completed}} · Failed: {{failed}}' },
+  'subagent.dashboard.empty': { zh: '暂无子代理', en: 'No subagents yet' },
+  'subagent.dashboard.help': { zh: '↑↓ 选择 · Enter 查看详情 · Esc 返回', en: '↑↓ select · Enter view details · Esc back' },
+  'subagent.detail.not-found': { zh: '子代理未找到', en: 'Subagent not found' },
+  'subagent.detail.press-esc': { zh: '按 Esc 返回', en: 'Press Esc to go back' },
+  'subagent.detail.output': { zh: '输出', en: 'Output' },
+  'subagent.detail.no-output': { zh: '暂无输出', en: 'No output yet' },
+  'subagent.detail.help': { zh: 'Esc 返回面板', en: 'Esc back to dashboard' },
 } as const
 
 export type I18nKey = keyof typeof dict

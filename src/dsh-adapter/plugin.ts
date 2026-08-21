@@ -27,7 +27,9 @@ import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
+import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
+import { attachHerdrIntegration } from '../herdr.js'
 import { Chat } from '../screens/Chat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
@@ -361,6 +363,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // screen edits this key live through the dsh-tui namespace.
     diffLayout: config.diffLayout,
     thinkingFold: config.thinkingFold,
+    toolBackground: config.toolBackground,
+    statusBar: config.statusBar,
     handle,
   })
   // Register the dsh-tui settings namespace so the /settings screen can
@@ -373,35 +377,77 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+        toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        statusBar: Schema.object({
+          compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
+          model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
+          thinking: Schema.boolean().default(DEFAULT_STATUS_BAR.thinking),
+          cwd: Schema.boolean().default(DEFAULT_STATUS_BAR.cwd),
+          contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
+          cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
+          tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
+          tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
+          gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
+          sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
+          mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
+          contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
+          activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
+          trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
+          shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
+        }).default({ ...DEFAULT_STATUS_BAR }),
+        // Header pixel whale art; on unless settings.yaml says otherwise.
+        whale: Schema.boolean().default(true),
+        // Minimal mode: strips the header splash, emoji glyphs, and
+        // decorative colors; code highlight and tool colors stay.
+        minimal: Schema.boolean().default(false),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
         lang: Schema.union(['zh', 'en']),
       }),
     )
-    const applyLayout = (value: { diffLayout?: 'auto' | 'split' | 'unified' }): void => {
+    type SettingsValue = {
+      diffLayout?: 'auto' | 'split' | 'unified'
+      lang?: 'zh' | 'en'
+      whale?: boolean
+      minimal?: boolean
+      thinkingFold?: 'preview' | 'full'
+      toolBackground?: ToolBackground
+      statusBar?: Partial<StatusBarConfig>
+    }
+    const applyLayout = (value: SettingsValue): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+    }
+    const applyWhale = (value: { whale?: boolean }): void => {
+      channel.setWhale(value.whale ?? true)
+    }
+    const applyMinimal = (value: { minimal?: boolean }): void => {
+      channel.setMinimal(value.minimal ?? false)
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
     // the /lang command and next-boot resolution agree. DSH_TUI_LANG
     // stays the top precedence — a pinned env is never overridden by the
     // document.
-    const applyLang = (value: { lang?: 'zh' | 'en' }): void => {
+    const applyLang = (value: SettingsValue): void => {
       if (!isLang(process.env.DSH_TUI_LANG) && isLang(value.lang)) {
         setLang(value.lang)
         writeLangPref(value.lang)
       }
     }
-    // thinkingFold rides the same namespace: /settings writes it live and
-    // the channel picks it up at the next step seal.
-    const applyThinkingFold = (value: { thinkingFold?: 'preview' | 'full' }): void => {
+    // Display preferences ride the same namespace: /settings writes them
+    // live and future render consumers observe the channel version bump.
+    const applyDisplay = (value: SettingsValue): void => {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
+      channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
+      channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
-    const apply = (next: { diffLayout?: 'auto' | 'split' | 'unified'; lang?: 'zh' | 'en'; thinkingFold?: 'preview' | 'full' }): void => {
+    const apply = (next: SettingsValue): void => {
       applyLayout(next)
+      applyWhale(next)
+      applyMinimal(next)
       applyLang(next)
-      applyThinkingFold(next)
+      applyDisplay(next)
     }
     apply(scope.get())
     scope.watch(next => {
@@ -419,6 +465,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
+      groups: [{ id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } }],
       fields: [
         {
           path: ['lang'],
@@ -463,6 +510,170 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'full', label: 'Full until turn end', descriptions: { zh: '展开至轮末' } },
           ],
         },
+        {
+          path: ['toolBackground'],
+          label: 'Tool background',
+          descriptions: { zh: '工具卡背景' },
+          hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis.',
+          hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调。' },
+          kind: 'select',
+          options: [
+            { value: 'none', label: 'None', descriptions: { zh: '无' } },
+            { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
+            { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
+          ],
+        },
+        {
+          path: ['statusBar', 'compact'],
+          label: 'Compact status bar',
+          descriptions: { zh: '紧凑状态栏' },
+          hint: 'Prefer the compact status presentation when terminal space allows.',
+          hintDescriptions: { zh: '终端空间允许时优先使用紧凑状态栏布局。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'model'],
+          label: 'Show model',
+          descriptions: { zh: '显示模型' },
+          hint: 'Show the live model id in the status bar.',
+          hintDescriptions: { zh: '在状态栏显示当前模型标识。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'thinking'],
+          label: 'Show thinking',
+          descriptions: { zh: '显示思考' },
+          hint: 'Show the live reasoning effort or thinking mode.',
+          hintDescriptions: { zh: '显示当前推理强度或思考模式。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'cwd'],
+          label: 'Show working directory',
+          descriptions: { zh: '显示工作目录' },
+          hint: 'Show the session working directory.',
+          hintDescriptions: { zh: '显示当前会话的工作目录。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'contextUsage'],
+          label: 'Show context usage',
+          descriptions: { zh: '显示上下文用量' },
+          hint: 'Show current context-window consumption.',
+          hintDescriptions: { zh: '显示当前上下文窗口占用情况。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'cache'],
+          label: 'Show cache',
+          descriptions: { zh: '显示缓存' },
+          hint: 'Show prompt-cache hit information.',
+          hintDescriptions: { zh: '显示提示词缓存命中信息。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'tokens'],
+          label: 'Show token totals',
+          descriptions: { zh: '显示 Token 总量' },
+          hint: 'Show running input and output token totals.',
+          hintDescriptions: { zh: '显示累计输入与输出 Token。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'tps'],
+          label: 'Show output speed',
+          descriptions: { zh: '显示输出速度' },
+          hint: 'Show live and recent tokens-per-second metrics.',
+          hintDescriptions: { zh: '显示实时及近期每秒 Token 指标。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'gitBranch'],
+          label: 'Show git branch',
+          descriptions: { zh: '显示 Git 分支' },
+          hint: 'Show the current git branch when available.',
+          hintDescriptions: { zh: '可用时显示当前 Git 分支。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'sessionTitle'],
+          label: 'Show session title',
+          descriptions: { zh: '显示会话标题' },
+          hint: 'Show the current session title.',
+          hintDescriptions: { zh: '显示当前会话标题。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'mode'],
+          label: 'Show session mode',
+          descriptions: { zh: '显示会话模式' },
+          hint: 'Show the active non-default session mode.',
+          hintDescriptions: { zh: '显示当前启用的非默认会话模式。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'contextBar'],
+          label: 'Show context progress bar',
+          descriptions: { zh: '显示上下文进度条' },
+          hint: 'Show the segmented context progress bar on its own footer row.',
+          hintDescriptions: { zh: '在底部单独一行显示分段上下文进度条。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'activity'],
+          label: 'Show activity summary',
+          descriptions: { zh: '显示活动摘要' },
+          hint: 'Show the idle working-activity summary.',
+          hintDescriptions: { zh: '显示空闲时的工作活动摘要。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'trajectory'],
+          label: 'Show trajectory strip',
+          descriptions: { zh: '显示轨迹条' },
+          hint: 'Show the animated mini trajectory strip at the footer edge.',
+          hintDescriptions: { zh: '在状态栏边缘显示动态迷你轨迹条。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'shortcutHint'],
+          label: 'Show shortcut reminder',
+          descriptions: { zh: '显示快捷键提示' },
+          hint: 'Control only the idle `? for shortcuts` reminder; pressing ? and the Esc shortcut hints are unaffected.',
+          hintDescriptions: { zh: '仅控制空闲时的 `? for shortcuts` 提示；按 ? 打开快捷键以及 Esc 快捷提示均不受影响。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['whale'],
+          label: 'Whale art',
+          descriptions: { zh: '鲸鱼娘' },
+          hint: 'Show the pixel whale in the header splash.',
+          hintDescriptions: { zh: '开屏头部显示像素鲸鱼娘。' },
+          kind: 'boolean',
+        },
+        {
+          path: ['minimal'],
+          label: 'Minimal mode',
+          descriptions: { zh: '极简模式' },
+          hint: 'Hide the header splash, emoji glyphs, and decorative colors; code highlight and tool colors stay. Trims the status bar to model + cwd.',
+          hintDescriptions: { zh: '隐藏开屏头部、emoji 状态符与装饰性配色；代码高亮与工具配色保留，底栏只留模型与目录。' },
+          kind: 'boolean',
+        },
       ],
     })
     ctx.effect(() => unregister)
@@ -480,6 +691,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.on('approval/request', (req, next) =>
       String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
+  }
+  const herdr = attachHerdrIntegration({
+    channel,
+    questions: questionStore,
+    approvals: approvalStore,
+  })
+  if (herdr !== undefined) {
+    ctx.effect(() => () => herdr.dispose())
   }
   // Positional command-line arguments are the initial prompt (issue #53):
   // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,
