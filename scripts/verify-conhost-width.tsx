@@ -16,7 +16,9 @@ type ProbeResult = {
 
 if (process.argv[2] === '--probe') {
   Object.defineProperty(process, 'platform', { value: 'win32' })
-  Object.defineProperty(process.stdout, 'isTTY', { value: true })
+  Object.defineProperty(process.stdout, 'isTTY', {
+    value: process.argv[3] === 'injected' ? false : true,
+  })
 
   for (const name of [
     'WT_SESSION',
@@ -41,7 +43,7 @@ if (process.argv[2] === '--probe') {
     ]),
   )
   let line: string | undefined
-  if (process.argv[3] === 'conhost') {
+  if (process.argv[3] === 'conhost' || process.argv[3] === 'injected') {
     const [{ Writable }, React, { Terminal: XTerm }, { render, Text }] =
       await Promise.all([
         import('node:stream'),
@@ -80,7 +82,7 @@ if (process.argv[2] === '--probe') {
   process.exit(0)
 }
 
-function probe(mode: 'conhost' | 'modern'): ProbeResult {
+function probe(mode: 'conhost' | 'modern' | 'injected'): ProbeResult {
   const result = spawnSync(
     process.execPath,
     ['--import', 'tsx/esm', fileURLToPath(import.meta.url), '--probe', mode],
@@ -97,7 +99,9 @@ function probe(mode: 'conhost' | 'modern'): ProbeResult {
 
 const conhost = probe('conhost')
 const modern = probe('modern')
+const injected = probe('injected')
 const { isClassicConhost } = await import('../src/ink/terminal.js')
+const { needsConhostWidthCompensation } = await import('../src/ink/stringWidth.js')
 let failures = 0
 
 function assert(condition: boolean, message: string): void {
@@ -125,6 +129,10 @@ assert(
   'Windows Terminal keeps ambiguous glyphs narrow',
 )
 assert(
+  injected.line?.indexOf('B') === 3,
+  'renderer honors injected stdout instead of global stdout',
+)
+assert(
   conhost.line?.indexOf('B') === 3,
   'renderer anchors the cell after a narrow conhost glyph',
 )
@@ -135,6 +143,14 @@ assert(
   'excludes xterm-style hosts',
 )
 assert(!isClassicConhost('win32', {}, false), 'excludes non-TTY renderers')
+assert(
+  needsConhostWidthCompensation('❤︎', { ambiguousAsWide: true }) === false,
+  'VS15 text-style heart does not trigger conhost compensation',
+)
+assert(
+  needsConhostWidthCompensation('·', { ambiguousAsWide: true }) === true,
+  'ambiguous middle dot still triggers conhost compensation',
+)
 
 if (failures > 0) process.exit(1)
 console.log('conhost width policy verified')

@@ -294,17 +294,26 @@ const bunStringWidth =
     : null
 
 const BUN_STRING_WIDTH_OPTS = { ambiguousIsNarrow: true } as const
-const CLASSIC_CONHOST = isClassicConhost()
+
+export type StringWidthOptions = {
+  ambiguousAsWide?: boolean
+}
 
 /**
  * Whether a grapheme needs the classic-conhost two-cell safety path.
  * Conhost asks its active font whether ambiguous glyphs are wide, so the
  * renderer must tolerate either physical width after reserving two cells.
  */
-export function needsConhostWidthCompensation(grapheme: string): boolean {
-  if (!CLASSIC_CONHOST) return false
-  const codePoint = grapheme.codePointAt(0)
-  return codePoint !== undefined && isAmbiguousWidth(codePoint)
+export function needsConhostWidthCompensation(
+  grapheme: string,
+  options: StringWidthOptions = {},
+): boolean {
+  const ambiguousAsWide = options.ambiguousAsWide ?? isClassicConhost()
+  if (!ambiguousAsWide) return false
+  return (
+    stringWidthFor(grapheme, { ambiguousAsWide }) === 2 &&
+    stringWidthFor(grapheme, { ambiguousAsWide: false }) === 1
+  )
 }
 
 /**
@@ -316,8 +325,18 @@ export function needsConhostWidthCompensation(grapheme: string): boolean {
  * @param str - the string to measure.
  * @returns the number of terminal cells the string occupies.
  */
-export const stringWidth: (str: string) => number = CLASSIC_CONHOST
-  ? str => stringWidthJavaScript(str, true)
-  : bunStringWidth
-    ? str => bunStringWidth(str, BUN_STRING_WIDTH_OPTS)
-    : str => stringWidthJavaScript(str, false)
+export function stringWidthFor(
+  str: string,
+  options: StringWidthOptions = {},
+): number {
+  if (options.ambiguousAsWide === true) {
+    return stringWidthJavaScript(str, true)
+  }
+  return bunStringWidth
+    ? bunStringWidth(str, BUN_STRING_WIDTH_OPTS)
+    : stringWidthJavaScript(str, false)
+}
+
+export const stringWidth: (str: string) => number = isClassicConhost()
+  ? str => stringWidthFor(str, { ambiguousAsWide: true })
+  : str => stringWidthFor(str)
