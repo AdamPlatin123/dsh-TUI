@@ -18,10 +18,13 @@ export interface ImageDimensions {
   height: number
 }
 
+/** 图片媒体类型联合（与 attachment 域一致；降采样输出恒为 png）。 */
+export type ShrinkMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+
 /** 降采样结果。shrunk=false 表示原样通过（未超限或 sharp 不可用）。 */
 export interface ShrinkResult extends ImageDimensions {
   data: Uint8Array
-  mediaType: string
+  mediaType: ShrinkMediaType
   shrunk: boolean
 }
 
@@ -37,7 +40,7 @@ export interface ShrinkLimits {
  * @param mediaType - 声明的媒体类型（决定解析路径）。
  * @returns 尺寸；无法解析（含 webp/gif 与损坏头）时 undefined。
  */
-export function imageDimensions(data: Uint8Array, mediaType: string): ImageDimensions | undefined {
+export function imageDimensions(data: Uint8Array, mediaType: ShrinkMediaType): ImageDimensions | undefined {
   if (mediaType === 'image/png') return pngDimensions(data)
   if (mediaType === 'image/jpeg') return jpegDimensions(data)
   return undefined
@@ -86,7 +89,7 @@ interface SharpPipeline {
   png(options: { compressionLevel: number }): SharpPipeline
   toBuffer(): Promise<Buffer>
 }
-type SharpFactory = (input: Buffer, options?: { failOn?: 'none' }) => SharpPipeline
+type SharpFactory = (input: Buffer, options?: { failOn?: 'none' | 'truncated' }) => SharpPipeline
 
 let sharpModule: SharpFactory | null | undefined
 
@@ -115,7 +118,7 @@ async function loadSharp(): Promise<SharpFactory | null> {
  */
 export async function shrinkImageToLimits(
   data: Uint8Array,
-  mediaType: string,
+  mediaType: ShrinkMediaType,
   limits: ShrinkLimits,
 ): Promise<ShrinkResult> {
   const probe = imageDimensions(data, mediaType)
@@ -128,29 +131,40 @@ export async function shrinkImageToLimits(
   }
   const sharp = await loadSharp()
   if (sharp === null) {
-    return probe === undefined
-      ? { data, mediaType, shrunk: false, width: 0, height: 0 }
-      : { data, mediaType, shrunk: false, width: probe.width, height: probe.height }
+    return { data, mediaType, shrunk: false, ...(probe ?? { width: 0, height: 0 }) }
   }
-  let pipeline = sharp(Buffer.from(data.buffer, data.byteOffset, data.byteLength), { failOn: 'none' })
-  let scale = probe === undefined ? 1 : Math.min(1, maxDimension / Math.max(probe.width, probe.height))
-  let encoded: Uint8Array = data
-  let dims: ImageDimensions = probe ?? { width: 0, height: 0 }
-  for (let round = 0; round < 3; round += 1) {
-    const meta = await pipeline.metadata()
-    const target = Math.max(1, Math.round(Math.max(meta.width ?? 1, meta.height ?? 1) * scale))
-    const buffer = await pipeline
-      .resize({ width: target, height: target, fit: 'inside', withoutEnlargement: true })
-      .png({ compressionLevel: 6 })
-      .toBuffer()
-    encoded = new Uint8Array(buffer)
-    const after = await sharp(buffer).metadata()
-    dims = { width: after.width ?? 0, height: after.height ?? 0 }
-    if (encoded.byteLength <= limits.maxImageBytes && Math.max(dims.width, dims.height) <= maxDimension) {
-      return { data: encoded, mediaType: 'image/png', shrunk: true, width: dims.width, height: dims.height }
+  // failOn 'truncated'：容忍非规范但可解码的文件，拒绝损坏数据（默认级别
+  // 对非受信字素的稳健面；'none' 会跳过像素校验直喂原生解码器）。
+  // 整个缩放过程包 try/catch：sharp 对畸形数据抛错时降级为原样提交，
+  // 由服务端严格准入兜底——降采样永远不让粘贴路径崩溃。
+  try {
+    let pipeline = sharp(Buffer.from(data.buffer, data.byteOffset, data.byteLength), { failOn: 'truncated' })
+    let scale = probe === undefined ? Number.POSITIVE_INFINITY : Math.min(1, maxDimension / Math.max(probe.width, probe.height))
+    let encoded: Uint8Array = data
+    let dims: ImageDimensions = probe ?? { width: 0, height: 0 }
+    for (let round = 0; round < 3; round += 1) {
+      const meta = await pipeline.metadata()
+      // 头解析失败（webp/gif）时首轮据实重算比例——metadata 拿到真实尺寸。
+      if (!Number.isFinite(scale)) {
+        scale = Math.min(1, maxDimension / Math.max(meta.width ?? 1, meta.height ?? 1))
+      }
+      const target = Math.max(1, Math.round(Math.max(meta.width ?? 1, meta.height ?? 1) * scale))
+      const buffer = await pipeline
+        .resize({ width: target, height: target, fit: 'inside', withoutEnlargement: true })
+        .png({ compressionLevel: 6 })
+        .toBuffer()
+      encoded = new Uint8Array(buffer)
+      const after = await sharp(buffer).metadata()
+      dims = { width: after.width ?? 0, height: after.height ?? 0 }
+      if (encoded.byteLength <= limits.maxImageBytes && Math.max(dims.width, dims.height) <= maxDimension) {
+        return { data: encoded, mediaType: 'image/png', shrunk: true, width: dims.width, height: dims.height }
+      }
+      scale *= Math.max(0.5, Math.sqrt(limits.maxImageBytes / Math.max(1, encoded.byteLength)))
+      pipeline = sharp(buffer, { failOn: 'truncated' })
     }
-    scale *= Math.max(0.5, Math.sqrt(limits.maxImageBytes / Math.max(1, encoded.byteLength)))
-    pipeline = sharp(buffer, { failOn: 'none' })
+    // 三轮仍未进限：字节超限由 channel 侧拦下抛错；尺寸超限交服务端准入。
+    return { data: encoded, mediaType: 'image/png', shrunk: true, width: dims.width, height: dims.height }
+  } catch {
+    return { data, mediaType, shrunk: false, ...(probe ?? { width: 0, height: 0 }) }
   }
-  return { data: encoded, mediaType: 'image/png', shrunk: true, width: dims.width, height: dims.height }
 }

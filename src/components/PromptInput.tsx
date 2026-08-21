@@ -682,6 +682,8 @@ export function PromptInput({
     // 剪贴板图片同一条准入管道；其余情况（普通文件/多行文本）保持原样。
     if (event?.isPasted && input.length > 0) {
       const pasted = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      // 与 Ctrl+V 分支同款前置：帮助浮层开着时插入会落在面板背后。
+      if (helpOpen) onToggleHelp()
       // 拖拽图片路径（kitty 形态：单一图片绝对路径/file:// URI）→ stageImage
       // 管道转附件 token；与 main 的大粘贴折叠语义正交（路径是短文本不折叠）。
       const asPath = decodeFileUri(pasted.trim())

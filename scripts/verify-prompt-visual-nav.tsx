@@ -105,6 +105,22 @@ await sleep(400)
 const heightBefore = inputHeight()
 check('场景1前置：长文本折成 3 视觉行（高 5）', heightBefore === 5, `高 ${heightBefore}`)
 await feed('\x1b[A') // ↑：视觉行 2 → 1
+// 光标位置断言：反色 caret 格必须上移一行（行位是抓偏移回归的真判据）。
+const caretRows = () => {
+  const buf = term.buffer.active
+  const rows: number[] = []
+  for (let y = 0; y < ROWS; y++) {
+    const line = buf.getLine(y)
+    if (!line) continue
+    for (let x = 0; x < line.length; x++) if (line.getCell(x)?.isInverse()) { rows.push(y); break }
+  }
+  return rows
+}
+const caretBeforeUp = caretRows()[0] ?? -1
+await feed('\x1b[B') // ↓ 回末行
+const caretAfterDown = caretRows()[0] ?? -1
+check('光标 ↑↓ 往返行位随视觉行移动', caretAfterDown > caretBeforeUp, `${caretBeforeUp}->${caretAfterDown}`)
+await feed('\x1b[A') // 回视觉行 1
 const heightAfterUp = inputHeight()
 check('场景1：↑ 后 value 保持长文本（未被历史替换）', inputHas(LONG.slice(0, 20)), `高 ${heightAfterUp}`)
 check('场景1：↑ 后高度不变（无闪动）', heightAfterUp === heightBefore, `${heightBefore}→${heightAfterUp}`)
@@ -121,6 +137,28 @@ await sleep(400)
 await feed('\x1b[F') // End 行尾
 await feed('\x1b[A') // ↑ 到上一行（x 行，10 字符）——光标 clamp 到 x 行行尾
 check('场景2：跨 \n 行 ↑ 成功（无异常）', inputHeight() >= 3, `高 ${inputHeight()}`)
+
+// ── 场景 3：代理对吸附——emoji 行 ↑↓ 后在落点插入，提交内容无孤立代理 ──
+// 用「插入」而非「退格」验证：退格删单 code unit 是仓库既有独立缺陷
+//（纯粘贴 emoji 后退格同样产生孤立代理，与本 PR 无关），插入才能干净
+// 锁定「↑/↓ 落点不在代理对中间」的语义——落点中间则插入字符会拆开代理对。
+{
+  await feed('\x1b', 200) // Esc 清空
+  const emojiText = 'ab\n' + '😀'.repeat(30)
+  stdin.write('\x1b[200~' + emojiText + '\x1b[201~')
+  await sleep(400)
+  await feed('\x1b[A') // ↑ 到首行（ab）——colChars=2 clamp 到目标行
+  await feed('\x1b[B') // ↓ 回 emoji 行：colChars=2 落在第一个代理对内部边界处
+  await feed('X')       // 在落点插入标记字符
+  await feed('\r')     // 提交
+  const submittedText = submitted[submitted.length - 1] ?? ''
+  const hasLoneSurrogate = /(?:[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff])/.test(submittedText)
+  check('代理对吸附：emoji 行 ↑↓ 落点插入后提交内容无孤立代理', !hasLoneSurrogate, JSON.stringify(submittedText.slice(0, 24)))
+  const xCount = (submittedText.match(/X/g) ?? []).length
+  check('代理对吸附：标记字符恰好落在 emoji 之间（1 个 X，30 个 emoji 完整）',
+    xCount === 1 && (submittedText.match(/😀/g) ?? []).length === 30,
+    `X=${xCount} emoji=${(submittedText.match(/😀/g) ?? []).length}`)
+}
 
 if (failures > 0) {
   process.stdout.write(`verify-prompt-visual-nav: ${failures} assertion(s) failed\n`)
