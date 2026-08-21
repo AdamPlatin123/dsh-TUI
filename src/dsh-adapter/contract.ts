@@ -50,6 +50,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-persona',
   '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-skill',
   '@deepseek-ai/dsh-storage',
   '@deepseek-ai/dsh-storage-domain',
@@ -86,7 +87,8 @@ function resolvePackageJson(packageName: string): string | undefined {
 let cachedVersions: Record<string, string | undefined> | undefined
 export function installedUpstreamVersions(): Record<string, string | undefined> {
   // Package manifests do not change mid-process; memoize so per-call gates
-  // (e.g. the command-images line check) stay cheap.
+  // (e.g. the command-images line check) stay cheap. Frozen so callers can
+  // never corrupt the shared cache.
   if (cachedVersions !== undefined) return cachedVersions
   const result: Record<string, string | undefined> = {}
   for (const packageName of UPSTREAM_BLESSED_PACKAGES) {
@@ -102,8 +104,8 @@ export function installedUpstreamVersions(): Record<string, string | undefined> 
     }
     result[packageName] = version
   }
-  cachedVersions = result
-  return result
+  cachedVersions = Object.freeze(result)
+  return cachedVersions
 }
 
 /** The installed upstream rc line of one blessed package (undefined when
@@ -115,8 +117,22 @@ export function installedLineOf(packageName: string): number | undefined {
 }
 
 function rcNumber(version: string | undefined): number | undefined {
-  const match = /0\.1\.0-rc\.(\d+)/u.exec(version ?? '')
+  const match = /^0\.1\.0-rc\.(\d+)$/u.exec(version ?? '')
   return match === null ? undefined : Number(match[1])
+}
+
+/** The distinct upstream rc lines installed across the blessed harness
+ *  packages (framework packages excluded). One line = coherent install;
+ *  several = a mixed tree, which the per-package drift check cannot see.
+ *  Empty when nothing (or no harness package) is installed. */
+export function installedUpstreamLines(): number[] {
+  const lines = new Set<number>()
+  for (const packageName of UPSTREAM_BLESSED_PACKAGES) {
+    if (UPSTREAM_FRAMEWORK_MAJORS[packageName] !== undefined) continue
+    const line = rcNumber(installedUpstreamVersions()[packageName])
+    if (line !== undefined) lines.add(line)
+  }
+  return [...lines].sort((a, b) => a - b)
 }
 
 /**
