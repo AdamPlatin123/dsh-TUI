@@ -115,10 +115,35 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'workspace', description: 'Resume, rename, or open a workspace' },
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
+  { name: 'tips', description: 'Show usage tips and shortcuts' },
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
   { name: 'q', description: 'Exit dsh-tui', tag: 'alias of /exit' },
 ]
+
+/**
+ * Hidden slash commands: intentionally not exposed in the `/` suggestion
+ * menu or Help, but still recognized as local commands when typed. They are
+ * kept out of `LOCAL_COMMANDS` so `filterCommands`/`completeCommands` never
+ * surface them; dispatch recognizes them via {@link HIDDEN_COMMAND_NAMES}.
+ */
+export const HIDDEN_COMMANDS: readonly LocalCommand[] = [
+  { name: 'deepseek', description: 'Hidden DeepSeek easter egg' },
+]
+
+/** Names of hidden commands, for fast dispatch/lookup. */
+export const HIDDEN_COMMAND_NAMES: ReadonlySet<string> = new Set(
+  HIDDEN_COMMANDS.map(command => command.name),
+)
+
+/**
+ * Whether the input names a hidden command (same slash-optional trimming
+ * rules as {@link isLocalCommandName}).
+ */
+export function isHiddenCommandName(input: string): boolean {
+  const name = input.replace(/^\//, '').trim()
+  return HIDDEN_COMMAND_NAMES.has(name)
+}
 
 /**
  * Resolve a command's description in the active UI language. The en text in
@@ -165,7 +190,7 @@ export function isLocalCommandName(
   // Trailing whitespace is legal (Tab completion leaves a space after the
   // name so the user can type arguments).
   const name = input.replace(/^\//, '').trim()
-  return list.some(command => command.name === name)
+  return HIDDEN_COMMAND_NAMES.has(name) || list.some(command => command.name === name)
 }
 
 /**

@@ -18,7 +18,7 @@ integrated terminal** (xterm.js). This page covers two ways to use it:
    start; for when you do not want the extension.
 
 > Version note: `dsh-tui` on this page refers to this repository (the TUI
-> plugin, currently **0.7.1**; 0.7.0+ recommended); `dsh-tui-vscode` refers
+> plugin, currently **0.8.3**; 0.7.0+ recommended); `dsh-tui-vscode` refers
 > to the companion extension (currently **0.5.1**). The two version and
 > release independently. See the
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)
@@ -241,6 +241,9 @@ required).
    dsh-tui --resume
    ```
 
+   > `-c` / `--continue` is equivalent to `--resume`; `dsh-tui --resume <id>`
+   > (or `--resume=<id>`, since 0.7.0) resumes a specific session.
+
 dsh-TUI has dedicated compatibility paths for xterm.js (VS Code / Cursor /
 code-server): truecolor, OSC 8 links (rendered clickable by VS Code itself),
 OSC 52 clipboard (VS Code prompts for permission on first use), synchronized
@@ -249,9 +252,9 @@ output and smooth draining — handled in `src/ink/` under the
 scrolling, and double-Esc time travel behave the same as in a standalone
 terminal.
 
-### Make `Ctrl+X` edit the current input in VS Code
+### Make `Ctrl+G` edit the current input in VS Code
 
-The TUI's `Ctrl+X` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
+The TUI's `Ctrl+G` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
 `code -w` in the terminal environment (`settings.json`, key
 `terminal.integrated.env.<platform>`):
 

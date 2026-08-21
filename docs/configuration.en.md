@@ -100,6 +100,14 @@ Usage rules:
   does not overwrite it with the current default.
 - Liangshen mode ships with dsh-tui and is installed into the user preset root
   at startup. An existing unmanaged directory with the same id is preserved.
+- Liangshen mode's first-round `bash` on Windows runs an auto-discovered Git
+  Bash: candidates are the installation tree of a `git.exe` found on PATH
+  (covers installer, portable, and Scoop layouts; Scoop shims are followed),
+  then conventional install roots and Scoop's conventional directories, then
+  bare `bash` on PATH — never accepting the System32 WSL launcher as Git Bash.
+  Set `DSH_TUI_LIANGSHEN_BASH_PATH` to an absolute `bash.exe` path to pin it
+  explicitly (the pin is the only candidate; a miss warns and skips
+  registration, exposing the full tool catalog on the first round).
 
 Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
 `agent.cordis.yml` file. Under the default DSH home this is
@@ -146,7 +154,7 @@ for the complete field reference.
 
 | Variable | Purpose |
 | --- | --- |
-| `VISUAL` / `EDITOR` | External editor opened by `Ctrl+X` (`VISUAL` wins; arguments like `code --wait` are allowed; POSIX falls back to `vi`) |
+| `VISUAL` / `EDITOR` | External editor opened by `Ctrl+G` (`VISUAL` wins; arguments like `code --wait` are allowed; with neither set the TUI prompts you to configure one — no `vi` fallback) |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |

@@ -2,13 +2,17 @@ import React from 'react'
 import { readFile, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
-import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
+import { EffortChargeGlyph } from './EffortChargeGlyph.js'
+import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortTierBadge } from './EffortTierBadge.js'
+import { isLightThemeActive } from '../theme.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { parseCommandName } from '../commands.js'
+import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { isMod } from '../utils/modifiers.js'
@@ -108,7 +112,7 @@ export interface PromptInputProps {
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
  * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
- * cursor, Tab completes the selected command, Ctrl+X opens the draft in the
+ * cursor, Tab completes the selected command, Ctrl+G opens the draft in the
  * external editor ($VISUAL/$EDITOR), Escape clears (or closes the help
  * menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
@@ -134,6 +138,7 @@ export function PromptInput({
   onRewindRequest,
   controllerRef,
 }: PromptInputProps) {
+  const [themeName] = useTheme()
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const valueRef = React.useRef(value)
@@ -179,7 +184,7 @@ export function PromptInput({
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /** True while the external editor owns the terminal (Ctrl+X round-trip). */
+  /** True while the external editor owns the terminal (Ctrl+G round-trip). */
   const editorBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
@@ -189,6 +194,11 @@ export function PromptInput({
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
+  const helpScrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  // OverlayAbove reserves six terminal rows for the composer/status chrome;
+  // the help block also keeps one row below it. Its own final row is a
+  // persistent navigation hint, leaving the remainder to ScrollBox.
+  const helpViewportHeight = Math.max(3, Math.max(terminalRows - 6, 4) - 1)
 
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
@@ -354,16 +364,19 @@ export function PromptInput({
   }
 
   /**
-   * Execute a slash command (built-in or plugin-registered) when the input
-   * resolves to one: the name parses as the first token so `/plan off`
-   * dispatches `plan` with its argument text, and the merged command list
-   * (locals + registry) decides whether the line is a command at all.
+   * Execute a slash command (built-in, plugin-registered, or hidden) when
+   * the input resolves to one: the name parses as the first token so
+   * `/plan off` dispatches `plan` with its argument text, and the merged
+   * command list (locals + registry) decides whether the line is a command
+   * at all. Hidden commands are recognized even though they are intentionally
+   * absent from the suggestion/help catalogs.
    */
   const tryRunCommand = (text: string): boolean => {
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
     const known = channel.commandList.some(command => command.name === parsed.name)
+      || isHiddenCommandName(parsed.name)
     if (!known) return false
     const handled = onRunCommand(parsed.name, parsed.rawInput)
     if (handled) {
@@ -486,14 +499,23 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+X / Cmd+X: edit the current draft in $VISUAL/$EDITOR (issue #123,
+    // Help is modal for modified keys and every Enter variant. Ctrl+V above
+    // is the intentional exception: paste closes Help and inserts visibly.
+    // Swallow here before editor/submit/interrupt branches can mutate hidden
+    // composer or working-turn state; plain typing still dismisses Help below.
+    if (helpOpen && !key.escape && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
+      event.stopImmediatePropagation()
+      return
+    }
+
+    // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
     // readline's edit-and-execute-command). The draft is written to a temp
     // file, the terminal is handed to the editor (Ink's alt-screen handoff),
     // and the saved text replaces the input when it differs. The util maps
     // every failure to an outcome, but the catch/finally here is the hard
     // guarantee: a rejected promise must never kill the process, and the
-    // busy flag must always clear or Ctrl+X stays locked forever.
-    if (isMod(key) && input === 'x') {
+    // busy flag must always clear or Ctrl+G stays locked forever.
+    if (key.ctrl && input === 'g') {
       editorBusyRef.current = true
       void (async () => {
         try {
@@ -552,10 +574,15 @@ export function PromptInput({
       }
       if (channel.working && value.trim() !== '') {
         // CC's immediate-command semantics: /btw is exempt from steering —
-        // the side question never interrupts the running turn. Every other
-        // input keeps the steer behavior so /new /model etc. stay idle-only.
+        // the side question never interrupts the running turn. Hidden
+        // UI-only easter eggs (e.g. /deepseek) are also safe to run while
+        // streaming. Every other input keeps the steer behavior so /new
+        // /model etc. stay idle-only.
         const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-        if (parsed?.name === 'btw' && channel.commandList.some(c => c.name === 'btw')) {
+        if (parsed !== undefined && (
+          (parsed.name === 'btw' && channel.commandList.some(c => c.name === 'btw'))
+          || isHiddenCommandName(parsed.name)
+        )) {
           tryRunCommand(value)
           return
         }
@@ -614,6 +641,12 @@ export function PromptInput({
       handleEnter()
       return
     }
+    // Help is modal over the composer. Backtab must not cycle the session
+    // mode invisibly behind it, and plain Tab has no Help action.
+    if (helpOpen && key.tab) {
+      event.stopImmediatePropagation()
+      return
+    }
     // Shift+Tab cycles the configured session modes (default: 默认 →
     // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
     // see the `modes` config). Must precede the plain-Tab arms — the parser
@@ -637,6 +670,41 @@ export function PromptInput({
     if (key.tab && channel.working && value.trim() !== '') {
       queueSend(value)
       return
+    }
+    // Help is a viewport, not prompt history. It deliberately owns every
+    // vertical navigation event while visible; otherwise Up/Down silently
+    // walk the input history and the clipped command rows remain unreachable.
+    if (helpOpen) {
+      const page = Math.max(1, helpViewportHeight - 2)
+      if (key.upArrow || key.wheelUp) {
+        helpScrollRef.current?.scrollBy(key.wheelUp ? -3 : -1)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.downArrow || key.wheelDown) {
+        helpScrollRef.current?.scrollBy(key.wheelDown ? 3 : 1)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.pageUp || key.pageDown) {
+        helpScrollRef.current?.scrollBy(key.pageUp ? -page : page)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.home) {
+        helpScrollRef.current?.scrollTo(0)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.end) {
+        // Use a deliberately oversized absolute target rather than the
+        // sticky-bottom path: compact Help may still be measuring nested
+        // sections in this commit, while ScrollBox's render clamp resolves
+        // the target to the exact current maximum without a follow-up frame.
+        helpScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
+        event.stopImmediatePropagation()
+        return
+      }
     }
     if (key.meta && key.upArrow) {
       // Alt+Up: pull the last pending message back for editing (pi/Codex).
@@ -839,9 +907,7 @@ export function PromptInput({
       }
       escPendingRef.current = true
       channel.notify(
-        value.length === 0
-          ? 'Press Esc again to rewind'
-          : 'Press Esc again to clear',
+        value.length === 0 ? t('esc-again-rewind') : t('esc-again-clear'),
       )
       escTimerRef.current = setTimeout(() => {
         escPendingRef.current = false
@@ -953,10 +1019,15 @@ export function PromptInput({
       <OverlayAbove maxHeight={Math.max(terminalRows - 6, 4)}>
         {helpOpen && (
           <Box marginBottom={1}>
-            <HelpMenu commands={channel.commandList} />
+            <HelpMenu
+              commands={channel.commandList}
+              viewportHeight={helpViewportHeight}
+              viewportWidth={columns}
+              scrollRef={helpScrollRef}
+            />
           </Box>
         )}
-        {channel.pending.length > 0 && (
+        {!helpOpen && channel.pending.length > 0 && (
           <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
             {channel.pending.some(item => item.placement === 'steer') && (
               <Box flexDirection="column">
@@ -1031,31 +1102,47 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      <Box
-        flexDirection="column"
-        alignItems="flex-start"
-        justifyContent="flex-start"
-        borderColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
-        borderStyle="round"
-        borderLeft={false}
-        borderRight={false}
-        borderBottom
-        width="100%"
+      {/* The prompt's own top/bottom border rows, self-drawn so the effort
+          overlay can play on them (sweep → tier name → fade; see
+          EffortInputBorder). Idle colour keeps the plan-mode accent the old
+          Box border carried. */}
+      <EffortInputBorder
+        effort={channel.reasoningEffort}
+        levels={channel.effortLevels}
+        columns={columns}
+        onLight={isLightThemeActive(themeName)}
+        idleColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
-          <Text dimColor={channel.working}>❯ </Text>
+          <EffortChargeGlyph
+            effort={channel.reasoningEffort}
+            levels={channel.effortLevels}
+            working={channel.working}
+          />
           <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
-              <Text inverse> </Text>
+              <>
+                <Text inverse> </Text>
+                {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
+                    本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
+                    时不显示）。 */}
+                <EffortTierBadge
+                  effort={channel.reasoningEffort}
+                  levels={channel.effortLevels}
+                  onLight={isLightThemeActive(themeName)}
+                  columns={columns}
+                  leadingColumns={3}
+                />
+              </>
             ) : (
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
         </Box>
-      </Box>
+      </EffortInputBorder>
     </Box>
   )
 }
