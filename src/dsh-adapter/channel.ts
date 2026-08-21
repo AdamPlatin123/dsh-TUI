@@ -677,7 +677,8 @@ export interface Channel {
   readonly mode: SessionModeSpec
   /** Index of `mode` in the configured cycle; 0 is the unmarked base mode. */
   readonly modeIndex: number
-  /** Shift+Tab: advance to the next configured session mode. */
+  /** Shift+Tab: advance to the next configured session mode. Concurrent
+   *  invocations are serialized, so rapid presses advance once per press. */
   cycleMode(): Promise<void>
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
@@ -1562,6 +1563,14 @@ export function createChannel(
       `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
     )
   }
+  /**
+   * Serializes Shift+Tab cycles. `applyMode` awaits the `/plan` registry
+   * command, so without a tail each overlapping call re-derives the same
+   * pre-switch index and two quick presses land on the SAME mode instead of
+   * advancing twice. The tail swallows failures for queueing purposes; the
+   * caller receives the original rejection.
+   */
+  let modeCycleTail: Promise<void> = Promise.resolve()
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
@@ -2263,10 +2272,17 @@ export function createChannel(
 
   /** Shift+Tab: advance to the next configured session mode. Cycling starts
    *  from the mode DERIVED from the session log (never a stored index), so
-   *  manual `/plan` use can never desync the cycle. */
-  const cycleMode = async (): Promise<void> => {
-    const index = deriveModeIndex(agent.session.events)
-    await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
+   *  manual `/plan` use can never desync the cycle. Calls are serialized on
+   *  {@link modeCycleTail}; the index is re-derived only when the previous
+   *  switch has fully settled, so rapid consecutive presses advance once per
+   *  press instead of racing on the same pre-switch snapshot. */
+  const cycleMode = (): Promise<void> => {
+    const run = modeCycleTail.then(async () => {
+      const index = deriveModeIndex(agent.session.events)
+      await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
+    })
+    modeCycleTail = run.catch(() => {})
+    return run
   }
 
   // Session-lifetime candidate pool for non-path queries. The load promise is

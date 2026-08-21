@@ -2580,6 +2580,7 @@ export function Chat({
             answered={questionSnapshot.answered}
             onAnswer={selection => questionStore.answerCurrent(selection)}
             onCancel={() => questionStore.cancelCurrent()}
+            onExitPlanning={() => questionStore.exitPlanReview()}
           />
         ) : (
           <PromptInput

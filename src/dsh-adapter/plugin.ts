@@ -187,7 +187,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     userQuestions.registerProvider({
       ask: request => questionStore.ask(request),
     })
-    ctx.effect(() => () => questionStore.rejectAll())
+    ctx.effect(() => () => {
+      questionStore.setExitPlanReviewHandler(undefined)
+      questionStore.rejectAll()
+    })
   } catch (error) {
     if ((error as { code?: string }).code !== 'DUPLICATE_PROVIDER') throw error
   }
@@ -376,6 +379,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // (swapping layouts requires re-mounting the whole tree).
   let bootedFullscreen = config.fullscreen === true
   let fullscreenFrozen = false
+  // "Exit planning" must terminate the turn, not just reject the question:
+  // dsh-plan-mode surfaces the rejection as a failed `exit_plan_mode` tool
+  // result, and the agent loop would otherwise hand that error back to the
+  // model, which can keep stepping and execute the unapproved plan. For the
+  // TUI's own live agent, route through channel.cancel() so the in-flight
+  // guard and keep-inbox semantics match a normal Esc interrupt; any other
+  // live root asking through this provider gets the same direct abort.
+  questionStore.setExitPlanReviewHandler(requestAgent => {
+    if (String(requestAgent.id) === channel.agentId) {
+      channel.cancel()
+      return
+    }
+    requestAgent.cancel({ kind: 'user' }, { keepInbox: true })
+  })
   // Register the dsh-tui settings namespace so the /settings screen can
   // edit it (the section below was '命名空间未注册' without this): the
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and

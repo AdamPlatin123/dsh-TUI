@@ -12,6 +12,7 @@
  * concurrent asks from subagents are drained FIFO.
  */
 
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { t } from '../i18n.js'
 import {
   UserQuestionError,
@@ -75,6 +76,13 @@ const ASK_ABORTED = 'ASK_ABORTED'
  * from harness aborts (signal fired) and teardown rejects.
  */
 const ASK_CANCELLED = 'ASK_CANCELLED'
+/**
+ * User-initiated "Exit planning" in the plan-review panel. The question is
+ * rejected with this code (not resolved), so dsh-plan-mode's exit tool
+ * surfaces our stop-here message instead of reading the choice as
+ * keep-planning feedback.
+ */
+const PLAN_REVIEW_EXITED = 'PLAN_REVIEW_EXITED'
 
 /** Truncate a long answer line for the transcript summary. */
 function clip(text: string, max = 140): string {
@@ -120,6 +128,25 @@ export class QuestionStore {
    * nothing changed (a fresh object per call would loop re-renders).
    */
   private snapshotCache: QuestionSnapshot | null = null
+  /**
+   * Installed by the TUI plugin once the live channel exists. "Exit
+   * planning" must do more than reject the ask: the rejection comes back as
+   * a failed `exit_plan_mode` tool result, and a model that keeps stepping
+   * after that failure can still execute the unapproved plan. The hook lets
+   * the store abort the calling agent's turn the moment the user exits the
+   * review, before the agent loop can submit another tool call. When no
+   * hook is installed, `exitPlanReview` cancels the agent directly.
+   */
+  private exitPlanReviewHandler: ((agent: Agent) => void) | undefined
+
+  /**
+   * Install (or clear) the "Exit planning" turn-abort hook.
+   * @param handler - Called with the live agent that owns the plan review;
+   *   expected to cancel that agent's active turn.
+   */
+  setExitPlanReviewHandler(handler: ((agent: Agent) => void) | undefined): void {
+    this.exitPlanReviewHandler = handler
+  }
 
   /**
    * Subscribe to store changes (useSyncExternalStore contract).
@@ -259,6 +286,63 @@ export class QuestionStore {
     this.cancel(pending)
     this.startNext()
     this.emit()
+  }
+
+  /**
+   * The user chose the plan-review panel's "Exit planning" row: leave plan
+   * mode WITHOUT approving the plan. Plan mode is the durable `plan/mode`
+   * event, so this appends `active: false` to the calling agent's session
+   * directly (an open turn must not wait for the next accepted pre-step);
+   * the channel's `session/event` arm then clears the `/planPrompt` switch.
+   * The pending ask is rejected with {@link PLAN_REVIEW_EXITED} so the
+   * model-facing `exit_plan_mode` tool reports "stop here" instead of
+   * treating the selection as keep-planning feedback — and the installed
+   * handler aborts the calling agent's turn, because a rejected tool result
+   * alone does not stop the agent loop from continuing the unapproved plan.
+   */
+  exitPlanReview(): void {
+    const pending = this.active
+    const question = pending?.request.questions[pending.index]
+    if (pending === undefined || question === undefined) return
+    if (question.intent?.kind !== 'plan-review') return
+    const agent = pending.request.agent
+    const abortTurn = (): void => {
+      if (agent === undefined) return
+      try {
+        const handler = this.exitPlanReviewHandler
+        if (handler !== undefined) handler(agent)
+        else agent.cancel({ kind: 'user' }, { keepInbox: true })
+      } catch {
+        // Best-effort abort: the rejection below already carries the stop
+        // instruction, but a handler failure must never let the panel stay
+        // parked or resurrect the unapproved plan.
+      }
+    }
+    if (agent !== undefined) {
+      try {
+        ;(agent.session as unknown as {
+          append(type: string, data: Record<string, unknown>): unknown
+        }).append('plan/mode', { active: false })
+      } catch (error) {
+        // Never leave the panel parked: settle the ask with the real reason.
+        this.active = undefined
+        this.rebuildSnapshot()
+        pending.reject(error)
+        this.startNext()
+        this.emit()
+        abortTurn()
+        return
+      }
+    }
+    this.active = undefined
+    this.rebuildSnapshot()
+    pending.reject(new UserQuestionError(
+      'The user chose Exit planning: the plan was NOT approved and plan mode is off (this also clears the /planPrompt injection when present). Stop here and wait for the user’s next message.',
+      PLAN_REVIEW_EXITED,
+    ))
+    this.startNext()
+    this.emit()
+    abortTurn()
   }
 
   /** Reject the active and all queued asks (plugin teardown). */

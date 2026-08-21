@@ -597,13 +597,58 @@ await new Promise(resolve => setTimeout(resolve, 400))
 const reviewFrame = plainText(interactStdout.frames.slice(mark))
 console.log('--- plan review header?', reviewFrame.includes('Plan review'))
 console.log('--- plan review markdown body?', reviewFrame.includes('Demo plan') && reviewFrame.includes('step'))
-console.log('--- plan review decision rows?', reviewFrame.includes('Approve') && reviewFrame.includes('Keep planning'))
-console.log('--- plan review hint?', reviewFrame.includes('Esc 打断评审'))
+console.log('--- plan review decision rows?', reviewFrame.includes('Approve') && reviewFrame.includes('Exit planning') && !reviewFrame.includes('Keep planning'))
+console.log('--- plan review hint?', reviewFrame.includes('Esc dismiss') && reviewFrame.includes('exit planning'))
 interactStdin.write('\r')
 const approveAnswer = await reviewApprove
 console.log('--- clean approve payload?', JSON.stringify(approveAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Approve'] }] }))
 
-// Review 2: typing routes to the feedback row; Enter there declines with
+// Review 2: the second row is Exit planning — it leaves plan mode without
+// answering the ask, rejects with the dedicated exit code, and aborts the
+// calling agent's turn through the hook installed by the plugin.
+const exitPlanEvents: Array<{ type: string; data: unknown }> = []
+const exitPlanCancels: Array<{ cause: unknown; options: unknown }> = []
+interactQuestions.setExitPlanReviewHandler(agent => {
+  ;(agent as unknown as { cancel(cause: unknown, options?: unknown): void }).cancel(
+    { kind: 'user' },
+    { keepInbox: true },
+  )
+})
+const reviewExitRequest = {
+  ...reviewRequest,
+  agent: {
+    id: 'exit-probe',
+    cancel(cause: unknown, options?: unknown) {
+      exitPlanCancels.push({ cause, options })
+    },
+    session: {
+      append(type: string, data: unknown) {
+        exitPlanEvents.push({ type, data })
+      },
+    },
+  },
+} as never
+mark = interactStdout.frames.length
+const reviewExit = interactQuestions.ask(reviewExitRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+interactStdin.write('2')
+const exitCode = await reviewExit.then(
+  () => 'resolved',
+  (error: unknown) => error instanceof UserQuestionError ? error.code : 'other',
+)
+console.log(
+  '--- exit planning payload?',
+  exitCode === 'PLAN_REVIEW_EXITED' &&
+  exitPlanEvents.length === 1 &&
+  exitPlanEvents[0]?.type === 'plan/mode' &&
+  (exitPlanEvents[0]?.data as { active?: boolean } | undefined)?.active === false &&
+  exitPlanCancels.length === 1 &&
+  (exitPlanCancels[0]?.cause as { kind?: string } | undefined)?.kind === 'user' &&
+  (exitPlanCancels[0]?.options as { keepInbox?: boolean } | undefined)?.keepInbox === true,
+)
+interactQuestions.setExitPlanReviewHandler(undefined)
+
+// Review 3: typing routes to the feedback row; Enter there declines with
 // the feedback as custom text.
 mark = interactStdout.frames.length
 const reviewFeedback = interactQuestions.ask(reviewRequest)
@@ -614,7 +659,7 @@ interactStdin.write('\r')
 const feedbackAnswer = await reviewFeedback
 console.log('--- feedback payload?', JSON.stringify(feedbackAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Keep planning'], custom: '改一下' }] }))
 
-// Review 3: Esc dismisses with ASK_CANCELLED (plan-mode reads it as "the
+// Review 4: Esc dismisses with ASK_CANCELLED (plan-mode reads it as "the
 // user dismissed the review to speak instead").
 const reviewDismiss = interactQuestions.ask(reviewRequest)
 await new Promise(resolve => setTimeout(resolve, 400))

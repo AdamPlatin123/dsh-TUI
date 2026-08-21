@@ -291,7 +291,8 @@ as markdown in the review panel (the dedicated decision layout for
 | `Up/Down` | Move between the options and the feedback input line at the bottom |
 | `1`/`2` | Submit the corresponding option directly (when the feedback buffer is empty; otherwise digits are treated as feedback characters) |
 | Typing | Enters the feedback input line |
-| `Enter` (option row) | Submit that option; an approval row with feedback errors out — approval must carry no feedback, or the protocol treats it as “continue planning” |
+| `Enter` (`Approve` row) | Approve the plan and leave plan mode; with feedback it errors out — approval must carry no feedback, or the protocol treats it as “continue planning” |
+| `Enter` (`Exit planning` row) | Leave plan mode and turn off `/planPrompt` WITHOUT approving this plan; the model is told to stop and wait for the next message |
 | `Enter` (input line) | Submit “continue planning” with the feedback text |
 | `Esc` | Interrupt the review to talk (`ASK_CANCELLED`); the model stays in plan mode |
 
