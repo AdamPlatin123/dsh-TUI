@@ -598,6 +598,9 @@ export function PromptInput({
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
+  /** Column of the cursor within its line. */
+
+  /** Line index of the cursor within the text (fold-block helpers from main). */
   const cursorLine = (text: string, cursorOffset: number) => {
     const before = text.slice(0, cursorOffset)
     return before.split('\n').length - 1
@@ -990,6 +993,19 @@ export function PromptInput({
         setInput(value, block.start)
         return
       }
+      // 视觉行导航（无 fold block 时接管 ↑ 的普通路径——逻辑行的超集）：
+      // 折行后的屏幕行间移动光标，仅在首视觉行才继续走到历史遍历——
+      // 单段超长文本按逻辑行判定会让 ↑ 直接换历史条目（整框内容突变
+      // 与高度跳变）。block 存在时块是原子行，走下方 main 的逻辑行路径。
+      if (!block) {
+        const upGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+        if (upGeo.row > 0) {
+          const targetRow = upGeo.row - 1
+          const target = upGeo.rows[targetRow] ?? ''
+          setInput(value, upGeo.rowStarts[targetRow]! + Math.min(upGeo.colChars, target.length))
+          return
+        }
+      }
       const line = cursorLine(value, cursor)
       if (line > 0) {
         // Move to the previous line, clamping to its length.
@@ -1065,6 +1081,17 @@ export function PromptInput({
         }
         setInput(value, block.end)
         return
+      }
+      // 视觉行导航（与 ↑ 对称，!block 时接管）：仅在末视觉行才继续走到
+      // 历史遍历。
+      if (!block) {
+        const downGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+        if (downGeo.row < downGeo.rows.length - 1) {
+          const targetRow = downGeo.row + 1
+          const target = downGeo.rows[targetRow] ?? ''
+          setInput(value, downGeo.rowStarts[targetRow]! + Math.min(downGeo.colChars, target.length))
+          return
+        }
       }
       const line = cursorLine(value, cursor)
       const lines = value.split('\n')
@@ -1714,6 +1741,29 @@ export function PromptInput({
       </EffortInputBorder>
     </Box>
   )
+}
+
+/** ↑/↓ 视觉行导航的几何：光标所在视觉行号、行内字符列，以及每个
+ * 视觉行在 value 中的起始下标（由 wrapToWidth 的切行反推：行内容在
+ * value 中连续按序，行尾若为逻辑行边界则跳过一个 \n）。单段超长文本
+ * 折成多个视觉行时 ↑/↓ 用它逐视觉行移动光标，而不是掉进历史遍历。 */
+function visualNavGeometry(value: string, cursor: number, width: number): {
+  row: number
+  colChars: number
+  rowStarts: number[]
+  rows: string[]
+} {
+  const rows = wrapToWidth(value, width)
+  const prefix = wrapToWidth(value.slice(0, cursor), width)
+  const colChars = prefix[prefix.length - 1]!.length
+  const rowStarts: number[] = []
+  let consumed = 0
+  for (const r of rows) {
+    rowStarts.push(consumed)
+    consumed += r.length
+    if (value[consumed] === '\n') consumed += 1
+  }
+  return { row: prefix.length - 1, colChars, rowStarts, rows }
 }
 
 /**
