@@ -15,9 +15,10 @@ type ProbeResult = {
 }
 
 if (process.argv[2] === '--probe') {
+  const mode = process.argv[3]
   Object.defineProperty(process, 'platform', { value: 'win32' })
   Object.defineProperty(process.stdout, 'isTTY', {
-    value: process.argv[3] === 'injected' ? false : true,
+    value: mode === 'injected-wide' ? false : true,
   })
 
   for (const name of [
@@ -33,17 +34,20 @@ if (process.argv[2] === '--probe') {
     delete process.env[name]
   }
   process.env.TERM = 'dumb'
-  if (process.argv[3] === 'modern') process.env.WT_SESSION = 'test-session'
+  if (mode === 'modern') process.env.WT_SESSION = 'test-session'
 
   const { stringWidth } = await import('../src/ink/stringWidth.js')
   const widths = Object.fromEntries(
-    ['A', '中', '·', '…', '→', '●', '◆', '★', '⚠', '✳', '❤'].map(char => [
-      char,
-      stringWidth(char),
-    ]),
+    ['A', '中', '·', '…', '→', '●', '◆', '★', '⚠', '⚠︎', '✳', '❤', '❤︎'].map(
+      char => [char, stringWidth(char)],
+    ),
   )
   let line: string | undefined
-  if (process.argv[3] === 'conhost' || process.argv[3] === 'injected') {
+  if (
+    mode === 'conhost' ||
+    mode === 'injected-narrow' ||
+    mode === 'injected-wide'
+  ) {
     const [{ Writable }, React, { Terminal: XTerm }, { render, Text }] =
       await Promise.all([
         import('node:stream'),
@@ -60,7 +64,7 @@ if (process.argv[2] === '--probe') {
     class FakeStdout extends Writable {
       columns = 20
       rows = 4
-      isTTY = true
+      isTTY = mode !== 'injected-narrow'
       _write(
         chunk: unknown,
         _encoding: BufferEncoding,
@@ -82,7 +86,9 @@ if (process.argv[2] === '--probe') {
   process.exit(0)
 }
 
-function probe(mode: 'conhost' | 'modern' | 'injected'): ProbeResult {
+function probe(
+  mode: 'conhost' | 'modern' | 'injected-narrow' | 'injected-wide',
+): ProbeResult {
   const result = spawnSync(
     process.execPath,
     ['--import', 'tsx/esm', fileURLToPath(import.meta.url), '--probe', mode],
@@ -99,7 +105,8 @@ function probe(mode: 'conhost' | 'modern' | 'injected'): ProbeResult {
 
 const conhost = probe('conhost')
 const modern = probe('modern')
-const injected = probe('injected')
+const injectedNarrow = probe('injected-narrow')
+const injectedWide = probe('injected-wide')
 const { isClassicConhost } = await import('../src/ink/terminal.js')
 const { needsConhostWidthCompensation } = await import('../src/ink/stringWidth.js')
 let failures = 0
@@ -129,8 +136,12 @@ assert(
   'Windows Terminal keeps ambiguous glyphs narrow',
 )
 assert(
-  injected.line?.indexOf('B') === 3,
-  'renderer honors injected stdout instead of global stdout',
+  injectedNarrow.line?.indexOf('B') === 2,
+  'renderer keeps injected non-TTY stdout narrow despite global conhost',
+)
+assert(
+  injectedWide.line?.indexOf('B') === 3,
+  'renderer uses injected classic stdout despite global non-TTY stdout',
 )
 assert(
   conhost.line?.indexOf('B') === 3,
@@ -146,6 +157,10 @@ assert(!isClassicConhost('win32', {}, false), 'excludes non-TTY renderers')
 assert(
   needsConhostWidthCompensation('❤︎', { ambiguousAsWide: true }) === false,
   'VS15 text-style heart does not trigger conhost compensation',
+)
+assert(
+  needsConhostWidthCompensation('⚠︎', { ambiguousAsWide: true }) === false,
+  'VS15 text-style warning does not trigger conhost compensation',
 )
 assert(
   needsConhostWidthCompensation('·', { ambiguousAsWide: true }) === true,

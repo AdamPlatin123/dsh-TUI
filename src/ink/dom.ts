@@ -7,6 +7,7 @@ import { addPendingClear, nodeCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
 import type { Styles, TextStyles } from './styles.js'
 import { expandTabs } from './tabstops.js'
+import type { StringWidthOptions } from './stringWidth.js'
 import wrapText from './wrap-text.js'
 
 type InkNode = {
@@ -50,6 +51,7 @@ export type DOMElement = {
   onComputeLayout?: () => void
   onRender?: () => void
   onImmediateRender?: () => void
+  stringWidthOptions?: StringWidthOptions
   // Used to skip empty renders during React 19's effect double-invoke in test mode
   hasRenderedContent?: boolean
 

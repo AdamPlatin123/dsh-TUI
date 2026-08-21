@@ -26,6 +26,7 @@ import { EVENT_HANDLER_PROPS } from './events/event-handlers.js'
 import { getFocusManager, getRootNode } from './focus.js'
 import { LayoutDisplay } from './layout/node.js'
 import applyStyles, { type Styles, type TextStyles } from './styles.js'
+import { withStringWidthOptions } from './stringWidth.js'
 
 // We need to conditionally perform devtools connection to avoid
 // accidentally breaking other third-party code.
@@ -303,9 +304,11 @@ const reconciler = createReconciler<
       }
     }
     const _t0 = COMMIT_LOG ? performance.now() : 0
-    if (typeof rootNode.onComputeLayout === 'function') {
-      rootNode.onComputeLayout()
-    }
+    withStringWidthOptions(rootNode.stringWidthOptions ?? {}, () => {
+      if (typeof rootNode.onComputeLayout === 'function') {
+        rootNode.onComputeLayout()
+      }
+    })
     if (COMMIT_LOG) {
       const layoutMs = performance.now() - _t0
       if (layoutMs > 20) {

@@ -39,6 +39,7 @@ import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABL
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
+import { withStringWidthOptions } from './stringWidth.js';
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -275,30 +276,37 @@ export default class Ink {
       };
     }
     this.rootNode = dom.createNode('ink-root');
+    this.rootNode.stringWidthOptions = {
+      ambiguousAsWide: this.ambiguousAsWide
+    };
     this.focusManager = new FocusManager((target, event) => dispatcher.dispatchDiscrete(target, event));
     this.rootNode.focusManager = this.focusManager;
     this.renderer = createRenderer(this.rootNode, this.stylePool);
     this.rootNode.onRender = this.scheduleRender;
     this.rootNode.onImmediateRender = this.renderNow;
     this.rootNode.onComputeLayout = () => {
-      // Calculate layout during React's commit phase so useLayoutEffect hooks
-      // have access to fresh layout data
-      // Guard against accessing freed Yoga nodes after unmount
-      if (this.isUnmounted) {
-        return;
-      }
-      if (this.rootNode.yogaNode) {
-        const t0 = performance.now();
-        this.rootNode.yogaNode.setWidth(this.terminalColumns);
-        this.rootNode.yogaNode.calculateLayout(this.terminalColumns);
-        const ms = performance.now() - t0;
-        recordYogaMs(ms);
-        const c = getYogaCounters();
-        this.lastYogaCounters = {
-          ms,
-          ...c
-        };
-      }
+      withStringWidthOptions({
+        ambiguousAsWide: this.ambiguousAsWide
+      }, () => {
+        // Calculate layout during React's commit phase so useLayoutEffect hooks
+        // have access to fresh layout data
+        // Guard against accessing freed Yoga nodes after unmount
+        if (this.isUnmounted) {
+          return;
+        }
+        if (this.rootNode.yogaNode) {
+          const t0 = performance.now();
+          this.rootNode.yogaNode.setWidth(this.terminalColumns);
+          this.rootNode.yogaNode.calculateLayout(this.terminalColumns);
+          const ms = performance.now() - t0;
+          recordYogaMs(ms);
+          const c = getYogaCounters();
+          this.lastYogaCounters = {
+            ms,
+            ...c
+          };
+        }
+      });
     };
 
     // @ts-ignore -- ported CC build; type drift tolerated @types/react-reconciler@0.32.3 declares 11 args with transitionCallbacks,
@@ -548,7 +556,9 @@ export default class Ink {
     const renderStart = performance.now();
     const terminalWidth = this.options.stdout.columns || 80;
     const terminalRows = this.options.stdout.rows || 24;
-    const frame = this.renderer({
+    const frame = withStringWidthOptions({
+      ambiguousAsWide: this.ambiguousAsWide
+    }, () => this.renderer({
       frontFrame: this.frontFrame,
       backFrame: this.backFrame,
       isTTY: this.options.stdout.isTTY,
@@ -557,7 +567,7 @@ export default class Ink {
       altScreen: this.altScreenActive,
       ambiguousAsWide: this.ambiguousAsWide,
       prevFrameContaminated: this.prevFrameContaminated
-    });
+    }));
     const rendererMs = performance.now() - renderStart;
 
     // Sticky/auto-follow scrolled the ScrollBox this frame. Translate the
@@ -1327,12 +1337,16 @@ export default class Ink {
       ambiguousAsWide: this.ambiguousAsWide,
       screen
     });
-    renderNodeToOutput(el, output, {
-      offsetX: -elLeft,
-      offsetY: -elTop,
-      prevScreen: undefined
+    const rendered = withStringWidthOptions({
+      ambiguousAsWide: this.ambiguousAsWide
+    }, () => {
+      renderNodeToOutput(el, output, {
+        offsetX: -elLeft,
+        offsetY: -elTop,
+        prevScreen: undefined
+      });
+      return output.get();
     });
-    const rendered = output.get();
     // renderNodeToOutput wrote our offset positions to nodeCache —
     // corrupts the main render (it'd blit from wrong coords). Mark the
     // subtree dirty so the next main render repaints + re-caches
@@ -1708,10 +1722,14 @@ export default class Ink {
         </TerminalWriteProvider>
       </App>;
 
-    // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler
-    reconciler.updateContainerSync(tree, this.container, null, noop);
-    // @ts-ignore -- ported CC build; type drift tolerated flushSyncWork exists in react-reconciler but not in @types/react-reconciler
-    reconciler.flushSyncWork();
+    withStringWidthOptions({
+      ambiguousAsWide: this.ambiguousAsWide
+    }, () => {
+      // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler
+      reconciler.updateContainerSync(tree, this.container, null, noop);
+      // @ts-ignore -- ported CC build; type drift tolerated flushSyncWork exists in react-reconciler but not in @types/react-reconciler
+      reconciler.flushSyncWork();
+    });
   }
   unmount(error?: Error | number | null): void {
     if (this.isUnmounted) {

@@ -299,6 +299,25 @@ export type StringWidthOptions = {
   ambiguousAsWide?: boolean
 }
 
+let currentStringWidthOptions: StringWidthOptions | undefined
+
+export function withStringWidthOptions<T>(
+  options: StringWidthOptions,
+  fn: () => T,
+): T {
+  const previous = currentStringWidthOptions
+  currentStringWidthOptions = options
+  try {
+    return fn()
+  } finally {
+    currentStringWidthOptions = previous
+  }
+}
+
+export function currentAmbiguousAsWide(): boolean {
+  return currentStringWidthOptions?.ambiguousAsWide ?? isClassicConhost()
+}
+
 /**
  * Whether a grapheme needs the classic-conhost two-cell safety path.
  * Conhost asks its active font whether ambiguous glyphs are wide, so the
@@ -308,7 +327,7 @@ export function needsConhostWidthCompensation(
   grapheme: string,
   options: StringWidthOptions = {},
 ): boolean {
-  const ambiguousAsWide = options.ambiguousAsWide ?? isClassicConhost()
+  const ambiguousAsWide = options.ambiguousAsWide ?? currentAmbiguousAsWide()
   if (!ambiguousAsWide) return false
   return (
     stringWidthFor(grapheme, { ambiguousAsWide }) === 2 &&
@@ -337,6 +356,5 @@ export function stringWidthFor(
     : stringWidthJavaScript(str, false)
 }
 
-export const stringWidth: (str: string) => number = isClassicConhost()
-  ? str => stringWidthFor(str, { ambiguousAsWide: true })
-  : str => stringWidthFor(str)
+export const stringWidth = (str: string): number =>
+  stringWidthFor(str, { ambiguousAsWide: currentAmbiguousAsWide() })

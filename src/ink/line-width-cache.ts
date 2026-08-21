@@ -1,4 +1,4 @@
-import { stringWidth } from './stringWidth.js'
+import { currentAmbiguousAsWide, stringWidth } from './stringWidth.js'
 
 // During streaming, text grows but completed lines are immutable.
 // Caching stringWidth per-line avoids re-measuring hundreds of
@@ -32,7 +32,8 @@ function detachString(s: string): string {
  * @returns the display width in terminal cells.
  */
 export function lineWidth(line: string): number {
-  const cached = cache.get(line)
+  const key = `${currentAmbiguousAsWide() ? 'w' : 'n'}:${line}`
+  const cached = cache.get(key)
   if (cached !== undefined) return cached
 
   const width = stringWidth(line)
@@ -46,7 +47,7 @@ export function lineWidth(line: string): number {
     cacheChars = 0
   }
 
-  cache.set(detachString(line), width)
-  cacheChars += line.length
+  cache.set(detachString(key), width)
+  cacheChars += key.length
   return width
 }
