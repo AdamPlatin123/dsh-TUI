@@ -15,6 +15,7 @@ import type { Channel } from '../dsh-adapter/channel.js'
 import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
+import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
@@ -211,27 +212,30 @@ export function PromptInput({
   // CARET, so `@` works mid-message (`看看 @src/a.ts 这个`), not only when it
   // is the input's first character. The cwd listing loads when the trigger
   // appears.
-  const [fileList, setFileList] = React.useState<readonly string[]>([])
+  const [fileMatches, setFileMatches] = React.useState<readonly FileCandidate[]>([])
   const [fileSelected, setFileSelected] = React.useState(0)
   const mention = mentionAtCaret(value, cursor)
   const atTrigger = mention !== undefined
+  const fileRequestId = React.useRef(0)
+  const selectedFile = fileMatches[fileSelected]
   React.useEffect(() => {
-    if (atTrigger) {
-      void channel.listFiles().then(setFileList)
+    const requestId = ++fileRequestId.current
+    if (!mention) {
+      setFileMatches([])
+      setFileSelected(0)
+      return
     }
-  }, [atTrigger, channel])
-  const atRest = (mention?.query ?? '').toLowerCase()
-  // Match the relative path prefix OR the basename (CC's IDE suggestions do
-  // both): `@src/ink` and `@ink` both find `src/ink/Box.js`.
-  const fileMatches = atTrigger
-    ? fileList.filter(file => {
-        const lower = file.toLowerCase()
-        if (lower.startsWith(atRest)) return true
-        if (atRest.includes('/')) return false
-        const base = lower.split('/').pop() ?? ''
-        return base.startsWith(atRest)
-      })
-    : []
+    const previous = selectedFile
+    // Deps key on `mention.query` (and trigger on/off) only: cursor movement
+    // within the same token must NOT refetch, and `selectedFile`/`fileSelected`
+    // are read as their render-time values only to seed selection preservation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void channel.listFileCandidates(mention.query, { topK: 50 }).then(next => {
+      if (requestId !== fileRequestId.current) return
+      setFileMatches(next)
+      setFileSelected(preserveSelection(previous, next, fileSelected))
+    })
+  }, [channel, mention?.query, atTrigger])
   // Esc dismisses the overlay for the token being edited (it reopens once the
   // text changes); it must NOT clear a mid-message input.
   const fileEscRef = React.useRef(-1)
@@ -257,10 +261,11 @@ export function PromptInput({
    * directory inserts `@dir/` without a trailing space so completion
    * continues into it; a file completes the token with a space.
    */
-  const acceptFile = (file: string) => {
+  const acceptFile = (candidate: FileCandidate) => {
     if (!mention) return
+    const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
-    const insert = file.endsWith('/') ? body : `${body} `
+    const insert = candidate.kind === 'directory' ? body : `${body} `
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length)
     setFileSelected(0)

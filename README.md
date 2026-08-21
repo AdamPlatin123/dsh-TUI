@@ -39,10 +39,10 @@
   <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-TUI" width="560">
 </p>
 
-同时也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录：
+同时也被 [dshfind](https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI) 插件目录收录：
 
 <p align="center">
-  <a href="https://dshfind.com/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
+  <a href="https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
 </p>
 
 ## 核心能力

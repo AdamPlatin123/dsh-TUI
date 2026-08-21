@@ -109,8 +109,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-home-end',
     group: 'keys',
-    zh: 'Home/End 与 Ctrl+A 快速到行首/行尾',
-    en: 'Home/End and Ctrl+A jump to line start/end',
+    zh: 'Home/End 到行首/行尾，Ctrl+E 到行尾',
+    en: 'Home/End jump to line start/end; Ctrl+E to line end',
+  },
+  {
+    id: 'keys-ctrl-a',
+    group: 'keys',
+    zh: 'Ctrl+A 子代理面板：Enter 看详情 · X 中断 · Esc 关',
+    en: 'Ctrl+A opens the subagent dashboard; Enter details, X interrupt, Esc close',
   },
   {
     id: 'keys-edit-keys',
@@ -377,8 +383,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'flow-at',
     group: 'workflow',
-    zh: '任意位置 @ 补全文件，@ink 也能命中 src/ink',
-    en: '@ completes files anywhere; @ink matches src/ink',
+    zh: '@ 补全支持模糊匹配；@src/ 直达该目录',
+    en: '@ completes files with fuzzy matching; @dir/ lists that directory',
   },
   {
     id: 'flow-question-type',
@@ -485,6 +491,12 @@ export const TIPS: readonly Tip[] = [
     en: 'Drag-select copies instantly in fullscreen; Esc cancels',
   },
   {
+    id: 'disp-wheel-sel',
+    group: 'display',
+    zh: '有文本选区时，滚轮平移选区而非滚动列表',
+    en: 'With a text selection, the wheel translates the selection, not the list',
+  },
+  {
     id: 'disp-whale',
     group: 'display',
     zh: '首屏鲸鱼动画（终端 ≥64 列才显示）',
@@ -533,6 +545,12 @@ export const TIPS: readonly Tip[] = [
     group: 'pitfalls',
     zh: '提示版本错位时，按提示 npm install -g 对齐启动器',
     en: 'On version skew, follow the npm install -g hint to align the launcher',
+  },
+  {
+    id: 'pit-drift',
+    group: 'pitfalls',
+    zh: 'logo ⚠ 提示 dsh 版本不符时，按提示 npm i -g @deepseek-ai/dsh 对齐',
+    en: 'When the logo warns about dsh versions, follow the npm i -g @deepseek-ai/dsh hint',
   },
   {
     id: 'pit-mac',

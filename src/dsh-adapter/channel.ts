@@ -35,6 +35,7 @@ import {
   type SessionSummary,
 } from './sessions/index.js'
 import { writeActivityFrames } from '../activityPrefs.js'
+import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
@@ -70,7 +71,7 @@ import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
-import { installedLineOf } from './contract.js'
+import { installedMeetsVersion } from './contract.js'
 import { pluginsInfoLines } from './plugins-info.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
@@ -728,7 +729,9 @@ export interface Channel {
   settingsSections(): readonly TuiSettingsSection[]
   /** Subscribe to settings-section register/unregister events. */
   subscribeSettingsSections(listener: () => void): () => void
-  /** Top-level entries of the session cwd for `@` file completion. */
+  /** Structured `@` file completion, using the session's remote fs service. */
+  listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }): Promise<readonly FileCandidate[]>
+  /** Backward-compatible top-level/recursive listing. */
   listFiles(): Promise<readonly string[]>
   /** Every session the persistence backend stores, classified and unfiltered
    *  — the browser (`/resume`) decides which of them a given view shows. */
@@ -990,6 +993,7 @@ export interface ChannelState {
   settingsSections(): readonly TuiSettingsSection[]
   /** Subscribe to settings-section register/unregister events. */
   subscribeSettingsSections(listener: () => void): () => void
+  listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }): Promise<readonly FileCandidate[]>
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionSummary[]>
   /** Trailing exchanges of a persisted session (see the public Channel type). */
@@ -1888,12 +1892,13 @@ export function createChannel(
     signal: AbortSignal,
   ) => Promise<CommandExecution | undefined>
 
-  /** Whether the installed command service takes composer images: rc line
-   *  gate with a structural fallback, so a failed manifest probe (bundlers,
-   *  exotic loaders) still lands on the 4-param rc.8 shape at runtime. */
+  /** Whether the installed command service takes composer images: version
+   *  gate (composer images arrived on 0.1.0-rc.8 and every later family —
+   *  0.1.1 included — keeps the 4-param shape) with a structural fallback,
+   *  so a failed manifest probe (bundlers, exotic loaders) still lands on
+   *  the 4-param rc.8 shape at runtime. */
   const commandServiceSupportsImages = (service: CommandRuntime): boolean => {
-    const line = installedLineOf('@deepseek-ai/dsh-commands')
-    if (line !== undefined) return line >= 8
+    if (installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')) return true
     return typeof (service.execute as { length?: number } | undefined)?.length === 'number'
       && (service.execute as { length: number }).length >= 4
   }
@@ -2134,6 +2139,12 @@ export function createChannel(
     const index = deriveModeIndex(agent.session.events)
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
   }
+
+  // Session-lifetime candidate pool for non-path queries. The load promise is
+  // shared so concurrent first keystrokes cannot kick off duplicate scans, and
+  // it is keyed by cwd so a /workspace switch or resumed session never reuses
+  // another directory's listing.
+  const fileCandidateCache = { cwd: '', load: undefined as Promise<readonly FileCandidate[]> | undefined }
 
   const state: ChannelState = {
     effortLevels: undefined,
@@ -3529,20 +3540,30 @@ export function createChannel(
         signal: options?.signal,
       })
     },
-    listFiles() {
-      const fs = ctx.get('fs') as
-        | {
-          resolve(path: string): Promise<{ displayPath: string }>
-          listDir(target: { displayPath: string }): Promise<
-            Array<{
-              name: string
-              type: 'file' | 'directory' | 'other'
-              target: { displayPath: string }
-            }>
-          >
-        }
-        | undefined
-      return listFilesDeep(fs, state.cwd)
+    async listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }) {
+      const fs = ctx.get('fs') as MentionFs | undefined
+      if (!fs || options?.signal?.aborted) return []
+      if (isPathLikeQuery(query)) {
+        return listPathCandidates(fs, state.cwd, query, options?.signal, options?.topK ?? 50)
+      }
+      if (fileCandidateCache.cwd !== state.cwd) {
+        fileCandidateCache.cwd = state.cwd
+        fileCandidateCache.load = undefined
+      }
+      fileCandidateCache.load ??= listFilesDeepCandidates(fs, state.cwd).then(candidates => {
+        if (candidates.length > 0) return candidates
+        // An empty scan is not worth caching forever — retry on next query.
+        fileCandidateCache.load = undefined
+        return candidates
+      })
+      const candidates = await fileCandidateCache.load
+      if (options?.signal?.aborted) return []
+      return rankFileCandidates(candidates, query, options?.topK ?? 50)
+    },
+    async listFiles() {
+      const fs = ctx.get('fs') as MentionFs | undefined
+      const candidates = await listFilesDeepCandidates(fs, state.cwd)
+      return candidates.map(candidate => candidate.path)
     },
     async listSessions() {
       // Every stored session, classified and unfiltered. Which of them a
@@ -5529,82 +5550,89 @@ function usageOutputTokens(usage: unknown): number | undefined {
     : undefined
 }
 
-/**
- * `@` file listing through the leaf's fs service (dsh-fs-local): skips
- * VCS/dependency/build dirs and rotates across directory listings so one
- * large subtree cannot consume the global MAX_FILES budget. That budget also
- * bounds directory reads without imposing an arbitrary source-tree depth.
- * Relative directories retain the trailing `/` that FileSuggestions expects.
- * Unreadable subtrees are skipped, not fatal.
- */
-async function listFilesDeep(
-  fs: {
-    resolve(path: string): Promise<{ displayPath: string }>
-    listDir(target: { displayPath: string }): Promise<
-      Array<{
-        name: string
-        type: 'file' | 'directory' | 'other'
-        target: { displayPath: string }
-      }>
-    >
-  } | undefined,
-  root: string,
-): Promise<string[]> {
+type FileSuggestionFs = {
+  resolve(path: string): Promise<{ displayPath: string }>
+  listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }>>
+}
+
+async function listPathCandidates(fs: FileSuggestionFs, cwd: string, query: string, signal: AbortSignal | undefined, topK: number): Promise<FileCandidate[]> {
+  const normalized = query.replaceAll('\\', '/')
+  const slash = normalized.lastIndexOf('/')
+  // `.` / `..` without a trailing separator are whole-directory queries too.
+  const bareDir = slash < 0 && (normalized === '.' || normalized === '..' || normalized === '~')
+  const directoryPart = slash < 0 ? (bareDir ? `${normalized}/` : '') : normalized.slice(0, slash + 1)
+  const nameQuery = slash < 0 || bareDir ? '' : normalized.slice(slash + 1)
+  // `~/` expands against the host home (matches the cwd resolution rules);
+  // drive-letter and POSIX-absolute prefixes pass through untouched.
+  const expanded = directoryPart === '~/'
+    ? `${homeDir()}/`
+    : directoryPart.startsWith('/') || /^[A-Za-z]:\//.test(directoryPart)
+      ? directoryPart
+      : join(cwd, directoryPart || '.')
+  try {
+    if (signal?.aborted) return []
+    const target = await fs.resolve(expanded)
+    const entries = (await fs.listDir(target)).slice().sort((a, b) => a.name.localeCompare(b.name))
+    return rankFileCandidates(entries.filter(entry => entry.type === 'file' || entry.type === 'directory').map(entry => {
+      const path = `${directoryPart}${entry.name}${entry.type === 'directory' ? '/' : ''}`
+      return { id: path, path, displayPath: path, name: entry.name, kind: entry.type as 'file' | 'directory', score: 0 }
+    }), nameQuery, topK)
+  } catch {
+    return []
+  }
+}
+
+async function listFilesDeepCandidates(fs: FileSuggestionFs | undefined, root: string, signal?: AbortSignal): Promise<FileCandidate[]> {
   if (!fs) return []
-  const out: string[] = []
+  const out: FileCandidate[] = []
   const SKIP = new Set(['node_modules', '.git', '.hg', '.svn', '.DS_Store', 'dist'])
   const BUILD_DIR = /^(?:build(?:[-_].*)?|cmake-build(?:[-_].*)?)$/i
-  const MAX_FILES = 100
-
-  type Entry = {
-    name: string
-    type: 'file' | 'directory' | 'other'
-    target: { displayPath: string }
-  }
-  type Directory = {
-    dir: string
-    prefix: string
-    entries?: Entry[]
-    index: number
-  }
-  const directories: Directory[] = [{ dir: root, prefix: '', index: 0 }]
-
-  while (directories.length > 0 && out.length < MAX_FILES) {
-    const current = directories.shift()
-    if (!current) continue
+  type Entry = { name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }
+  type Node = { dir: string; prefix: string; entries?: Entry[]; index: number }
+  const queue: Node[] = [{ dir: root, prefix: '', index: 0 }]
+  const visited = new Set<string>()
+  const maxFiles = 100
+  const maxDirectories = 100
+  let fileCount = 0
+  let dirCount = 0
+  // Round-robin: each directory yields ONE non-skipped entry per visit before
+  // it re-queues, so a large early sibling (e.g. `generated/` with 120 files)
+  // cannot starve `src/` out of the per-kind budgets. This is the regression
+  // contract pinned by scripts/verify-file-completion.mjs.
+  while (queue.length && fileCount < maxFiles && dirCount < maxDirectories) {
+    if (signal?.aborted) return []
+    const current = queue.shift()!
     if (!current.entries) {
       try {
         const target = await fs.resolve(current.dir)
-        current.entries = await fs.listDir(target)
-      } catch {
-        continue // unreadable subtree — skip
-      }
+        if (visited.has(target.displayPath)) continue
+        visited.add(target.displayPath)
+        current.entries = (await fs.listDir(target)).slice().sort((a, b) => a.name.localeCompare(b.name))
+      } catch { continue }
     }
-
     let entry: Entry | undefined
     while (current.index < current.entries.length) {
-      const candidate = current.entries[current.index++]
+      const candidate = current.entries[current.index++]!
       if (SKIP.has(candidate.name) || BUILD_DIR.test(candidate.name)) continue
       entry = candidate
       break
     }
     if (!entry) continue
-    if (current.index < current.entries.length) directories.push(current)
+    if (current.index < current.entries.length) queue.push(current)
 
-    const rel = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
+    const path = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
     if (entry.type === 'directory') {
-      out.push(`${rel}/`)
-      directories.push({
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: symlink targets optional
-        dir: entry.target?.displayPath ?? join(current.dir, entry.name),
-        prefix: rel,
-        index: 0,
-      })
+      if (dirCount >= maxDirectories) continue
+      out.push({ id: `${path}/`, path: `${path}/`, displayPath: `${path}/`, name: entry.name, kind: 'directory', score: 0 })
+      dirCount += 1
+      queue.push({ dir: entry.target?.displayPath ?? join(current.dir, entry.name), prefix: path, index: 0 })
     } else if (entry.type === 'file') {
-      out.push(rel)
+      if (fileCount >= maxFiles) continue
+      out.push({ id: path, path, displayPath: path, name: entry.name, kind: 'file', score: 0 })
+      fileCount += 1
     }
   }
-  return out
+  return out.sort((a, b) => a.path.localeCompare(b.path))
 }
 
 /** One attached file's contribution is capped so an absent-minded `@` of a
