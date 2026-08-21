@@ -102,6 +102,10 @@ export default class Ink {
   private backFrame: Frame;
   private lastPoolResetTime = performance.now();
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  // Every scheduled microtask carries the generation that created it. Immediate
+  // renders invalidate older trailing work before it can append an old frame.
+  private renderGeneration = 0;
+  private pendingRenderGeneration: number | null = null;
   private lastYogaCounters: {
     ms: number;
     visited: number;
@@ -231,8 +235,18 @@ export default class Ink {
     // effects have committed, so the native cursor tracks the caret without
     // a one-keystroke lag. Same event-loop tick, so throughput is unchanged.
     // Test env uses onImmediateRender (direct onRender, no throttle) so
-    // existing synchronous lastFrame() tests are unaffected.
-    const deferredRender = (): void => queueMicrotask(this.onRender);
+    // existing synchronous lastFrame() tests are unaffected. Keep a
+    // generation on the microtask: an immediate render may supersede the
+    // leading frame before its deferred callback runs.
+    const deferredRender = (): void => {
+      const generation = ++this.renderGeneration;
+      this.pendingRenderGeneration = generation;
+      queueMicrotask(() => {
+        if (this.pendingRenderGeneration !== generation || this.renderGeneration !== generation) return;
+        this.pendingRenderGeneration = null;
+        this.onRender();
+      });
+    };
     this.scheduleRender = throttle(deferredRender, FRAME_INTERVAL_MS, {
       leading: true,
       trailing: true
@@ -258,7 +272,7 @@ export default class Ink {
     this.rootNode.focusManager = this.focusManager;
     this.renderer = createRenderer(this.rootNode, this.stylePool);
     this.rootNode.onRender = this.scheduleRender;
-    this.rootNode.onImmediateRender = this.onRender;
+    this.rootNode.onImmediateRender = this.renderNow;
     this.rootNode.onComputeLayout = () => {
       // Calculate layout during React's commit phase so useLayoutEffect hooks
       // have access to fresh layout data
@@ -495,6 +509,17 @@ export default class Ink {
   reanchorViewport() {
     if (this.altScreenActive) return;
     this.log.requestViewportReanchor();
+  }
+  /** Render synchronously and invalidate older trailing/drain callbacks. */
+  private renderNow(): void {
+    this.renderGeneration++;
+    this.pendingRenderGeneration = null;
+    this.scheduleRender.cancel?.();
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
+    this.onRender();
   }
   onRender() {
     if (this.isUnmounted || this.isPaused) {
@@ -740,6 +765,12 @@ export default class Ink {
     // and no move is emitted.
     const decl = this.cursorDeclaration;
     const rect = decl !== null ? nodeCache.get(decl.node) : undefined;
+    // Keep the declared target in the same full-frame coordinate system as
+    // frame.cursor and displayCursor. Main-screen cursor moves are relative:
+    // subtracting the scrollback height from target alone makes the physical
+    // cursor climb that height on every park/preamble cycle, so later streaming
+    // diffs overwrite thinking, tool, and assistant rows. The terminal maps the
+    // full-frame relative move onto its viewport/scrollback position itself.
     const target = decl !== null && rect !== undefined ? {
       x: rect.x + decl.relativeX,
       y: rect.y + decl.relativeY
@@ -833,15 +864,14 @@ export default class Ink {
     // trailing-edge throttle invocation, timerId is undefined, and lodash's
     // debounce sees timeSinceLastCall >= wait (last call was at the start
     // of this window) → leadingEdge fires IMMEDIATELY → double render ~0.1ms
-    // apart → jank. Use a plain timeout. If a wheel event arrives first,
-    // its scheduleRender path fires a render which clears this timer at
-    // the top of onRender — no double.
+    // apart → jank. Use a plain timeout. If a wheel event or immediate
+    // render arrives first, renderNow cancels this timer — no double.
     //
     // Drain frames are cheap (DECSTBM + ~10 patches, ~200 bytes) so run at
     // quarter interval (~250fps, setTimeout practical floor) for max scroll
     // speed. Regular renders stay at FRAME_INTERVAL_MS via the throttle.
     if (frame.scrollDrainPending) {
-      this.drainTimer = setTimeout(() => this.onRender(), FRAME_INTERVAL_MS >> 2);
+      this.drainTimer = setTimeout(this.renderNow, FRAME_INTERVAL_MS >> 2);
     }
     const yogaMs = getLastYogaMs();
     const commitMs = getLastCommitMs();
@@ -877,12 +907,12 @@ export default class Ink {
     // Flush pending React updates and render before pausing.
     // @ts-ignore -- ported CC build; type drift tolerated flushSyncFromReconciler exists in react-reconciler 0.31 but not in @types/react-reconciler
     reconciler.flushSyncFromReconciler();
-    this.onRender();
+    this.renderNow();
     this.isPaused = true;
   }
   resume(): void {
     this.isPaused = false;
-    this.onRender();
+    this.renderNow();
   }
 
   /**
@@ -924,7 +954,7 @@ export default class Ink {
       // diff sees no content. onRender resets the flag at frame end.
       this.prevFrameContaminated = true;
     }
-    this.onRender();
+    this.renderNow();
   }
 
   /**
@@ -948,7 +978,7 @@ export default class Ink {
       this.repaint();
       this.prevFrameContaminated = true;
     }
-    this.onRender();
+    this.renderNow();
   }
 
   /**
@@ -1054,7 +1084,7 @@ export default class Ink {
       // cursor position. Idempotent when nothing drifted — the user sees
       // no change, at O(viewport) bytes once per >5s idle gap.
       this.log.requestViewportReanchor();
-      this.onRender();
+      this.renderNow();
       return;
     }
     // Mouse tracking — idempotent, safe to re-assert on every stdin gap.
@@ -1224,7 +1254,7 @@ export default class Ink {
       // Raw OSC 52, or DCS-passthrough-wrapped OSC 52 inside tmux (tmux
       // drops it silently unless allow-passthrough is on — no regression).
       void setClipboard(text).then(raw => {
-        if (raw) this.options.stdout.write(raw);
+        if (raw) this.writeRaw(raw);
       });
     }
     return text;
@@ -1450,7 +1480,7 @@ export default class Ink {
     return () => this.selectionListeners.delete(cb);
   }
   private notifySelectionChange(): void {
-    this.onRender();
+    this.renderNow();
     for (const cb of this.selectionListeners) cb();
   }
 
@@ -1678,7 +1708,7 @@ export default class Ink {
     if (this.isUnmounted) {
       return;
     }
-    this.onRender();
+    this.renderNow();
     this.unsubscribeExit();
     if (typeof this.restoreConsole === 'function') {
       this.restoreConsole();

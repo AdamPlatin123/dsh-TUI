@@ -1,13 +1,15 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolResultView } from '../dsh-adapter/channel.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow } from '../dsh-adapter/channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
+import { SubagentMessage } from './Chat/SubagentMessage.js'
+import { isMinimalMode } from '../minimalMode.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
@@ -52,6 +54,7 @@ export function MessageList({
   diffLayout = 'auto',
   thinkingFold = 'preview',
   toolBackground = 'none',
+  activityFrames,
   showAll,
   onToggleAll,
   onLoadOlder,
@@ -76,6 +79,9 @@ export function MessageList({
   thinkingFold?: 'preview' | 'full'
   /** Tool-card background treatment from the live channel settings. */
   toolBackground?: ToolBackground
+  /** Working-activity preset name from the channel; drives the subagent
+   *  card's running glyph so both indicators follow one setting. */
+  activityFrames?: string
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log (CC-style "load
@@ -410,6 +416,7 @@ export function MessageList({
         // spacing; only the very first row of the whole list has none.
           const addMargin = margins.get(row.id) === true
           const tool = row.tool
+          const subagent = row.kind === 'subagent' ? row.subagent : undefined
           return (
             <MemoRow
               key={row.id}
@@ -428,6 +435,7 @@ export function MessageList({
               diffLayout={diffLayout}
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
+              activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
               toolName={tool?.name}
@@ -443,6 +451,7 @@ export function MessageList({
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               nowSec={tool?.status === 'running' ? nowSec : undefined}
+              subagent={subagent}
               onToggleRow={onToggleRow}
               setRowRef={setRowRef}
             />
@@ -479,6 +488,8 @@ type MemoRowProps = {
   diffLayout: 'auto' | 'split' | 'unified'
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
+  /** Working-activity preset name; drives the subagent card's running glyph. */
+  activityFrames: string | undefined
   background: 'messageActionsBackground' | undefined
   // ToolRow, flattened: the channel writes status/result fields in place,
   // so passing the object itself would make mutations invisible to memo.
@@ -501,6 +512,9 @@ type MemoRowProps = {
   /** Second-resolution clock, forwarded only while the tool runs so the
    *  live elapsed label ticks; settled rows never receive a changing prop. */
   nowSec: number | undefined
+  // SubagentRow, stable ref (subagent lifecycle events update the store, not
+  // the row ref itself, so a plain ref compare stays correct).
+  subagent: SubagentRow | undefined
   onToggleRow: (rowId: number) => void
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
@@ -521,6 +535,7 @@ function TranscriptRow({
   diffLayout,
   thinkingFold,
   toolBackground,
+  activityFrames,
   background,
   toolCallId,
   toolName,
@@ -535,6 +550,7 @@ function TranscriptRow({
   toolResultView,
   toolStartedAt,
   toolDurationMs,
+  subagent,
   onToggleRow,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
@@ -568,6 +584,7 @@ function TranscriptRow({
           marginTop={addMargin ? 1 : 0}
           width="100%"
           backgroundColor={background}
+          ref={ref}
         >
           <Box minWidth={2}>
             <Text color="text">●</Text>
@@ -716,6 +733,19 @@ function TranscriptRow({
           )}
         </Box>
       )
+    case 'subagent':
+      if (!subagent) return null
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <SubagentMessage
+            subagent={subagent}
+            addMargin={addMargin}
+            activityFrames={activityFrames}
+            isExpanded={isExpanded}
+            onClick={() => onToggleRow(rowId)}
+          />
+        </Box>
+      )
   }
 }
 
@@ -739,14 +769,19 @@ export function LogoHeader({
   model,
   effort,
   cwd,
+  whale = true,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
+  whale?: boolean
 }): React.ReactNode {
+  // Minimal mode drops the whole splash (whale art AND wordmark) — only the
+  // transcript and a bare status bar remain.
+  if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} />
     </Box>
   )
 }

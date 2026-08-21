@@ -14,7 +14,7 @@
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
 | `Ctrl+V` | Insert clipboard text or files; images are sent as durable attachments |
-| `Ctrl+X` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR` → vi); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft |
+| `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Esc` | Ladder: close help → close the command menu → close the file menu (only the current `@` token) → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
 | `Ctrl+C` | Interrupt while working; clear non-empty idle input; press twice on empty input to exit |
 | `Ctrl+D` | Press twice while idle to exit |
@@ -24,6 +24,7 @@
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
 | `Ctrl+L` | Clear and force a physical terminal redraw |
 | `?` | Open shortcut and command help when the input is empty |
+| In Help: `↑/↓`, `PgUp/PgDn`, `Home/End` | Scroll by line, page, or jump to either end; `Esc` closes |
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
 `Ctrl+R` (history search), `Ctrl+O` (detail toggle), and `Ctrl+C`

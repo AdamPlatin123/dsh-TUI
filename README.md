@@ -88,6 +88,14 @@ sh install.sh
 
 `dsh-tui --resume` 恢复上次会话；Windows 也可用仓库里的 `dsh-tui.cmd`（等价）。
 
+### Herdr
+
+在 [Herdr](https://herdr.dev) pane 中直接运行 `dsh-tui` 即可，无需额外配置。
+dsh-TUI 会通过 Herdr 提供的本地接口上报 `idle`、`working`、`blocked` 状态；
+问卷或工具审批出现时标记为 `blocked`。离开 Herdr 运行时该集成完全不启用。
+Herdr 的 `agent start --kind dsh-tui`、session 身份与服务重启后自动恢复仍需 Herdr
+上游加入原生 agent kind；当前可正常保活、重连和观察手工启动的 pane。
+
 在 VS Code 中运行的完整指南（内置终端直接使用 + companion 扩展
 `dsh-tui-vscode`——**真实集成终端承载、体验与 Claude Code 官方扩展几乎一致、
 已上架 VS Code Marketplace**）见
@@ -122,7 +130,7 @@ npm install -g @deepseek-harness-tui/dsh-tui@<profile-version>
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
 | `Ctrl+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送 |
-| `Ctrl+X` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
+| `Ctrl+G` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
 | `?` | 快捷键菜单（仅输入框为空时响应） |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 | `Ctrl+P` | 切换启动时 loaded-context 面板（面板在屏时有效） |
@@ -148,7 +156,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 |---|---|
 | 拖拽选择 | 应用内文本选区，**松开即复制**（OSC 52 + `wl-copy`/`xclip`/`xsel` 原生兜底；tmux 内走 `load-buffer -w`），复制后自动取消选区并弹出「已复制 N 个字符」提示 |
 | 双击 / 三击 | 选词 / 选行，同样即选即复制 |
-| 滚轮 | 滚动消息列表（±3 行/格） |
+| 滚轮 | 仅在 fullscreen 且鼠标跟踪启用时：Help 打开时滚动帮助，否则滚动消息列表（±3 行/格）；默认 inline 模式不会把滚轮事件交给 TUI |
 | `Esc` | 拖拽进行中取消选区（不复制） |
 | 单击消息行 | 展开/收起该行 |
 | 单击「加载更早消息」/「ctrl+e 显示前 N 条」 | 加载更早消息 / 展开全部 |
@@ -301,7 +309,9 @@ pnpm smoke
 ```
 
 `lib/types/` 是忽略入库的生成目录；`pnpm build` 会从干净输出目录重新编译并运行
-构建门禁。npm Git URL 安装通过 `prepare` 生成同一套运行时。渲染、问卷和工具卡
+构建门禁。**Git URL 安装不受支持**（源 manifest 的 `@dsh-std/*` 为 workspace 依赖、
+`vendor/dsh-std` 为子模块、且 pnpm ≥11 默认拒绝 git 依赖的 `prepare` 脚本）；请安装
+registry 包：`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。渲染、问卷和工具卡
 改动还需运行对应回归脚本。
 
 

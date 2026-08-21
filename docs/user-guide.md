@@ -103,7 +103,7 @@ dsh-tui
 | `Backspace` / `Delete` | 删前一 / 后一字符 |
 | `↑` / `↓` | 多行时行间移动；单行时浏览输入历史（50 条） |
 | `Ctrl+V`（⌘V） | 粘贴：文本 / 文件路径（图片自动 `@` 引用）/ 剪贴板位图（`[Image #N]` 附件） |
-| `Ctrl+X`（⌘X） | 用 `$VISUAL`/`$EDITOR` 外部编辑器编辑输入（`:cq` 保留原稿） |
+| `Ctrl+G` | 用 `$VISUAL`/`$EDITOR` 外部编辑器编辑输入（`:cq` 保留原稿；未设置变量时提示配置） |
 | 右键 / `Ctrl+Shift+V` | 终端原生粘贴（含换行原样插入） |
 | `Esc`（输入框） | 层级：关帮助 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ 中断重投 → 有输入清空 → 双击=时间回溯 |
 | 双击 `Esc`（空输入） | **时间回溯 rewind**（3s 窗口内按两次） |
@@ -407,11 +407,12 @@ dsh-tui
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 18 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 个字段：
 
 | 字段 | 说明 |
 |---|---|
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
+| whale | 开屏头部像素鲸鱼娘（默认开） |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
@@ -451,7 +452,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 **常用环境变量**：`DSH_TUI_LANG`、`DSH_TUI_THEME`、`DSH_TUI_PRESET`、`DSH_TUI_PERSONA`、
 `DSH_TUI_DISABLE_MOUSE`、`DSH_TUI_RESUME_SESSION`、`DSH_TUI_WORKSPACE_TARGET`、`DSH_TUI_SESSION_ROOT`、
 `DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`（帧取证，可能含敏感内容）、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、
-`VISUAL`/`EDITOR`（`Ctrl+X` 外部编辑器）、`DSH_PERMISSION_MODE`。旧名 `CC_TUI_*` / `DSH_CC_*` 已改名（启动会警告）。
+`VISUAL`/`EDITOR`（`Ctrl+G` 外部编辑器）、`DSH_PERMISSION_MODE`。旧名 `CC_TUI_*` / `DSH_CC_*` 已改名（启动会警告）。
 
 ---
 
@@ -470,7 +471,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 5. `Alt+Up` 把最后一条未处理消息取回输入框修改，不用重打。
 6. 想快速问个事又不想打断主回合、不想留历史：`/btw <问题>`。
 7. 打错了想重来：**空输入双击 Esc 时间回溯**，选你的消息改完重发；`/rewind` 同款。
-8. 长输入用 `Ctrl+X` 拉起 `$VISUAL` 编辑器写，保存即回填。
+8. 长输入用 `Ctrl+G` 拉起 `$VISUAL` 编辑器写，保存即回填。
 9. `@` 在消息任意位置补全文件（匹配路径前缀或文件名，`@ink` 能命中 `src/ink/Box.js`）；
    目录可继续深入；图片自动变 `[Image #N]` 附件。
 10. 粘贴不丢格式：右键 / `Ctrl+Shift+V` 原样插入；`Ctrl+V` 走应用剪贴板（文本/文件/位图）。
