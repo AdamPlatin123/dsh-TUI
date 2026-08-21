@@ -83,11 +83,13 @@ export function cardContentWidth(columns: number): number {
 }
 
 /**
- * 把补全名按「命中的查询前缀」拆成三段（用于前缀高亮）。两级尝试，
+ * 把补全名按「命中的查询前缀」拆成三段（用于前缀高亮）。三级尝试，
  * 均大小写不敏感，与 completeCommands / 文件候选的过滤语义对齐：
- *   1. 整名前缀（文件查询是路径前缀，`src/re` 命中 `src/render`，
- *      跨分隔符；命令 `/plan of` 命中完整路径 `plan off`）；
- *   2. 最后一段 token 的前缀（命令按空格、文件按 `/` 分段）。
+ *   1. 整名前缀（文件查询是路径前缀，`src/re` 命中 `src/render`）；
+ *   2. 最后一个空格 token 的前缀（嵌套命令 `model deepseek/…` 的
+ *      `deepseek/` 查询——补全名带 `model ` 路径前缀）；
+ *   3. 最后一个 `/` 段的前缀（`/model deepseek-v` 命中段
+ *      `deepseek-v4-flash` 的开头）。
  * 查询为空、或都不命中（别名命中、过期候选）返回 null——渲染方整体 dim。
  */
 export function splitQueryMatch(
@@ -96,19 +98,20 @@ export function splitQueryMatch(
 ): { before: string; match: string; after: string } | null {
   if (query === '') return null
   const lower = query.toLowerCase()
-  if (name.toLowerCase().startsWith(lower)) {
-    const matched = name.slice(0, Math.min(query.length, name.length))
-    return { before: '', match: matched, after: name.slice(matched.length) }
-  }
-  const tokenStart = Math.max(name.lastIndexOf(' '), name.lastIndexOf('/')) + 1
-  const segment = name.slice(tokenStart)
-  if (segment.toLowerCase().startsWith(lower)) {
+  const startsWith = (start: number): { before: string; match: string; after: string } | null => {
+    const segment = name.slice(start)
+    if (!segment.toLowerCase().startsWith(lower)) return null
     const matched = segment.slice(0, Math.min(query.length, segment.length))
     return {
-      before: name.slice(0, tokenStart),
+      before: name.slice(0, start),
       match: matched,
       after: segment.slice(matched.length),
     }
   }
-  return null
+  const lastSpace = name.lastIndexOf(' ')
+  return (
+    startsWith(0)
+    ?? (lastSpace >= 0 ? startsWith(lastSpace + 1) : null)
+    ?? startsWith(name.lastIndexOf('/') + 1)
+  )
 }

@@ -371,6 +371,16 @@ const dict = {
   'sugg-count': { zh: '共 {{n}} 项', en: '{{n}} items' },
   'sugg-more-above': { zh: '↑{{n}}', en: '↑{{n}}' },
   'sugg-more-below': { zh: '↓{{n}}', en: '↓{{n}}' },
+  // 二级补全子项描述（/lang /theme /effort /preset /activity 的 children）
+  'sugg-status-desc': { zh: '显示当前选择', en: 'Show the current choice' },
+  'sugg-lang-zh-desc': { zh: '切换界面语言到中文', en: 'Switch the UI language to Chinese' },
+  'sugg-lang-en-desc': { zh: '切换界面语言到英文', en: 'Switch the UI language to English' },
+  'sugg-theme-auto-desc': { zh: '跟随终端背景自动切换', en: 'Follow the terminal background' },
+  'sugg-theme-builtin-desc': { zh: '内置主题', en: 'Built-in theme' },
+  'sugg-theme-user-desc': { zh: '用户主题（{{base}} 基底）', en: 'User theme ({{base}} base)' },
+  'sugg-effort-level-desc': { zh: '思考强度档位', en: 'Reasoning effort level' },
+  'sugg-activity-frames-desc': { zh: '列出或切换动画帧预设', en: 'List or switch frame presets' },
+  'sugg-activity-frame-desc': { zh: '动画帧预设', en: 'Animation frame preset' },
 
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
