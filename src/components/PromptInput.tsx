@@ -433,10 +433,13 @@ export function PromptInput({
     // 剪贴板图片同一条准入管道；其余情况（普通文件/多行文本）保持原样。
     if (event?.isPasted && input.length > 0) {
       const pasted = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      // 与 Ctrl+V 分支同款前置：帮助浮层开着时插入会落在面板背后。
+      if (helpOpen) onToggleHelp()
       const asPath = decodeFileUri(pasted.trim())
       if (asPath !== undefined && !asPath.includes('\n') && !asPath.includes(' ')) {
         const mediaType = clipboardImageMediaType(asPath)
-        if (mediaType !== undefined) {
+        if (mediaType !== undefined && !clipboardBusyRef.current) {
+          clipboardBusyRef.current = true
           void readFile(asPath)
             .then(data => channel.stageImage({ data: new Uint8Array(data), mediaType, name: basename(asPath) }))
             .then(token => {
@@ -446,6 +449,9 @@ export function PromptInput({
             .catch(() => {
               // 读失败或被准入拒绝：按普通文本插入路径，保留拖拽的原语义。
               insertClipboardAtCaret(pasted)
+            })
+            .finally(() => {
+              clipboardBusyRef.current = false
             })
           return
         }
@@ -738,7 +744,7 @@ export function PromptInput({
       if (upGeo.row > 0) {
         const targetRow = upGeo.row - 1
         const target = upGeo.rows[targetRow] ?? ''
-        setInput(value, upGeo.rowStarts[targetRow]! + Math.min(upGeo.colChars, target.length))
+        setInput(value, snapToCodePointBoundary(value, upGeo.rowStarts[targetRow]! + Math.min(upGeo.colChars, target.length)))
         return
       }
       if (overlayOpen) {
@@ -770,7 +776,7 @@ export function PromptInput({
       if (downGeo.row < downGeo.rows.length - 1) {
         const targetRow = downGeo.row + 1
         const target = downGeo.rows[targetRow] ?? ''
-        setInput(value, downGeo.rowStarts[targetRow]! + Math.min(downGeo.colChars, target.length))
+        setInput(value, snapToCodePointBoundary(value, downGeo.rowStarts[targetRow]! + Math.min(downGeo.colChars, target.length)))
         return
       }
       if (overlayOpen) {
@@ -1160,6 +1166,20 @@ export function PromptInput({
  * 视觉行在 value 中的起始下标（由 wrapToWidth 的切行反推：行内容在
  * value 中连续按序，行尾若为逻辑行边界则跳过一个 \n）。单段超长文本
  * 折成多个视觉行时 ↑/↓ 用它逐视觉行移动光标，而不是掉进历史遍历。 */
+/**
+ * ↑/↓ 落点的码点吸附：目标偏移落在代理对中间（前高后低）时回退一位，
+ * 避免后续 Backspace 删掉高代理一半、把孤立低代理发进模型请求与
+ * 会话日志（SearchBox caret 已有同款语义，见 verify-ime-cursor 场景 7）。
+ */
+function snapToCodePointBoundary(value: string, offset: number): number {
+  if (offset > 0 && offset < value.length) {
+    const prev = value.charCodeAt(offset - 1)
+    const at = value.charCodeAt(offset)
+    if (prev >= 0xd800 && prev <= 0xdbff && at >= 0xdc00 && at <= 0xdfff) return offset - 1
+  }
+  return offset
+}
+
 function visualNavGeometry(value: string, cursor: number, width: number): {
   row: number
   colChars: number

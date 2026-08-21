@@ -2269,9 +2269,14 @@ export function createChannel(
       if (shrunk.data.byteLength > attachments.imageLimits.maxImageBytes) {
         throw new Error(`image exceeds this profile's per-image size limit`)
       }
+      // 降采样会转码为 png：按转换后的类型复查允许列表——否则 profile 只
+      // 允 jpeg 时会「粘贴成功通知、提交时 token 落 missing」三处基准不一。
+      if (!attachments.imageLimits.mediaTypes.includes(shrunk.mediaType)) {
+        throw new Error(`image shrinking to ${shrunk.mediaType} is not accepted by this profile`)
+      }
       const attachment = await attachments.saveImage({
         data: shrunk.data,
-        mediaType: shrunk.mediaType as StagedImageInput['mediaType'],
+        mediaType: shrunk.mediaType,
         name: input.name,
       })
       stagedImageSequence += 1

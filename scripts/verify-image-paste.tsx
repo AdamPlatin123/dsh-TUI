@@ -122,16 +122,21 @@ const check = (name: string, ok: boolean, detail = '') => {
   check('拖拽图片路径：token 插入输入框', lines.some(l => l.includes('[Image #1 (2560×1600)]')),
     lines.find(l => l.includes('Image')) ?? '(none)')
 
+  stdin.write(`\x1b[200~file://${pngPath}\x1b[201~`) // file:// URI 形态
+  await sleep(400)
+  check('file:// URI 拖拽形态：同样走图片管道', staged.length === 2 && staged[1]!.mediaType === 'image/png', `staged=${staged.length}`)
+  // 上一轮已插入 token；用退格清不干净也无妨——断言只看新 paste 的语义。
+
   stdin.write('\x1b[200~plain text paste\x1b[201~')
   await sleep(400)
   lines = Array.from({ length: ROWS }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '')
-  check('普通文本粘贴：原样插入（不走图片管道）', staged.length === 1 && lines.some(l => l.includes('plain text paste')),
+  check('普通文本粘贴：原样插入（不走图片管道）', staged.length === 2 && lines.some(l => l.includes('plain text paste')),
     `staged=${staged.length}`)
 
   stdin.write('\x1b[200~/nonexistent/dir/x.png\x1b[201~')
   await sleep(400)
   lines = Array.from({ length: ROWS }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '')
-  check('不存在的图片路径：退回文本插入', staged.length === 1 && lines.some(l => l.includes('/nonexistent/dir/x.png')),
+  check('不存在的图片路径：退回文本插入', staged.length === 2 && lines.some(l => l.includes('/nonexistent/dir/x.png')),
     `staged=${staged.length}`)
 }
 
