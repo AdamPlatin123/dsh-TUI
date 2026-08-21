@@ -96,7 +96,7 @@ export function CommandSuggestions({
           <Text key={command.name} wrap="truncate">
             {' '}
             {isSelected ? (
-              <Text color="suggestion" bold>{`${POINTER} ${command.name}`}</Text>
+              <Text color="suggestion" bold>{`${POINTER} ${command.name}${' '.repeat(padAfter)}`}</Text>
             ) : parts ? (
               // 嵌套 Text 会继承父级 dim（本 fork 的 dimColor 是颜色替换，
               // dim={false} 盖不掉），故高亮段必须与 dim 段平铺为兄弟。
