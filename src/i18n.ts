@@ -365,6 +365,13 @@ const dict = {
   'frame-tail-2': { zh: '摆尾巴2', en: 'tail2' },
   'frame-tail-3': { zh: '摆尾巴3', en: 'tail3' },
 
+  // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
+  'sugg-commands-title': { zh: '命令', en: 'commands' },
+  'sugg-files-title': { zh: '文件', en: 'files' },
+  'sugg-count': { zh: '共 {{n}} 项', en: '{{n}} items' },
+  'sugg-more-above': { zh: '↑{{n}}', en: '↑{{n}}' },
+  'sugg-more-below': { zh: '↓{{n}}', en: '↓{{n}}' },
+
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },

@@ -101,9 +101,10 @@ export interface PromptInputProps {
 /**
  * Claude Code style prompt input: rounded border box (top+bottom borders
  * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
- * block cursor at the cursor position, and below it the slash-command
- * suggestion overlay (name column + description, selected row in the
- * `suggestion` color — mirroring Claude Code's PromptInputFooterSuggestions).
+ * block cursor at the cursor position, and above it the slash-command /
+ * file-completion suggestion card (SuggestionCard: rounded panel with the
+ * selected row behind a `❯` pointer in the theme's `suggestion` color,
+ * mirroring Claude Code's PromptInputFooterSuggestions layout).
  *
  * Empty input: a solid block caret on a blank cell and nothing else — no
  * placeholder text, so the terminal-painted IME preedit (pinyin) at the
@@ -1014,6 +1015,8 @@ export function PromptInput({
   // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。
   const floatersOpen = helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen
+  // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
+  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1062,22 +1065,22 @@ export function PromptInput({
           </Box>
         )}
         {fileOverlayOpen && (
-          <Box paddingLeft={2} paddingBottom={1}>
-            <FileSuggestions
-              files={fileMatches}
-              selectedIndex={fileSelected}
-              columns={columns}
-            />
-          </Box>
+          <FileSuggestions
+            files={fileMatches}
+            selectedIndex={fileSelected}
+            columns={columns}
+            query={mention?.query ?? ''}
+            accent={promptAccent}
+          />
         )}
         {overlayOpen && (
-          <Box paddingLeft={2} paddingBottom={1}>
-            <CommandSuggestions
-              commands={suggestions}
-              selectedIndex={selectedCommand}
-              columns={columns}
-            />
-          </Box>
+          <CommandSuggestions
+            commands={suggestions}
+            selectedIndex={selectedCommand}
+            columns={columns}
+            query={value}
+            accent={promptAccent}
+          />
         )}
       </OverlayAbove>
       )}
@@ -1116,7 +1119,7 @@ export function PromptInput({
         levels={channel.effortLevels}
         columns={columns}
         onLight={isLightThemeActive(themeName)}
-        idleColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
+        idleColor={promptAccent}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph
