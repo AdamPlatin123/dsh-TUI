@@ -382,6 +382,9 @@ const dict = {
   'sugg-activity-frames-desc': { zh: '列出或切换动画帧预设', en: 'List or switch frame presets' },
   'sugg-activity-frame-desc': { zh: '动画帧预设', en: 'Animation frame preset' },
 
+  // ── dsh-adapter/plugin.ts（/settings 全屏设置）───────────────────────
+  'settings-fullscreen-restart': { zh: '全屏设置已保存，重启 dsh-tui 后生效', en: 'Fullscreen preference saved — restart dsh-tui to apply' },
+
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },

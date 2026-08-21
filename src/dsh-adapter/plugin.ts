@@ -367,6 +367,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Fullscreen layout decision: the settings user layer (edited through the
+  // /settings screen) overrides cordis.yml when set. The settings injection
+  // below resolves it synchronously when the host settings service is up —
+  // i.e. before the tree mounts. `fullscreenFrozen` latches at mount: the
+  // exit funnel and the AlternateScreen wrap must keep reading the mode this
+  // session ACTUALLY runs, never a mid-session edit meant for the next boot
+  // (swapping layouts requires re-mounting the whole tree).
+  let bootedFullscreen = config.fullscreen === true
+  let fullscreenFrozen = false
   // Register the dsh-tui settings namespace so the /settings screen can
   // edit it (the section below was '命名空间未注册' without this): the
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
@@ -404,6 +413,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
         lang: Schema.union(['zh', 'en']),
+        // Same no-default rule: unset keeps cordis.yml's `fullscreen`
+        // decisive; set overrides it from the next boot on.
+        fullscreen: Schema.boolean(),
       }),
     )
     type SettingsValue = {
@@ -411,6 +423,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       lang?: 'zh' | 'en'
       whale?: boolean
       minimal?: boolean
+      fullscreen?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       statusBar?: Partial<StatusBarConfig>
@@ -423,6 +436,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
       channel.setMinimal(value.minimal ?? false)
+    }
+    // Fullscreen: only meaningful before the tree mounts (the freeze latch
+    // above). A later doc change (mid-session /settings edit) is persisted
+    // by the service and picked up on the next boot; the watch below says
+    // so with a notify.
+    const applyFullscreen = (value: SettingsValue): void => {
+      if (!fullscreenFrozen && typeof value.fullscreen === 'boolean') {
+        bootedFullscreen = value.fullscreen
+      }
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
@@ -448,12 +470,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
+      applyFullscreen(next)
     }
     apply(scope.get())
     scope.watch(next => {
       apply(next)
+      if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
+        channel.notify(t('settings-fullscreen-restart'), { color: 'warning' })
+      }
     })
   })
+  // The tree mounts with the resolved value from here on; a settings doc
+  // landing later must not flip the running session's exit/layout truth.
+  fullscreenFrozen = true
   // The /settings screen's own section: the dsh-tui namespace comes from
   // the settings registration above, and the declared selects write `lang`
   // and `diffLayout` back through the settings service's revision-fenced
@@ -483,6 +512,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             // (env / cordis.yml / lang.json resolution) instead of a
             // blank "unset" that hides the current choice.
             return value === undefined || value === null ? getLang() : String(value)
+          },
+        },
+        {
+          path: ['fullscreen'],
+          label: 'Fullscreen mode',
+          descriptions: { zh: '全屏模式' },
+          hint: 'Alt-screen fullscreen layout with in-app mouse selection and wheel scroll; off keeps the terminal-native scrollback and selection. Saved for the next launch.',
+          hintDescriptions: { zh: '开启：alt-screen 全屏布局，应用内鼠标选择与滚轮滚动；关闭：保留终端原生滚动与选择。保存后下次启动生效。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: show what THIS session booted with
+            // (the cordis.yml resolution) instead of a misleading false.
+            return value === undefined || value === null ? String(bootedFullscreen) : String(value)
           },
         },
         {
@@ -747,7 +789,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         void finishExit(
           ctx,
           instance,
-          config.fullscreen === true,
+          bootedFullscreen,
           undefined,
           `dsh-tui crashed: ${message}`,
           () => disposeRootAndExit(ctx, 1),
@@ -763,7 +805,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         void finishExit(
           ctx,
           instance,
-          config.fullscreen === true,
+          bootedFullscreen,
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
           () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
@@ -792,7 +834,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void finishExit(
         ctx,
         instance,
-        config.fullscreen === true,
+        bootedFullscreen,
         hint,
         undefined,
         () => disposeRootAndExit(ctx, 0),
@@ -814,7 +856,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Full-screen surfaces inside Chat — the trajectory scene and the session
     // browser — enter the alt screen themselves in inline mode; in fullscreen
     // the tree is already wrapped below, so they must not nest.
-    fullscreen: config.fullscreen === true,
+    fullscreen: bootedFullscreen,
     onExit: () => handleExit(),
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
@@ -863,7 +905,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const tree = React.createElement(
     ThemeProvider,
     null,
-    config.fullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
+    bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
   )
   instance = await render(tree, { exitOnCtrlC: false })
 
