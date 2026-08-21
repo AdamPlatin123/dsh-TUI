@@ -2130,6 +2130,13 @@ export function Chat({
     rewindOpen || searchOpen || tipsOpen
   const questionOverlayOpen = questionSnapshot !== null && approvalSnapshot === null
     && dialogSnapshot === null && !tipsOpen && btw === null
+  // Absolute terminal rects include the bottom cell. In roomy frames reserve
+  // that shared boundary cell so the questionnaire hint cannot paint over the
+  // StatusLine's supplemental row; constrained frames keep it for the focused
+  // answer instead. Charge the same cell to the panel budget so its measured
+  // content can never extend above the physical viewport.
+  const questionBoundaryGap = questionAvailableRows < 10 ? 0 : 1
+  const questionPanelRows = Math.max(1, questionAvailableRows - questionBoundaryGap)
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
@@ -2294,15 +2301,15 @@ export function Chat({
               />
             </Box>
           )}
-          {/* A one-row anchor with a compensating negative margin marks the
-              exact prompt/StatusLine boundary without changing frame height.
-              When fewer than ten answer rows remain it may cover nonessential
-              status fields so the focused answer and controls stay actionable. */}
-          <Box height={1} marginTop={-1} flexShrink={0} width="100%">
+          {/* Measure every StatusLine row, including optional context and
+              supplemental rows. The question overlay is an absolute child of
+              this wrapper and pins its bottom to the wrapper's top, so it
+              covers the mounted prompt without consuming or covering status. */}
+          <Box ref={questionAnchorRef} flexDirection="column" width="100%">
             {questionOverlayOpen && questionSnapshot !== null && (
               <OverlayAbove
-                bottom={questionAvailableRows < 10 ? 0 : questionStatusRows}
-                maxHeight={questionAvailableRows}
+                bottom={questionStatusRows + questionBoundaryGap}
+                maxHeight={questionPanelRows}
               >
                 <AskUserQuestionPanel
                   key={questionSnapshot.key}
@@ -2310,17 +2317,12 @@ export function Chat({
                   position={questionSnapshot.position}
                   total={questionSnapshot.total}
                   answered={questionSnapshot.answered}
-                  availableRows={questionAvailableRows}
+                  availableRows={questionPanelRows}
                   onAnswer={selection => questionStore.answerCurrent(selection)}
                   onCancel={() => questionStore.cancelCurrent()}
                 />
               </OverlayAbove>
             )}
-          </Box>
-          {/* Measure every StatusLine row, including optional context and
-              supplemental rows. The question overlay is anchored to the
-              prompt immediately above this later-painted status container. */}
-          <Box ref={questionAnchorRef} flexDirection="column" width="100%">
             <StatusLine
               channel={channel}
               selectionActive={selectionActive}

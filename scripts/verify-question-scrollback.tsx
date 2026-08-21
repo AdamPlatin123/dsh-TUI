@@ -214,9 +214,20 @@ check('initial render', true)
 
 // A pasted multiline draft grows PromptInput to its five-row cap. Opening a
 // question must freeze this measured seat rather than collapse to the old
-// hard-coded three rows; closing must restore both the draft and frame height.
-stdin.write('\x1b[200~第一行 prompt\n第二行 prompt\n第三行 prompt\n第四行 prompt\x1b[201~')
-await waitFor('multiline prompt to become visible', () => visibleText().includes('第四行 prompt'))
+// hard-coded three rows; the opaque overlay must hide every draft row while
+// preserving all three measured StatusLine rows, then closing must restore the
+// complete draft and frame height.
+channelFixture.working = false
+channelFixture.workingActivity.phase = 'idle'
+channelFixture.workingActivity.line = ''
+channelFixture.version += 1
+for (const listener of listeners) listener()
+await waitFor('three-row status chrome before multiline question', () =>
+  visibleText().includes('ctx 14%') && visibleText().includes('? 查看快捷键'))
+const multilineDraftLines = ['第一行 prompt', '第二行 prompt', '第三行 prompt', '第四行 prompt']
+stdin.write(`\x1b[200~${multilineDraftLines.join('\n')}\x1b[201~`)
+await waitFor('multiline prompt to become visible', () =>
+  multilineDraftLines.every(line => visibleText().includes(line)))
 checkVisible('multiline prompt is visible before question', '第四行 prompt')
 initialBufferLength = term.buffer.active.length
 
@@ -239,33 +250,56 @@ const answer = store.ask({
     },
   ],
 } as never)
-await waitFor('first questionnaire page', () => visibleText().includes('使用哪个运行环境？'))
+await waitFor('first questionnaire page', () => {
+  const screen = visibleText()
+  return screen.includes('使用哪个运行环境？')
+    && screen.includes('ctx 14%')
+    && screen.includes('? 查看快捷键')
+    && multilineDraftLines.every(line => !screen.includes(line))
+})
+await sleep(250)
 check('question opened')
 checkBufferStable('question open does not grow scrollback')
 checkVisible('first question remains visible', '使用哪个运行环境？')
+checkVisible('first question preserves status fields', 'ctx 14%')
+checkVisible('first question preserves supplemental status row', '? 查看快捷键')
+const firstQuestionHidesDraft = multilineDraftLines.every(line => !visibleText().includes(line))
+console.log(`${firstQuestionHidesDraft ? 'PASS' : 'FAIL'}  first question hides every multiline draft row`)
+if (!firstQuestionHidesDraft) failures += 1
 
 stdin.write('\r')
-await waitFor('second questionnaire page', () => visibleText().includes('继续执行吗？'))
+await waitFor('second questionnaire page', () => {
+  const screen = visibleText()
+  return screen.includes('继续执行吗？')
+    && screen.includes('ctx 14%')
+    && screen.includes('? 查看快捷键')
+    && multilineDraftLines.every(line => !screen.includes(line))
+})
+await sleep(250)
 check('advanced to second question')
 checkBufferStable('question advance does not grow scrollback')
 checkVisible('second question remains visible', '继续执行吗？')
+checkVisible('second question preserves status fields', 'ctx 14%')
+checkVisible('second question preserves supplemental status row', '? 查看快捷键')
+const secondQuestionHidesDraft = multilineDraftLines.every(line => !visibleText().includes(line))
+console.log(`${secondQuestionHidesDraft ? 'PASS' : 'FAIL'}  second question hides every multiline draft row`)
+if (!secondQuestionHidesDraft) failures += 1
 
 stdin.write('\r')
 await answer
 await waitFor('questionnaire close and prompt restoration', () =>
-  visibleText().includes('第四行 prompt') && splashCount() === 1)
+  multilineDraftLines.every(line => visibleText().includes(line)) && splashCount() === 1)
 check('questionnaire closed', true)
 checkBufferStable('question close does not grow scrollback')
-checkVisible('multiline prompt is restored after question', '第四行 prompt')
+const restoredDraft = multilineDraftLines.every(line => visibleText().includes(line))
+console.log(`${restoredDraft ? 'PASS' : 'FAIL'}  complete multiline prompt is restored after question`)
+if (!restoredDraft) failures += 1
 
 // Exercise the real PromptInput → Chat command dispatcher → provider wizard
 // path rather than only injecting QuestionStore snapshots. A three-row status
 // configuration also proves the overlay anchor follows measured chrome height.
 stdin.write('\x1b')
 await waitFor('multiline prompt clear', () => !visibleText().includes('第四行 prompt'))
-channelFixture.working = false
-channelFixture.version += 1
-for (const listener of listeners) listener()
 await waitFor('three-row status chrome', () => visibleText().includes('ctx 14%')
   && visibleText().includes('? 查看快捷键'))
 initialBufferLength = term.buffer.active.length
@@ -273,6 +307,7 @@ stdin.write('/provider')
 stdin.write('\r')
 await waitFor('/provider mode snapshot', () => store.getSnapshot()?.question.id === 'mode')
 await waitFor('/provider mode page', () => visibleText().includes('要添加哪种模型提供方？'))
+await sleep(250)
 checkBufferStable('real /provider command open does not grow scrollback')
 checkVisible('real /provider command opens its first wizard question', '要添加哪种模型提供方？')
 checkVisible('question preserves status fields below the overlay', 'ctx 14%')
@@ -287,6 +322,8 @@ await waitFor('/provider cancellation to restore prompt', () =>
   store.getSnapshot() === null && !visibleText().includes('选择 provider'))
 checkBufferStable('real /provider cancel does not grow scrollback')
 channelFixture.working = true
+channelFixture.workingActivity.phase = 'asking'
+channelFixture.workingActivity.line = '等待回答'
 channelFixture.version += 1
 const chunksBeforeWorkingRestore = rawChunks.length
 for (const listener of listeners) listener()
