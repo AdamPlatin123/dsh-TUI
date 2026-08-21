@@ -221,6 +221,7 @@ dsh-tui
 | `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `code` / `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/lang` | `en` / `zh` / `status` | 界面语言热切换。优先级：`DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
+| `/tui` | `fullscreen` / `default`（`inline` 别名） | 全屏/常规热切换。空参打印当前模式与用法；选择写入 `~/.dsh/settings.yaml` 的 `dsh-tui.fullscreen`，覆盖组合层默认 |
 
 ### 3.4 账号 / 策略 / 扩展
 
@@ -440,6 +441,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
+| 显示模式 | `/tui` | `fullscreen` / `default`（`inline` 别名）热切换；空参看状态；写入 `~/.dsh/settings.yaml` 的 `dsh-tui.fullscreen` |
 | 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；帧名 30 个（默认 `moon8`，`random` 随机） |
 
 **主题优先级**：`DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 终端背景检测 > dark 回退。
