@@ -735,6 +735,7 @@ export function Chat({
         if (parts[0] === 'status') {
           channel.pushLocal('/planPrompt', [
             channel.planPromptEnabled() ? t('plan-prompt-status-on') : t('plan-prompt-status-off'),
+            channel.planModeEnabled() ? t('plan-status-on') : t('plan-status-off'),
             t('plan-prompt-usage'),
           ])
           return true

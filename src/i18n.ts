@@ -831,6 +831,8 @@ const dict = {
   'plan-prompt-status-off': { zh: '状态：已关闭（保持 Minimal 系统提示）', en: 'Status: off (the Minimal system prompt is unchanged)' },
   'plan-prompt-usage': { zh: '用法：/planPrompt 开启 · /planPrompt off 关闭 · /planPrompt status 查看', en: 'Usage: /planPrompt to enable · /planPrompt off to disable · /planPrompt status' },
   'plan-prompt-unavailable': { zh: '/planPrompt 仅在梁神模式（/preset liangshen）可用', en: '/planPrompt is only available in Liangshen mode (/preset liangshen)' },
+  'plan-status-on': { zh: '计划模式：已开启', en: 'Plan mode: on' },
+  'plan-status-off': { zh: '计划模式：已关闭', en: 'Plan mode: off' },
 
   // ── /lang command ───────────────────────────────────────────────────
   'lang-current': { zh: '当前语言  {{lang}}', en: 'Current language  {{lang}}' },

@@ -680,6 +680,12 @@ export interface Channel {
   /** Shift+Tab: advance to the next configured session mode. Concurrent
    *  invocations are serialized, so rapid presses advance once per press. */
   cycleMode(): Promise<void>
+  /**
+   * Whether real plan mode is in force, including a switch queued for the
+   * next step boundary (dsh-plan-mode's pending intent) — the same truth the
+   * model-facing plan section uses.
+   */
+  planModeEnabled(): boolean
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
@@ -985,6 +991,8 @@ export interface ChannelState {
   modeIndex: number
   /** Shift+Tab session-mode advance (see the public Channel type). */
   cycleMode(): Promise<void>
+  /** Real plan-mode state (see the public Channel type). */
+  planModeEnabled(): boolean
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
   /** `/planPrompt` injection switch (see the public Channel type). */
@@ -2172,6 +2180,34 @@ export function createChannel(
     return active
   }
   /**
+   * Effective plan-mode truth: dsh-plan-mode's pending intent (a switch
+   * queued for the next step boundary) wins over the logged fold, exactly
+   * like the controller's own model-facing section and the plan-aware
+   * persona gate. Falls back to the raw log fold when the controller is
+   * not resolvable (bare embeds, rosterless leafs).
+   */
+  const planModeState = (): { active: boolean; pending?: boolean } => {
+    try {
+      const planMode = serviceForAgent<{
+        get?(agent: Agent): { active: boolean; pending?: boolean }
+      }>(ctx, agent, 'planMode')
+      const value = planMode?.get?.(agent)
+      if (value !== undefined && typeof value.active === 'boolean') {
+        return {
+          active: value.active,
+          pending: typeof value.pending === 'boolean' ? value.pending : undefined,
+        }
+      }
+    } catch {
+      // Roster/service resolution is best-effort; the log fold is authoritative alone.
+    }
+    return { active: foldPlanActive(agent.session.events) }
+  }
+  const planModeEnabled = (): boolean => {
+    const plan = planModeState()
+    return plan.pending ?? plan.active
+  }
+  /**
    * `/planPrompt` switch (Liangshen-only). The event is appended by this
    * channel and folded by `presets/liangshen/plan-aware-persona.mjs` — the
    * string is duplicated because the packaged preset must stay importable
@@ -2187,6 +2223,14 @@ export function createChannel(
     }
     return active
   }
+  /**
+   * Sessions whose stale `/planPrompt` clear is queued. The clear must NOT
+   * append from inside the `session/event` observer that noticed the plan
+   * exit: dsh-session forbids reentrant appends while an event is being
+   * published, so the observer's append would throw and be swallowed by the
+   * session's contained listener dispatch, leaving the switch stale-on.
+   */
+  const pendingPlanPromptClears = new Set<object>()
   const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
     let mode: string | undefined
     for (const event of events) {
@@ -2256,8 +2300,22 @@ export function createChannel(
       const approval = ctx.get('approval') as
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
+      const before = foldApprovalPolicy(agent.session.events)
       if (approval) {
         approval.setPolicy(agent, spec.approval)
+        // dsh-user-approval.setPolicy is a deliberate no-op when the target
+        // already equals the configured default, so no `approval/policy`
+        // event lands. Mode derivation reads the log only, so without the
+        // explicit event a mode whose approval atom equals that default
+        // (the built-in plan mode's `ask`) can never match and Shift+Tab
+        // gets stuck re-applying the same mode. Log the explicit override
+        // when the service left the fold unchanged.
+        if (foldApprovalPolicy(agent.session.events) === before) {
+          ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+            'approval/policy',
+            { policy: spec.approval },
+          )
+        }
       } else {
         ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
           'approval/policy',
@@ -2365,12 +2423,31 @@ export function createChannel(
     const planActive = foldPlanActive(agent.session.events)
     const session = agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }
     if (promptActive !== active) session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active })
-    // Keep plan state consistent with the switch, but never let an OFF
-    // command tear down a plan mode the user entered through plain `/plan`.
+    // Prefer the real dsh-plan-mode controller for the plan-state half: it
+    // owns the pending-intent queue, so a `/plan off` queued during an open
+    // turn must be replaced/cancelled by this switch instead of silently
+    // winning at the next step boundary after `/planPrompt` was re-entered.
+    let planMode: { set(agent: Agent, active: boolean): unknown } | undefined
+    try {
+      planMode = serviceForAgent<{ set(agent: Agent, active: boolean): unknown }>(ctx, agent, 'planMode')
+    } catch {
+      planMode = undefined
+    }
     if (active) {
-      if (!planActive) session.append('plan/mode', { active: true })
-    } else if (promptActive && planActive) {
-      session.append('plan/mode', { active: false })
+      if (planMode?.set !== undefined) {
+        planMode.set(agent, true)
+      } else if (!planActive) {
+        session.append('plan/mode', { active: true })
+      }
+    } else if (promptActive) {
+      // Never let an OFF command tear down a plan mode the user entered
+      // through plain `/plan`: only touch plan state when this switch was
+      // the one keeping the injection on.
+      if (planMode?.set !== undefined) {
+        planMode.set(agent, false)
+      } else if (planActive) {
+        session.append('plan/mode', { active: false })
+      }
     }
     return active
   }
@@ -3453,6 +3530,7 @@ export function createChannel(
     listEfforts,
     setEffort,
     cycleMode,
+    planModeEnabled,
     planPromptEnabled,
     setPlanPrompt,
     clear() {
@@ -5719,12 +5797,26 @@ ${output}
         if (
           eventType === 'plan/mode' &&
           (event.data as unknown as { active?: boolean }).active !== true &&
-          foldPlanPromptEnabled(agent.session.events)
+          foldPlanPromptEnabled(session.events) &&
+          !pendingPlanPromptClears.has(session)
         ) {
-          ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-            LIANGSHEN_PLAN_PROMPT_EVENT,
-            { active: false },
-          )
+          pendingPlanPromptClears.add(session)
+          queueMicrotask(() => {
+            pendingPlanPromptClears.delete(session)
+            // Re-check after the publishing append has unwound: a queued
+            // `/planPrompt` back-on in the same tick must not be cleared.
+            if (foldPlanActive(session.events) || !foldPlanPromptEnabled(session.events)) return
+            try {
+              ;(session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+                LIANGSHEN_PLAN_PROMPT_EVENT,
+                { active: false },
+              )
+            } catch (error) {
+              ctx.logger.warn(
+                `dsh-tui: failed to clear the /planPrompt switch: ${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
+          })
         }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
