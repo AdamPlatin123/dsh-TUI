@@ -32,7 +32,6 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { valid, gt } from 'semver'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ownDir = dirname(here)
@@ -64,6 +63,40 @@ const shellOpt = isWin ? { shell: true } : {}
 // 转义后拼进命令字符串（空参数数组不触发），非 Windows 保持数组直传。
 const cmd = (command, args) =>
   isWin ? [`${command} ${shellQuote(args).join(' ')}`, []] : [command, args]
+
+// 内联 semver（解析 + 严格大于）：启动器可能在依赖不完整的环境里被执行
+// （迁移、半损坏安装、测试沙箱），零外部依赖是自保底线。覆盖 semver 的
+// 核心-先行版比较规则：先行版标识符逐段比（数字段按数值、小于字母段），
+// 前缀相同时段数少者更旧，无先行版者最新。
+const parseVersion = v => {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v).trim())
+  return m
+    ? { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] === undefined ? null : m[4].split('.') }
+    : null
+}
+const isVersionNewer = (a, b) => {
+  const A = parseVersion(a)
+  const B = parseVersion(b)
+  if (A === null || B === null) return false
+  for (const key of ['major', 'minor', 'patch']) {
+    if (A[key] !== B[key]) return A[key] > B[key]
+  }
+  if (A.pre === null) return B.pre !== null
+  if (B.pre === null) return false
+  for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
+    const x = A.pre[i]
+    const y = B.pre[i]
+    if (x === undefined) return false
+    if (y === undefined) return true
+    if (x === y) continue
+    const xn = /^\d+$/.test(x)
+    const yn = /^\d+$/.test(y)
+    if (xn && yn) return Number(x) > Number(y)
+    if (xn !== yn) return yn
+    return x > y
+  }
+  return false
+}
 
 const lang = (process.env.DSH_TUI_LANG ?? process.env.CC_TUI_LANG) === 'en' ? 'en' : 'zh'
 const MSG = {
@@ -156,55 +189,59 @@ const forwardExit = child => {
   })
 }
 
-// ─── 全局副本：瘦壳角色 ───────────────────────────────────────────────────────
-if (!runningInsideProfile && ownVersion !== undefined) {
-  const profileReady = () => {
-    try {
-      readFileSync(installedPkgPath, 'utf8')
-      return true
-    } catch {
-      return false
+// 首次运行自举：探测 dsh 与 pnpm，随后 `dsh plugin add` 固定到与启动器一
+// 致的版本（避免 pnpm store 缓存带来的旧版漂移）。-w 重试（issue #239）与
+// 「no-op 假成功」复查（issue #209）在此集中实现，瘦壳与完整逻辑共用。
+const profileReady = () => {
+  try {
+    readFileSync(installedPkgPath, 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+const bootstrapProfile = () => {
+  const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+  if (probe.error || probe.status !== 0) {
+    console.error(msg('noDsh'))
+    process.exit(1)
+  }
+  const pnpmProbe = spawnSync(...cmd('pnpm', ['--version']), { stdio: 'pipe', ...shellOpt })
+  if (pnpmProbe.error || pnpmProbe.status !== 0) {
+    console.error(msg('noPnpm'))
+    process.exit(1)
+  }
+  console.log(msg('bootstrapStart'))
+  const runAdd = (extraArgs, capture) => spawnSync(
+    ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
+    { stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit', ...shellOpt },
+  )
+  let add = runAdd([], true)
+  if (add.status !== 0) {
+    const captured = `${add.stdout ?? ''}${add.stderr ?? ''}`
+    process.stderr.write(captured)
+    if (captured.includes('ERR_PNPM_ADDING_TO_ROOT')) {
+      console.log(msg('bootstrapRetryW'))
+      add = runAdd(['-w'], false)
     }
+  } else {
+    process.stdout.write(`${add.stdout ?? ''}${add.stderr ?? ''}`)
+  }
+  if (add.status !== 0) {
+    console.error(msg('installFailed'))
+    process.exit(add.status ?? 1)
   }
   if (!profileReady()) {
-    // 首次运行自举：探测 dsh 与 pnpm，随后 `dsh plugin add` 固定到与全局
-    // 安装一致的版本（避免 pnpm store 缓存带来的旧版漂移）。-w 重试与
-    // 「no-op 假成功」复查的逻辑与完整启动器一致（issue #239/#209）。
-    const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
-    if (probe.error || probe.status !== 0) {
-      console.error(msg('noDsh'))
-      process.exit(1)
-    }
-    const pnpmProbe = spawnSync(...cmd('pnpm', ['--version']), { stdio: 'pipe', ...shellOpt })
-    if (pnpmProbe.error || pnpmProbe.status !== 0) {
-      console.error(msg('noPnpm'))
-      process.exit(1)
-    }
-    console.log(msg('bootstrapStart'))
-    const runAdd = (extraArgs, capture) => spawnSync(
-      ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
-      { stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit', ...shellOpt },
-    )
-    let add = runAdd([], true)
-    if (add.status !== 0) {
-      const captured = `${add.stdout ?? ''}${add.stderr ?? ''}`
-      process.stderr.write(captured)
-      if (captured.includes('ERR_PNPM_ADDING_TO_ROOT')) {
-        console.log(msg('bootstrapRetryW'))
-        add = runAdd(['-w'], false)
-      }
-    } else {
-      process.stdout.write(`${add.stdout ?? ''}${add.stderr ?? ''}`)
-    }
-    if (add.status !== 0) {
-      console.error(msg('installFailed'))
-      process.exit(add.status ?? 1)
-    }
-    if (!profileReady()) {
-      console.error(msg('bootstrapUnreadable')(profileDir))
-      process.exit(1)
-    }
+    console.error(msg('bootstrapUnreadable')(profileDir))
+    process.exit(1)
   }
+}
+
+// ─── 全局副本：瘦壳角色 ───────────────────────────────────────────────────────
+// DSH_TUI_NO_DELEGATE=1 是测试/调试逃生口：强制走完整逻辑（verify-launcher
+// 的沙箱用它直接驱动全量路径；现场排查委托链时同样可用）。
+if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_DELEGATE !== '1') {
+  if (!profileReady()) bootstrapProfile()
   // 委托 profile 内副本执行全部启动逻辑。外层代际通过
   // DSH_TUI_LAUNCHER_VERSION 交代（/update 的对齐诊断沿用该契约）。
   try {
@@ -221,19 +258,29 @@ if (!runningInsideProfile && ownVersion !== undefined) {
   forwardExit(child)
 } else {
   // ─── profile 副本（或源码运行）：完整启动逻辑 ─────────────────────────────
-  // 版本核对：被委托执行时本包即 profile 内的包，installedVersion 与
-  // ownVersion 天然一致，错位分支为结构性 no-op；直接运行（源码目录）
-  // 时保留 0.8.3 起的双向错位处理。
+  // dsh CLI 预检（缺失时给安装指引，先于一切 profile 逻辑）。
+  {
+    const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+    if (probe.error || probe.status !== 0) {
+      console.error(msg('noDsh'))
+      process.exit(1)
+    }
+  }
   let installedVersion
   try {
     installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf8')).version
   } catch {
     installedVersion = undefined
   }
-  if (installedVersion === undefined && !runningInsideProfile) {
-    // 源码运行且 profile 未初始化：指向全局命令完成首次自举。
-    console.error(`[dsh-tui] profile not initialized — run the globally installed \`dsh-tui\` command once (npm install -g ${PACKAGE}).`)
-    process.exit(1)
+  // 残骸/未初始化 profile：与旧启动器一致地就地自举（add 固定到本包版
+  // 本，成功后版本天然对齐），而不是拒绝启动。
+  if (installedVersion === undefined) {
+    bootstrapProfile()
+    try {
+      installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf8')).version
+    } catch {
+      installedVersion = undefined
+    }
   }
   if (installedVersion !== undefined && ownVersion !== undefined && installedVersion !== ownVersion && !runningInsideProfile) {
     const majorMinor = v => v.split('-')[0].split('.').slice(0, 2).map(Number)
@@ -246,12 +293,18 @@ if (!runningInsideProfile && ownVersion !== undefined) {
       )
       process.exit(1)
     }
-    const installedSemver = valid(installedVersion)
-    const ownSemver = valid(ownVersion)
-    if (installedSemver !== null && ownSemver !== null && gt(installedSemver, ownSemver)) {
+    const installedNewer = installedVersion !== undefined && ownVersion !== undefined && isVersionNewer(installedVersion, ownVersion)
+    if (installedNewer) {
       console.error(
         `[dsh-tui] note: the profile is already v${installedVersion}; this launcher copy is v${ownVersion}.\n` +
           `  npm install -g ${PACKAGE}@${installedVersion}`,
+      )
+    } else {
+      // profile 更旧但同 minor（patch 级错位）：允许启动，指引用 add 把
+      // profile 对齐到启动器版本（精确版本，@latest 可能越过对齐点）。
+      console.error(
+        `[dsh-tui] note: the profile is running v${installedVersion} but this launcher is v${ownVersion}.\n` +
+          `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
       )
     }
   }
