@@ -110,10 +110,11 @@ const plain = (text: string): BodyLine => ({ text, tone: 'plain' })
 
 /** Tool-name color by category (mist-blue accents): read/search tools keep
  *  the brand blue, file-mutating tools get the warm gold accent, exec /
- *  terminal tools get mist cyan. */
+ *  terminal tools get mist cyan. Exported for the subagent card, which
+ *  mirrors the transcript tool-card name styling. */
 const TOOL_NAME_MUTATE = new Set(['edit', 'write', 'multiedit', 'notebookedit'])
 const TOOL_NAME_EXEC = new Set(['bash', 'bashpersistent', 'sh', 'shell', 'terminal'])
-function toolNameColor(raw: string): keyof Theme {
+export function toolNameColor(raw: string): keyof Theme {
   const n = raw.toLowerCase()
   if (TOOL_NAME_MUTATE.has(n)) return 'toolNameMutate'
   if (TOOL_NAME_EXEC.has(n)) return 'toolNameExec'

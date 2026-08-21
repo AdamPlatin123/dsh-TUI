@@ -49,10 +49,13 @@ import { extractMentions } from '../utils/mentions.js'
 import { t } from '../i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { SubagentActivityStore, type SubagentState } from './subagents.js'
+export type { SubagentState } from './subagents.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { featureOn } from 'dsh-working-activity/config'
+import { setMinimalMode } from '../minimalMode.js'
 import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
@@ -253,6 +256,32 @@ export interface ToolViewPresenter {
   result(name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined
 }
 
+/**
+ * Subagent row: displays a subagent's lifecycle (started → running → completed/failed).
+ * Derived from agent.task events and history events.
+ */
+export interface SubagentControl {
+  interrupt(agentId: string): boolean
+}
+
+export interface SubagentRow {
+  agentId: string
+  runId?: string
+  description: string
+  provider?: string
+  model?: string
+  effort?: string
+  status: SubagentState['status']
+  startedAt: number
+  completedAt?: number
+  durationMs?: number
+  outputLines: string[]
+  toolCalls: SubagentState['toolCalls']
+  tokens?: SubagentState['tokens']
+  summary?: string
+  stopReason?: string
+  error?: string
+}
 
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
@@ -261,7 +290,7 @@ export interface ToolViewPresenter {
  */
 export interface ChatRow {
   id: number
-  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact'
+  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
   /** Actual execution location for `!command` rows. */
@@ -271,6 +300,8 @@ export interface ChatRow {
   streaming?: boolean
   /** Present on `tool` rows; the card model. */
   tool?: ToolRow
+  /** Present on `subagent` rows; the subagent state snapshot. */
+  subagent?: SubagentRow
   /** Event wall-clock time (transcript-mode metadata, assistant rows). */
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
@@ -311,6 +342,21 @@ export interface NotificationItem {
   /** Auto-dismiss after this many ms (default 4000); 0 = sticky, removed
    *  only through the early-dismiss handle. */
   timeoutMs: number
+}
+
+/** Names the subagent delegation tools ship under (preset `toolName` values
+ *  plus the CLI default); each renders as a live subagent card, never a plain
+ *  tool card. */
+const SUBAGENT_TOOL_NAMES = new Set([
+  'task',
+  'subagent',
+  'subagent_fork',
+  'subagent_claude_code',
+  'subagent_codex',
+  'spawn_task',
+])
+function isSubagentToolName(name: string): boolean {
+  return SUBAGENT_TOOL_NAMES.has(name.toLowerCase())
 }
 
 /**
@@ -480,6 +526,9 @@ export interface Channel {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
+   *  glyphs, no decorative colors; code highlight and tool colors stay. */
+  readonly minimal: boolean
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -558,6 +607,10 @@ export interface Channel {
     thinking: number
     tools: number
   }
+  /** Active subagents spawned by the current session. */
+  readonly subagents: readonly SubagentState[]
+  /** Native control operations; unavailable providers safely return false. */
+  readonly subagentControl: SubagentControl
   subscribe: (listener: () => void) => () => void
   /** Validate and persist a pasted image, returning its prompt placeholder. */
   stageImage(input: StagedImageInput): Promise<string>
@@ -829,6 +882,9 @@ export interface ChannelState {
   whale: boolean
   /** Apply a whale-visibility change (see the public Channel type). */
   setWhale(visible: boolean): void
+  minimal: boolean
+  /** Apply a minimal-mode change (see the public Channel type). */
+  setMinimal(enabled: boolean): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -867,6 +923,9 @@ export interface ChannelState {
     thinking: number
     tools: number
   }
+  /** Active subagents roster (see the public Channel type). */
+  subagents: readonly SubagentState[]
+  subagentControl: SubagentControl
   subscribe: (listener: () => void) => () => void
   stageImage(input: StagedImageInput): Promise<string>
   /** @internal event bump (the public `notify(text)` posts a notification). */
@@ -1260,6 +1319,8 @@ export function createChannel(
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
     whale?: boolean
+    /** Minimal mode; default off (settings `dsh-tui.minimal`). */
+    minimal?: boolean
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -1283,6 +1344,24 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  const subagentControl: SubagentControl = {
+    interrupt(agentId) {
+      const child = subagentStore.get(agentId)
+      const target = child?.sessionId ?? agentId
+      const runtime = (ctx as any).subagents
+      if (!runtime?.interrupt || !target) return false
+      try {
+        runtime.interrupt(target, { kind: 'ancestor', agent })
+        subagentStore.onCancelled(agentId, 'interrupted')
+        state.subagents = subagentStore.snapshot()
+        syncSubagentRows()
+        state.emit()
+        return true
+      } catch {
+        return false
+      }
+    },
+  }
   // D-7 backstop: the extensions row installs the decision-subscription
   // gate, but the channel IS the dispatch path — a stale patch without that
   // row (or a bare embed mounting neither) would otherwise leave tui/input
@@ -1297,6 +1376,56 @@ export function createChannel(
   const currentGrantStore = (): ReturnType<typeof readGrantStore> =>
     ctx.get('tuiPluginHost')?.grants ?? fallbackGrantStore
   installDecisionGuard(ctx, currentGrantStore())
+  // Subagent activity tracking: collects agent/subagent/*, session/event for
+  // subagents, and exposes live snapshots for the UI.
+  const subagentStore = new SubagentActivityStore()
+  // Subagent ChatRow tracking: maps agentId to its ChatRow for live updates.
+  const subagentRowsByAgentId = new Map<string, ChatRow>()
+  // Task tool descriptions, queued in call order; each subagent/start consumes
+  // the oldest one so the card shows the user-visible task label.
+  const pendingTaskDescriptions: string[] = []
+  
+  /**
+   * Sync subagentStore state into ChatRows (insert/update in state.rows).
+   * Called whenever subagent state changes (spawned/completed/failed/output).
+   */
+  const syncSubagentRows = (): void => {
+    const snapshot = subagentStore.snapshot()
+    for (const sub of snapshot) {
+      let row = subagentRowsByAgentId.get(sub.agentId)
+      if (!row) {
+        // New subagent: insert a new ChatRow after the last user or assistant message
+        row = {
+          id: nextRowId++,
+          kind: 'subagent',
+          text: sub.description,
+          subagent: undefined, // will be filled below
+        }
+        subagentRowsByAgentId.set(sub.agentId, row)
+        state.rows.push(row)
+      }
+      const subagentRow: SubagentRow = {
+        agentId: sub.agentId,
+        runId: sub.runId,
+        description: sub.description,
+        provider: sub.provider,
+        model: sub.model || 'default',
+        effort: sub.effort,
+        status: sub.status,
+        startedAt: sub.startedAt,
+        completedAt: sub.completedAt,
+        durationMs: sub.completedAt ? sub.completedAt - sub.startedAt : Date.now() - sub.startedAt,
+        outputLines: sub.output.slice(-3),
+        toolCalls: sub.toolCalls,
+        tokens: sub.tokens,
+        summary: sub.summary,
+        stopReason: sub.stopReason,
+        error: sub.error,
+      }
+      row.subagent = subagentRow
+      row.text = sub.description
+    }
+  }
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired
@@ -2041,6 +2170,7 @@ export function createChannel(
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
+    minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -2082,6 +2212,8 @@ export function createChannel(
       thinking: 0,
       tools: 0,
     },
+    subagents: [],
+    subagentControl,
     subscribe(listener) {
       listeners.add(listener)
       return () => {
@@ -3044,6 +3176,12 @@ export function createChannel(
     setWhale(visible) {
       if (visible === state.whale) return
       state.whale = visible
+      state.emit()
+    },
+    setMinimal(enabled) {
+      setMinimalMode(enabled)
+      if (enabled === state.minimal) return
+      state.minimal = enabled
       state.emit()
     },
     setActivityFrames(name) {
@@ -4760,6 +4898,20 @@ ${output}
         // by the TUI once the batch is answered; tool/result for a call with
         // no card is a no-op below.
         if (event.data.name === 'ask_user_question') break
+        // The Task tool's plain card is replaced by the live subagent card
+        // (Kimi Code semantics): the delegation itself renders as a subagent
+        // row, so the raw args/result card would only duplicate it. The call
+        // still runs - only its transcript rendering is suppressed.
+        if (isSubagentToolName(event.data.name)) {
+          try {
+            const args = JSON.parse(event.data.arguments) as { description?: unknown }
+            if (typeof args.description === 'string' && args.description) pendingTaskDescriptions.push(args.description)
+          } catch {
+            // Unparseable args leave the queue untouched; the card falls back
+            // to the provider label.
+          }
+          break
+        }
         // Reasoning that led to a tool call is done thinking — fold the
         // preview now, before the tool card grows the transcript past it
         // (see foldLiveReasoning).
@@ -5121,6 +5273,17 @@ ${output}
         }
       })(),
       ctx.on('session/event', (session, event) => {
+        // First check if this is a subagent session
+        const subagentId = subagentStore.getSubagentIdBySession(session)
+        if (subagentId) {
+          subagentStore.onSessionEvent(subagentId, event)
+          state.subagents = subagentStore.snapshot()
+          syncSubagentRows()
+          if (event.type === 'assistant/chunk') state.emitStream()
+          else state.emit()
+          return
+        }
+        // Otherwise handle main agent session
         if (session !== agent.session) return
         // Observation broker (C-042): maps user/message + assistant/message
         // into grant-gated envelopes; every other event type is a no-op, and
@@ -5148,6 +5311,62 @@ ${output}
         if (event.type === 'assistant/chunk') state.emitStream()
         else state.emit()
       }),
+      // Subagent lifecycle tracking. The dsh-subagent service publishes scoped
+      // observe-only events as `subagent/start` and `subagent/end`; the parent
+      // Agent is carried by Cordis scope dispatch, not included in the payload.
+      (() => {
+        const disposeStart = ctx.on('subagent/start' as any, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
+          if (!info?.id) return
+          subagentStore.onSpawned(info.id, info.provider || 'subagent', info.provider, {
+            runId: info.runId ?? info.id,
+            local: info.local,
+            description: pendingTaskDescriptions.shift() ?? `${info.provider || 'subagent'} task`,
+          })
+          // In-process providers publish a child Agent during this notification.
+          // Resolve through ctx.get('agents') (the property proxy is
+          // topology-sensitive); the child carries its session (live output
+          // stream) and its provider/model route for the card header.
+          try {
+            const agents = ctx.get('agents') as
+              | { get(id: string): { session?: unknown; options?: { provider?: string; model?: string } } | undefined }
+              | undefined
+            const child = agents?.get(info.id)
+            if (child?.session) {
+              subagentStore.linkSession(info.id, child.session)
+              const model = child.options?.model ?? child.options?.provider
+              if (model) subagentStore.patch(info.id, { model, provider: child.options?.provider ?? info.provider })
+            }
+          } catch {
+            // Session discovery is best-effort and must not break the parent turn.
+          }
+          state.subagents = subagentStore.snapshot()
+          syncSubagentRows()
+          state.emit()
+        })
+        const disposeEnd = ctx.on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
+          if (!info?.id) return
+          const output = Array.isArray(info.lastAssistantMessage)
+            ? info.lastAssistantMessage
+                .map(block => typeof block === 'object' && block !== null && 'text' in block ? String((block as { text?: unknown }).text ?? '') : '')
+                .filter(Boolean)
+                .join('\n')
+            : ''
+          // The final assistant output becomes the card's summary only; the
+          // running waterfall came from the child session stream, so echoing
+          // it into the output buffer would duplicate it on the collapsed card.
+          subagentStore.flushOutput(info.id)
+          if (info.stopReason === 'completed') subagentStore.onCompleted(info.id, output, info.stopReason)
+          else if (info.stopReason === 'cancelled' || info.stopReason === 'aborted') subagentStore.onCancelled(info.id, info.stopReason, output)
+          else subagentStore.onFailed(info.id, info.stopReason || 'Unknown error')
+          state.subagents = subagentStore.snapshot()
+          syncSubagentRows()
+          state.emit()
+        })
+        return () => {
+          disposeStart()
+          disposeEnd()
+        }
+      })(),
     ]
   }
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
