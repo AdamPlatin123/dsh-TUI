@@ -33,7 +33,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -552,8 +552,8 @@ export default class Ink {
     });
     const rendererMs = performance.now() - renderStart;
 
-    // Sticky/auto-follow or wheel-drain scrolled the ScrollBox this
-    // frame. Translate the selection by the same delta so the highlight
+    // Sticky/auto-follow or wheel-drain scrolled one or more ScrollBoxes
+    // this frame. Translate the selection by the same delta so the highlight
     // stays anchored to the TEXT (native terminal behavior — the
     // selection walks up the screen as content scrolls, eventually
     // clipping at the top). frontFrame
@@ -564,15 +564,18 @@ export default class Ink {
     // (screen-local) so only anchor shifts — selection grows toward the
     // mouse as the anchor walks up. After release, both ends are text-
     // anchored and move as a block.
-    const follow = consumeFollowScroll();
-    if (follow && this.selection.anchor &&
-    // Only translate if the selection is ON scrollbox content. Selections
-    // in the footer/prompt/StickyPromptHeader are on static text — the
-    // scroll doesn't move what's under them. Without this guard, a
-    // footer selection would be shifted then clamped into the viewport,
-    // teleporting it into the scrollbox. Mirror the bounds check the
-    // deleted check() in ScrollKeybindingHandler had.
-    this.selection.anchor.row >= follow.viewportTop && this.selection.anchor.row <= follow.viewportBottom) {
+    const follow = pickFollowForSelection(
+      consumeFollowScroll(),
+      this.selection.anchor?.row ?? null,
+    );
+    // pickFollowForSelection already checked anchor-in-viewport (that IS
+    // the "selection is on scrollbox content" guard — footer/prompt
+    // selections on static text match no viewport and follow nothing).
+    // Innermost-viewport wins attributes correctly when several boxes
+    // scrolled this frame (transcript draining while an overlay panel's
+    // box scrolls): panels render on top, so overlap-row selections
+    // belong to the panel, not the covered transcript.
+    if (follow && this.selection.anchor) {
       const {
         delta,
         viewportTop,

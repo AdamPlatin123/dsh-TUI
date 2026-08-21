@@ -750,6 +750,47 @@ export function shiftSelectionForFollow(
   return false
 }
 
+/** A scroll event reported by a ScrollBox this frame (follow or wheel
+ *  drain): signed delta plus the box's viewport bounds. Structurally
+ *  identical to FollowScroll in render-node-to-output. */
+export type ScrollEvent = {
+  delta: number
+  viewportTop: number
+  viewportBottom: number
+}
+
+/**
+ * Pick which scroll event a selection belongs to when several ScrollBoxes
+ * scrolled in the same frame (e.g., the transcript still draining a wheel
+ * burst while an overlay panel's box scrolls). The selection follows the
+ * INNERMOST viewport containing the anchor: overlay panels render on top
+ * of the transcript, so a selection inside the overlap rows belongs to
+ * the panel, not the covered transcript beneath it. A selection outside
+ * every viewport (footer/prompt, static text) follows nothing — scrolling
+ * doesn't move the content under it.
+ * @param events - this frame's scroll events (signed deltas).
+ * @param anchorRow - the selection anchor's screen row, or null when no
+ *   selection is active.
+ * @returns the event the selection should be translated by, or null.
+ */
+export function pickFollowForSelection(
+  events: ScrollEvent[],
+  anchorRow: number | null,
+): ScrollEvent | null {
+  if (anchorRow === null) return null
+  let best: ScrollEvent | null = null
+  let bestHeight = Infinity
+  for (const e of events) {
+    if (anchorRow < e.viewportTop || anchorRow > e.viewportBottom) continue
+    const height = e.viewportBottom - e.viewportTop
+    if (best === null || height < bestHeight) {
+      best = e
+      bestHeight = height
+    }
+  }
+  return best
+}
+
 /**
  * True when a selection is active, meaning both anchor and focus are set.
  * @param s - the selection state to inspect.

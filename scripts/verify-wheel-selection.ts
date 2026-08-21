@@ -30,6 +30,7 @@ import {
   captureScrolledRows,
   getSelectedText,
   hasSelection,
+  pickFollowForSelection,
   shiftSelectionForFollow,
   type SelectionState,
 } from '../src/ink/selection.js'
@@ -206,6 +207,35 @@ function applyScroll(
     'row-05 content',
     'row',
   ].join('\n'))
+}
+
+// ── Test 7: multi-box attribution — innermost viewport containing the
+//    anchor wins; a selection outside every viewport follows nothing ──
+{
+  const transcript = { delta: 3, viewportTop: 0, viewportBottom: 29 }
+  const panel = { delta: -2, viewportTop: 10, viewportBottom: 18 }
+  check(
+    'T7 anchor in overlap rows picks the panel (innermost viewport)',
+    pickFollowForSelection([transcript, panel], 12),
+    panel,
+  )
+  check(
+    'T7 anchor above the panel picks the transcript',
+    pickFollowForSelection([transcript, panel], 5),
+    transcript,
+  )
+  check(
+    'T7 order-independent: same pick with events swapped',
+    pickFollowForSelection([panel, transcript], 12),
+    panel,
+  )
+  check(
+    'T7 anchor outside every viewport follows nothing',
+    pickFollowForSelection([transcript, panel], 31),
+    null,
+  )
+  check('T7 no events -> null', pickFollowForSelection([], 5), null)
+  check('T7 null anchor -> null', pickFollowForSelection([transcript], null), null)
 }
 
 if (failures > 0) {

@@ -114,10 +114,10 @@ export function getScrollDrainNode(): DOMElement | null {
 // from it before the front/back swap to preserve the text for copy.
 // Wheel drains report here too (issue #438): the pendingScrollDelta drain
 // below records its SIGNED per-frame delta (negative = content moved
-// down, wheel-up) so the selection follows wheel scrolls as well. Only
-// one event per frame — a frame that both follows AND drains reports the
-// follow (the follow branch clears pending first, so the drain
-// contributes nothing that frame).
+// down, wheel-up) so the selection follows wheel scrolls as well. One
+// event per ScrollBox per frame; when several boxes scroll in the same
+// frame, ink.tsx attributes the selection to the innermost viewport
+// containing it (see pickFollowForSelection).
 /**
  * At-bottom follow scroll recorded this frame: the scroll delta and
  * viewport bounds, consumed by ink.tsx to translate the active text
@@ -128,15 +128,18 @@ export type FollowScroll = {
   viewportTop: number
   viewportBottom: number
 }
-let followScroll: FollowScroll | null = null
+let followScrolls: FollowScroll[] = []
 
 /**
- * Read and clear the follow-scroll event recorded this frame.
- * @returns the follow-scroll delta and viewport bounds, or null.
+ * Read and clear the follow-scroll events recorded this frame. At most one
+ * per ScrollBox (a box that follows AND drains reports only the follow —
+ * the follow branch clears pendingScrollDelta before the drain runs);
+ * several boxes may each report when they scroll in the same frame.
+ * @returns this frame's follow-scroll events; empty when none.
  */
-export function consumeFollowScroll(): FollowScroll | null {
-  const f = followScroll
-  followScroll = null
+export function consumeFollowScroll(): FollowScroll[] {
+  const f = followScrolls
+  followScrolls = []
   return f
 }
 
@@ -861,11 +864,11 @@ function renderNodeToOutput(
         const followDelta = (node.scrollTop ?? 0) - scrollTopBeforeFollow
         if (followDelta > 0) {
           const vpTop = node.scrollViewportTop ?? 0
-          followScroll = {
+          followScrolls.push({
             delta: followDelta,
             viewportTop: vpTop,
             viewportBottom: vpTop + innerHeight - 1,
-          }
+          })
         }
         // Drain pendingScrollDelta. Native terminals (proportional burst
         // events) use proportional drain; xterm.js (VS Code, sparse events +
@@ -939,15 +942,16 @@ function renderNodeToOutput(
         // scrollTo/scrollToElement jumps never contribute: they write
         // scrollTop before scrollTopBeforeFollow is captured. Multi-frame
         // drains record per-frame portions; the selection's virtual-row
-        // tracking accumulates the clamp overshoot across frames.
+        // tracking accumulates the clamp overshoot across frames. Multiple
+        // boxes may each record; ink.tsx attributes by viewport containment.
         const wheelDelta = scrollTop - scrollTopBeforeFollow - followDelta
-        if (wheelDelta !== 0 && !followScroll) {
+        if (wheelDelta !== 0) {
           const wheelVpTop = node.scrollViewportTop ?? 0
-          followScroll = {
+          followScrolls.push({
             delta: wheelDelta,
             viewportTop: wheelVpTop,
             viewportBottom: wheelVpTop + innerHeight - 1
-          }
+          })
         }
         // A manual scroll that lands exactly on the bottom re-pins sticky
         // IMMEDIATELY on this frame — the follow-block restore above only
