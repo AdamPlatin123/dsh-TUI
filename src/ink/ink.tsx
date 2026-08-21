@@ -1006,6 +1006,12 @@ export default class Ink {
         // A resize reflows the terminal's saved main buffer, so the old frame
         // is no longer a trustworthy physical baseline.
         this.repaint();
+        // repaint() → log.reset() clears the high-water mark; DEC 1049 still
+        // restores the pre-alt scroll position, so put the saved peak back
+        // (same as the matching-dimensions path above).
+        if (saved) {
+          this.log.restorePeakHeight(saved.peakHeight);
+        }
       }
     }
   }
