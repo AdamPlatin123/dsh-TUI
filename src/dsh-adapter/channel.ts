@@ -682,6 +682,19 @@ export interface Channel {
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
+  /**
+   * Whether the `/planPrompt` switch is on. Toggling it through
+   * {@link setPlanPrompt} also activates/deactivates real plan mode, and the
+   * packaged persona only injects the plan section while plan mode is
+   * actually active. It has no effect outside the Liangshen preset.
+   */
+  planPromptEnabled(): boolean
+  /**
+   * Enable or disable the `/planPrompt` switch for the current session.
+   * Returns the resulting switch state, or `undefined` when the session is
+   * not running the Liangshen preset.
+   */
+  setPlanPrompt(active: boolean): boolean | undefined
   /** The roster's presets for the `/preset` picker (empty without a roster). */
   listPresets(): Promise<readonly PresetOption[]>
   /** Switch the agent preset (`/preset`): a blank session swaps composition
@@ -973,6 +986,10 @@ export interface ChannelState {
   cycleMode(): Promise<void>
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
+  /** `/planPrompt` injection switch (see the public Channel type). */
+  planPromptEnabled(): boolean
+  /** Set the `/planPrompt` injection switch (see the public Channel type). */
+  setPlanPrompt(active: boolean): boolean | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
   listPresets(): Promise<readonly PresetOption[]>
   /** Switch the agent preset (see the public Channel type). */
@@ -2145,6 +2162,22 @@ export function createChannel(
     }
     return active
   }
+  /**
+   * `/planPrompt` switch (Liangshen-only). The event is appended by this
+   * channel and folded by `presets/liangshen/plan-aware-persona.mjs` — the
+   * string is duplicated because the packaged preset must stay importable
+   * outside this package's `node_modules`.
+   */
+  const LIANGSHEN_PLAN_PROMPT_EVENT = 'plan-prompt/mode'
+  const foldPlanPromptEnabled = (events: readonly SessionEvent[]): boolean => {
+    let active = false
+    for (const event of events) {
+      if ((event as { type: string }).type === LIANGSHEN_PLAN_PROMPT_EVENT) {
+        active = (event.data as unknown as { active?: boolean }).active === true
+      }
+    }
+    return active
+  }
   const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
     let mode: string | undefined
     for (const event of events) {
@@ -2303,6 +2336,29 @@ export function createChannel(
       state.emit()
     }).catch(() => {})
   }
+  /** `/planPrompt` / `/planPrompt off`: durable, Liangshen-only plan-prompt
+   *  switch. Turning it ON also activates real plan mode, because the
+   *  injected text tells the model it is in plan mode and `exit_plan_mode`
+   *  is gated on `plan/mode`. Turning it OFF leaves plan mode when this
+   *  switch was the one keeping it on; a session that entered plan mode with
+   *  plain `/plan` is left untouched by `/planPrompt off` (the original
+   *  `/plan` command keeps its own behavior). */
+  const setPlanPrompt = (active: boolean): boolean | undefined => {
+    if (state.agentPreset !== 'liangshen') return undefined
+    const promptActive = foldPlanPromptEnabled(agent.session.events)
+    const planActive = foldPlanActive(agent.session.events)
+    const session = agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }
+    if (promptActive !== active) session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active })
+    // Keep plan state consistent with the switch, but never let an OFF
+    // command tear down a plan mode the user entered through plain `/plan`.
+    if (active) {
+      if (!planActive) session.append('plan/mode', { active: true })
+    } else if (promptActive && planActive) {
+      session.append('plan/mode', { active: false })
+    }
+    return active
+  }
+  const planPromptEnabled = (): boolean => foldPlanPromptEnabled(agent.session.events)
 
   const state: ChannelState = {
     effortLevels: undefined,
@@ -3381,6 +3437,8 @@ export function createChannel(
     listEfforts,
     setEffort,
     cycleMode,
+    planPromptEnabled,
+    setPlanPrompt,
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -3558,6 +3616,10 @@ export function createChannel(
         )
         return false
       }
+      // Local commands can be preset-gated (`/planPrompt` is Liangshen-only);
+      // recomposition already fires `commands/change` for registry rows, but
+      // the local half must be re-merged from the NEW preset id directly.
+      refreshCommandList()
       state.emit()
       if (!writePresetPref(target.id)) {
         state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
@@ -4284,7 +4346,12 @@ export function createChannel(
   const refreshCommandList = (): void => {
     const target = agent
     const token = ++commandListSeq
-    const merged: LocalCommand[] = [...LOCAL_COMMANDS]
+    // `/planPrompt` only has a receiver (the packaged persona plugin) when
+    // the session runs the Liangshen preset; keep it out of every other
+    // preset's suggestion menu.
+    const merged: LocalCommand[] = state.agentPreset === 'liangshen'
+      ? [...LOCAL_COMMANDS]
+      : LOCAL_COMMANDS.filter(command => command.name !== 'planPrompt')
     if (commandService) {
       for (const descriptor of commandService.list(target)) {
         // Hidden TUI commands (e.g. /deepseek) stay out of the public
@@ -5629,6 +5696,20 @@ ${output}
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
         }
+        // Plan mode owns the truth the injected prompt describes. When plan
+        // mode turns off (exit_plan_mode approval, /plan off, Shift+Tab), the
+        // `/planPrompt` switch must not stay stale-on: clear its durable
+        // event so status and a later bare `/planPrompt` agree with reality.
+        if (
+          eventType === 'plan/mode' &&
+          (event.data as unknown as { active?: boolean }).active !== true &&
+          foldPlanPromptEnabled(agent.session.events)
+        ) {
+          ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+            LIANGSHEN_PLAN_PROMPT_EVENT,
+            { active: false },
+          )
+        }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
         // path; every other event keeps synchronous notification.
@@ -5690,6 +5771,19 @@ ${output}
         }
       })(),
     ]
+    // A resumed/rewound log from an older build can carry a stale-on
+    // `/planPrompt` event after plan mode already exited. Normalize it once
+    // per agent bind so status and the persona gate never disagree.
+    if (
+      state.agentPreset === 'liangshen' &&
+      !foldPlanActive(agent.session.events) &&
+      foldPlanPromptEnabled(agent.session.events)
+    ) {
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+        LIANGSHEN_PLAN_PROMPT_EVENT,
+        { active: false },
+      )
+    }
   }
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
   // agents can legitimately carry their route only in persisted request

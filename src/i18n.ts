@@ -815,8 +815,19 @@ const dict = {
   // Registry-injected (external) commands — zh only; en falls back to the
   // registry's own description, and unlisted externals always fall back.
   'cmd-desc-plan': { zh: '切换计划模式（/plan off 退出）' },
+  'cmd-desc-planPrompt': { zh: '进入 plan mode 并注入梁神模式 plan 提示词（/planPrompt off 关闭并退出）' },
   'cmd-desc-goal': { zh: '设置或查看会话目标' },
   'cmd-desc-feedback': { zh: '提交使用反馈' },
+
+  // ── /planPrompt command ─────────────────────────────────────────────
+  'plan-prompt-on': { zh: '已开启梁神模式 plan prompt，并进入 plan mode · /planPrompt off 关闭', en: 'Liangshen plan prompt on and plan mode entered · /planPrompt off to disable' },
+  'plan-prompt-off': { zh: '已关闭梁神模式 plan prompt，并退出 plan mode · /planPrompt 重新开启', en: 'Liangshen plan prompt off and plan mode exited · /planPrompt to re-enable' },
+  'plan-prompt-already-on': { zh: '梁神模式 plan prompt 注入已处于开启状态', en: 'Liangshen plan prompt injection is already on' },
+  'plan-prompt-already-off': { zh: '梁神模式 plan prompt 注入已处于关闭状态', en: 'Liangshen plan prompt injection is already off' },
+  'plan-prompt-status-on': { zh: '状态：已开启（plan mode 激活时注入 plan prompt）', en: 'Status: on (the plan prompt is injected while plan mode is active)' },
+  'plan-prompt-status-off': { zh: '状态：已关闭（保持 Minimal 系统提示）', en: 'Status: off (the Minimal system prompt is unchanged)' },
+  'plan-prompt-usage': { zh: '用法：/planPrompt 开启 · /planPrompt off 关闭 · /planPrompt status 查看', en: 'Usage: /planPrompt to enable · /planPrompt off to disable · /planPrompt status' },
+  'plan-prompt-unavailable': { zh: '/planPrompt 仅在梁神模式（/preset liangshen）可用', en: '/planPrompt is only available in Liangshen mode (/preset liangshen)' },
 
   // ── /lang command ───────────────────────────────────────────────────
   'lang-current': { zh: '当前语言  {{lang}}', en: 'Current language  {{lang}}' },

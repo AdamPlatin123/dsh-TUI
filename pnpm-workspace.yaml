@@ -6,6 +6,7 @@ packages:
   - 'vendor/dsh-std/packages/command'
   - 'vendor/dsh-std/packages/storage'
   - 'vendor/dsh-std/packages/messages'
+nodeLinker: hoisted
 
 # Dev-tree resolution pin: pnpm's prerelease range resolution prefers the
 # registry `latest` dist-tag (0.1.0-rc.6 for most @deepseek-ai/dsh-* even

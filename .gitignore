@@ -10,3 +10,4 @@ AGENTS.md
 .dsh-prompt-debug.json
 HANDOVER.md
 .local/
+.pnpm-store/
