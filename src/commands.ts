@@ -93,7 +93,6 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'provider', description: 'Add an LLM provider (catalog or custom API endpoint)' },
   { name: 'login', description: 'Show API credential status' },
   { name: 'logout', description: 'Clear the API credential' },
-  { name: 'permissions', description: 'Show permission policy status' },
   { name: 'add-dir', description: 'Show the filesystem policy scope' },
   { name: 'hooks', description: 'Show hooks status' },
   { name: 'mcp', description: 'Show MCP status' },

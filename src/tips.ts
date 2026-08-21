@@ -339,8 +339,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-permission',
     group: 'commands',
-    zh: '/permission 切换权限预设（read-only/workspace/full）',
-    en: '/permission switches permission presets (read-only/workspace/full)',
+    zh: '/permission 弹出权限预设选择器（只读/工作区读写/完全访问）',
+    en: '/permission opens the permission-preset picker (read-only/workspace-write/full)',
   },
   {
     id: 'cmd-plan-goal',
