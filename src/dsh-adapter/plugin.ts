@@ -397,6 +397,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }).default({ ...DEFAULT_STATUS_BAR }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
+        // Minimal mode: strips the header splash, emoji glyphs, and
+        // decorative colors; code highlight and tool colors stay.
+        minimal: Schema.boolean().default(false),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
@@ -407,6 +410,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       diffLayout?: 'auto' | 'split' | 'unified'
       lang?: 'zh' | 'en'
       whale?: boolean
+      minimal?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       statusBar?: Partial<StatusBarConfig>
@@ -416,6 +420,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     const applyWhale = (value: { whale?: boolean }): void => {
       channel.setWhale(value.whale ?? true)
+    }
+    const applyMinimal = (value: { minimal?: boolean }): void => {
+      channel.setMinimal(value.minimal ?? false)
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
@@ -438,6 +445,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
       applyWhale(next)
+      applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
     }
@@ -656,6 +664,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           descriptions: { zh: '鲸鱼娘' },
           hint: 'Show the pixel whale in the header splash.',
           hintDescriptions: { zh: '开屏头部显示像素鲸鱼娘。' },
+          kind: 'boolean',
+        },
+        {
+          path: ['minimal'],
+          label: 'Minimal mode',
+          descriptions: { zh: '极简模式' },
+          hint: 'Hide the header splash, emoji glyphs, and decorative colors; code highlight and tool colors stay. Trims the status bar to model + cwd.',
+          hintDescriptions: { zh: '隐藏开屏头部、emoji 状态符与装饰性配色；代码高亮与工具配色保留，底栏只留模型与目录。' },
           kind: 'boolean',
         },
       ],
