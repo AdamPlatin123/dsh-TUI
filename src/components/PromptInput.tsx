@@ -276,10 +276,20 @@ export function PromptInput({
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
   const helpScrollRef = React.useRef<ScrollBoxHandle | null>(null)
-  // OverlayAbove reserves six terminal rows for the composer/status chrome;
-  // the help block also keeps one row below it. Its own final row is a
-  // persistent navigation hint, leaving the remainder to ScrollBox.
-  const helpViewportHeight = Math.max(3, Math.max(terminalRows - 6, 4) - 1)
+  // Help viewport budget: the overlay anchors at the composer's top edge
+  // (OverlayAbove bottom:'100%') and grows UP, so its budget is the space
+  // ABOVE that anchor — smallest on an empty session, where the whale
+  // splash (~15 rows) sits between the screen top and the composer
+  // (terminalRows minus chrome only applies once the transcript fills the
+  // viewport). Take the conservative intersection: 15 rows of viewport (16
+  // with the hint + margin) fits the empty-session anchor on the default
+  // layout at any terminal size, and the renderer's bottom-anchored
+  // clipping for absolute overlays (no negative-y clamp) then never has
+  // to eat the overlay's FIRST rows — the shortcut-column headers. The
+  // command registry scrolls inside the viewport, so a taller terminal
+  // loses nothing functional. (PR #446; restored after the picker
+  // snapshot's cherry-pick resurrected the old formula.)
+  const helpViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
 
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
