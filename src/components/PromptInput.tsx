@@ -425,11 +425,32 @@ export function PromptInput({
       setFileSelected(0)
     }
 
-    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
-    // verbatim at the caret. Paste content may contain newlines — that is
-    // NOT Enter — so this branch runs before the whole-line submit rule.
+    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click / 拖拽):
+    // insert verbatim at the caret. Paste content may contain newlines —
+    // that is NOT Enter — so this branch runs before the whole-line submit
+    // rule. 拖拽进终端的图片以单一绝对路径形态到达（kitty 等把文件落成
+    // 路径文本粘贴）——识别为图片时走 stageImage 转成 token，与 Ctrl+V
+    // 剪贴板图片同一条准入管道；其余情况（普通文件/多行文本）保持原样。
     if (event?.isPasted && input.length > 0) {
-      insertAtCaret(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      const pasted = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      const asPath = decodeFileUri(pasted.trim())
+      if (asPath !== undefined && !asPath.includes('\n') && !asPath.includes(' ')) {
+        const mediaType = clipboardImageMediaType(asPath)
+        if (mediaType !== undefined) {
+          void readFile(asPath)
+            .then(data => channel.stageImage({ data: new Uint8Array(data), mediaType, name: basename(asPath) }))
+            .then(token => {
+              insertClipboardAtCaret(`${token} `)
+              channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+            })
+            .catch(() => {
+              // 读失败或被准入拒绝：按普通文本插入路径，保留拖拽的原语义。
+              insertClipboardAtCaret(pasted)
+            })
+          return
+        }
+      }
+      insertAtCaret(pasted)
       return
     }
 
@@ -1156,6 +1177,19 @@ function visualNavGeometry(value: string, cursor: number, width: number): {
     if (value[consumed] === '\n') consumed += 1
   }
   return { row: prefix.length - 1, colChars, rowStarts, rows }
+}
+
+/** 粘贴内容的单一文件路径形态：file:// URI 解包、裸绝对路径原样；
+ * 除此之外（多行、含空格、相对文本）返回 undefined。 */
+function decodeFileUri(text: string): string | undefined {
+  if (text.startsWith('file://')) {
+    try {
+      return decodeURIComponent(new URL(text).pathname)
+    } catch {
+      return undefined
+    }
+  }
+  return text.startsWith('/') ? text : undefined
 }
 
 /**
