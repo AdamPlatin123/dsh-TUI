@@ -2317,7 +2317,6 @@ export function createChannel(
       const approval = ctx.get('approval') as
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
-      const before = foldApprovalPolicy(agent.session.events)
       if (approval) {
         approval.setPolicy(agent, spec.approval)
         // dsh-user-approval.setPolicy is a deliberate no-op when the target
@@ -2326,8 +2325,8 @@ export function createChannel(
         // explicit event a mode whose approval atom equals that default
         // (the built-in plan mode's `ask`) can never match and Shift+Tab
         // gets stuck re-applying the same mode. Log the explicit override
-        // when the service left the fold unchanged.
-        if (foldApprovalPolicy(agent.session.events) === before) {
+        // only if the service still left the fold short of the target policy.
+        if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
           ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
             'approval/policy',
             { policy: spec.approval },
