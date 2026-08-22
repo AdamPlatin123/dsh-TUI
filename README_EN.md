@@ -34,7 +34,7 @@ the interface, and removing it leaves no core modifications behind.
 > permission model or terminal-specific behavior.
 
 <p align="center">
-  <a href="https://dshfind.com/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind"></a>
+  <a href="https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind"></a>
 </p>
 
 ## Highlights
@@ -317,8 +317,10 @@ pnpm smoke
 ```
 
 `lib/types/` is ignored generated output. `pnpm build` recompiles it from a
-clean output directory and runs the build gates. npm Git URL installs generate
-the same runtime through `prepare`. Rendering, questionnaire, or tool-card
+clean output directory and runs the build gates. **Git URL installs are not supported** (the source manifest keeps
+`@dsh-std/*` as workspace deps, `vendor/dsh-std` is a submodule, and pnpm ≥11 refuses
+git-hosted `prepare` scripts by default); install the registry package:
+`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`. Rendering, questionnaire, or tool-card
 changes also require the relevant regression scripts.
 
 ## Plugin Ecosystem

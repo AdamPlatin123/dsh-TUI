@@ -39,10 +39,10 @@
   <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-TUI" width="560">
 </p>
 
-同时也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录：
+同时也被 [dshfind](https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI) 插件目录收录：
 
 <p align="center">
-  <a href="https://dshfind.com/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
+  <a href="https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
 </p>
 
 ## 核心能力
@@ -306,7 +306,9 @@ pnpm smoke
 ```
 
 `lib/types/` 是忽略入库的生成目录；`pnpm build` 会从干净输出目录重新编译并运行
-构建门禁。npm Git URL 安装通过 `prepare` 生成同一套运行时。渲染、问卷和工具卡
+构建门禁。**Git URL 安装不受支持**（源 manifest 的 `@dsh-std/*` 为 workspace 依赖、
+`vendor/dsh-std` 为子模块、且 pnpm ≥11 默认拒绝 git 依赖的 `prepare` 脚本）；请安装
+registry 包：`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。渲染、问卷和工具卡
 改动还需运行对应回归脚本。
 
 

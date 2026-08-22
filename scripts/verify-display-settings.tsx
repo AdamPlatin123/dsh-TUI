@@ -161,6 +161,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     tps: false,
     gitBranch: false,
     sessionTitle: false,
+    goal: true,
     mode: false,
     contextBar: false,
     activity: false,
@@ -226,6 +227,28 @@ const compactWithShortcutHint = await renderStatus({
 })
 check('compact StatusLine renders the enabled shortcuts hint exactly once', () => {
   assert.equal((compactWithShortcutHint.match(/\? for shortcuts/g) ?? []).length, 1)
+})
+
+const probeGoal = {
+  id: 'g-probe',
+  revision: 1,
+  objective: 'probe goal objective',
+  phase: 'active',
+  maxGoalRounds: 5,
+  roundsStarted: 2,
+} as const
+
+const withGoal = await renderStatus({ goal: probeGoal })
+check('compact StatusLine renders the goal chip when a goal exists', () => {
+  assert.ok(withGoal.includes('● 2/5'), `missing goal chip in:\n${withGoal}`)
+})
+
+const withGoalHidden = await renderStatus({
+  goal: probeGoal,
+  statusBar: { ...DEFAULT_STATUS_BAR, goal: false },
+})
+check('goal chip respects the statusBar.goal switch', () => {
+  assert.ok(!withGoalHidden.includes('2/5'), `unexpected goal chip in:\n${withGoalHidden}`)
 })
 
 const working = await renderStatus({ working: true })
