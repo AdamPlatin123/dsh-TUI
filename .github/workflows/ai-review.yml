@@ -1,4 +1,5 @@
-# AI 预审（试点 v7：小上下文模式）——diff 预打包 + 限轮次，绕开长会话路径
+# AI 预审（v17 定稿）：DeepSeek anthropic 端点 + claude CLI + 结构化提取渲染。
+# 组件均已单独验证：claude 出 JSON / 提取器剥 ANSI / 渲染 / 回退 / 评论发布。
 name: ai-review
 on:
   pull_request:
@@ -18,13 +19,15 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install -g @anthropic-ai/claude-code@2.1.233
-      - name: Preseed config + package review material
+      - name: Prepare
         run: |
           mkdir -p ~/.claude
           printf '{"hasCompletedOnboarding":true,"theme":"dark"}' > ~/.claude.json
-          gh pr diff "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > "$GITHUB_WORKSPACE/.pr-review.diff" || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.pull_request.head.sha }}" > "$GITHUB_WORKSPACE/.pr-review.diff"
-          wc -l "$GITHUB_WORKSPACE/.pr-review.diff"
-      - name: Run AI review（结构化）
+          gh pr diff "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > .pr-review.diff || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.pull_request.head.sha }}" > .pr-review.diff
+          { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py
+          test -s extract-review.py
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - name: Review
         env:
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -32,21 +35,21 @@ jobs:
           ANTHROPIC_API_KEY: dummy-not-used
           CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
         run: |
-          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err || { echo "exit=$?"; head -20 review.err; exit 1; }
-          # 容错提取：从输出中剥离平衡 JSON 块（模型可能带叙述/围栏），再校验渲染
-          # 三级取提取器：origin/main → base sha → raw URL；全败则置空（走原文回退）
-          { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || git show "${{ github.event.pull_request.base.sha }}":.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py || true
-          echo "::group::extract 诊断"
-          echo "extract size: $(wc -c < extract-review.py 2>/dev/null || echo MISSING)"
-          python3 extract-review.py 2>&1 | head -5 || echo "python exit=$?"
-          echo "::endgroup::"
-          python3 -X dev extract-review.py; echo "pyexit=$?"
-          if [ -s extract-review.py ] && python3 extract-review.py; then
+          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err
+          echo "claude exit=$? raw=$(wc -c < raw.out)B"
+          test -s raw.out
+      - name: Render and post
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          if python3 extract-review.py; then
+            echo "结构化提取成功"
+          else
+            echo "::warning::结构化提取失败，走原始内容回退"
             printf '## AI 审核参考（⚠️ 输出格式异常，以下为原始内容）\n\n```\n' > review.md
             cat raw.out >> review.md
             printf '\n```\n' >> review.md
           fi
-          head -c 200 review.md
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file review.md
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -55,10 +58,5 @@ jobs:
           path: |
             raw.out
             review.err
-            extract-review.py
             review.md
           if-no-files-found: ignore
-      - name: Post comment
-        if: success()
-        env: { GH_TOKEN: "${{ github.token }}" }
-        run: gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file review.md
