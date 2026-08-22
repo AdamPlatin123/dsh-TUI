@@ -2182,10 +2182,13 @@ export function createChannel(
     return { images, dropped }
   }
 
-  // Session-mode folds: last-wins projections over the session log. The
-  // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
-  // dsh-user-approval and are NOT in this package's typed SessionEvent
-  // union, so they are matched by name through casts — the same pattern as
+  // Session-mode folds: last-wins projections over the session log.
+  // `approval/policy` IS in this package's typed SessionEvent union (the
+  // adapter's type imports from @deepseek-ai/dsh-user-approval bring the
+  // upstream module augmentation), so that fold narrows on `event.type`
+  // without casts. `plan/mode` and `sandbox/mode` belong to plugins this
+  // channel does not import (dsh-plan-mode / dsh-sandbox-policy), so their
+  // folds keep the name-match casts — the same pattern as
   // `agent-preset/selected` in renderEvent and the goal projection above.
   const foldPlanActive = (events: readonly SessionEvent[]): boolean => {
     let active = false
@@ -2261,8 +2264,8 @@ export function createChannel(
   const foldApprovalPolicy = (events: readonly SessionEvent[]): string | undefined => {
     let policy: string | undefined
     for (const event of events) {
-      if ((event as { type: string }).type === 'approval/policy') {
-        const value = (event.data as unknown as { policy?: string }).policy
+      if (event.type === 'approval/policy') {
+        const value = event.data.policy
         if (typeof value === 'string') policy = value
       }
     }
@@ -2306,6 +2309,12 @@ export function createChannel(
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
     if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
+      // sandbox/mode stays a widened append: the event type belongs to
+      // dsh-sandbox-policy, which this channel deliberately does not import
+      // (not a peer/blessed dependency), so the key is absent from this
+      // program's typed SessionEventMap. The runtime write is byte-identical
+      // to upstream's own setSandboxMode — session.append('sandbox/mode',
+      // { mode }); plugin-load registration covers the strict resume read.
       ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
         'sandbox/mode',
         { mode: spec.sandbox },
@@ -2327,16 +2336,10 @@ export function createChannel(
         // gets stuck re-applying the same mode. Log the explicit override
         // only if the service still left the fold short of the target policy.
         if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
-          ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-            'approval/policy',
-            { policy: spec.approval },
-          )
+          agent.session.append('approval/policy', { policy: spec.approval })
         }
       } else {
-        ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-          'approval/policy',
-          { policy: spec.approval },
-        )
+        agent.session.append('approval/policy', { policy: spec.approval })
       }
     }
     refreshMode()
