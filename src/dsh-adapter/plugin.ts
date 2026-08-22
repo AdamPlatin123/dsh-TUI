@@ -58,6 +58,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
   }
 
+  // Seam 1 (session persistence): register every TUI-vouched log-only event
+  // type (legacy activity/status plus the channel's own plan-prompt/mode)
+  // into every reachable KNOWN_SESSION_EVENT_TYPES copy BEFORE any strict
+  // read path can run (--resume below, the /resume command, picker-backed
+  // loads). In-process only: the shared session log is never rewritten.
+  // Idempotent and never throws; unresolved trees degrade to the previous
+  // fail-closed behavior.
+  ensureLegacySessionEventTypes()
+
   // The official profile launcher owns the system preset root and replaces
   // any bundle-supplied roots at boot. Install dsh-tui's bundled presets via
   // the roster's supported user-root seam before resolving the first agent.
@@ -1018,9 +1027,11 @@ async function resolveAgent(
       return { agent: existing, agentPreset: runningPresetOf(existing.session) }
     }
     try {
-      // Compat boundary: register vouched-for legacy event types before the
-      // strict read path (issue #153) — same seam as the /resume picker,
-      // here for the launch-time --resume flow. In-process only.
+      // Compat boundary: the load-time registration above normally already
+      // covered this process; re-ensure before the strict read path as
+      // defense in depth for any direct-import/runner flow (issue #153) —
+      // same seam as the /resume picker, here for the launch-time --resume
+      // flow. Idempotent, in-process only.
       ensureLegacySessionEventTypes()
       // The resumed session keeps the preset its log records (last
       // `agent-preset/selected` wins over the creation header), never the

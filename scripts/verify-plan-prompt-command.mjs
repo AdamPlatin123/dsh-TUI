@@ -110,6 +110,11 @@ function makeEnv(agentPreset, services = {}) {
     appended[1].type === 'plan/mode' && appended[1].data.active === true,
     JSON.stringify(appended),
   )
+  check(
+    'enabling projects the toggle into the transcript',
+    channel.rows.filter(row => row.kind === 'notice').length === 1,
+    JSON.stringify(channel.rows.map(row => row.kind)),
+  )
 
   check('setPlanPrompt(false) returns false', channel.setPlanPrompt(false) === false)
   check('injection disabled after setPlanPrompt(false)', channel.planPromptEnabled() === false)
@@ -120,6 +125,11 @@ function makeEnv(agentPreset, services = {}) {
     appended[2].type === 'plan-prompt/mode' && appended[2].data.active === false &&
     appended[3].type === 'plan/mode' && appended[3].data.active === false,
     JSON.stringify(appended),
+  )
+  check(
+    'disabling projects the toggle into the transcript',
+    channel.rows.filter(row => row.kind === 'notice').length === 2,
+    JSON.stringify(channel.rows.map(row => row.kind)),
   )
 }
 

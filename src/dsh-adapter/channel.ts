@@ -82,6 +82,23 @@ import type {
   TuiRewindPromptDecision,
 } from './extension-events.js'
 
+/**
+ * Seam 1 (session persistence), type layer: dsh-session's `SessionEventType`
+ * is `keyof SessionEventMap` and the map explicitly supports plugin-merged
+ * extensions, so the channel's own durable `/planPrompt` switch gets a real
+ * typed member instead of the `as unknown` casts at the append sites. Keep
+ * the literal in sync with `LIANGSHEN_PLAN_PROMPT_EVENT` below and with
+ * `PLAN_PROMPT_EVENT` in `presets/liangshen/plan-aware-persona.mjs`
+ * (`scripts/verify-liangshen-plan-persona.mjs` locks the preset half).
+ * Compile-time only — the runtime registration lives in
+ * `compat/sessionLog.ts` (`ensureLegacySessionEventTypes`).
+ */
+declare module '@deepseek-ai/dsh-session' {
+  interface SessionEventMap {
+    'plan-prompt/mode': { active: boolean }
+  }
+}
+
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
  *  continues so a later veto listener still runs. */
@@ -2421,8 +2438,10 @@ export function createChannel(
     if (state.agentPreset !== 'liangshen') return undefined
     const promptActive = foldPlanPromptEnabled(agent.session.events)
     const planActive = foldPlanActive(agent.session.events)
+    // The plan/mode fallback below still needs this widened append because
+    // rc.8's SessionEventMap does not declare that type yet (upstream lag).
     const session = agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }
-    if (promptActive !== active) session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active })
+    if (promptActive !== active) agent.session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active })
     // Prefer the real dsh-plan-mode controller for the plan-state half: it
     // owns the pending-intent queue, so a `/plan off` queued during an open
     // turn must be replaced/cancelled by this switch instead of silently
@@ -3037,12 +3056,12 @@ export function createChannel(
       // untouched.
       if (await sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
       let handle: AgentHandle
-      // Compat boundary: register vouched-for legacy event types (e.g.
-      // activity/status from pre-#143 logs) in every reachable dsh-session
-      // copy before ANY strict read path (preset lookup below, then the
-      // harness seed validation) loads the target — the plugin's #119
-      // registration never ran in processes where it is unmounted (issue
-      // #153). In-process only: the shared log is never rewritten.
+      // Compat boundary: the plugin-load registration normally already
+      // covered this process; re-ensure before ANY strict read path (preset
+      // lookup below, then the harness seed validation) as defense in depth
+      // — the plugin's #119 registration never ran in processes where it is
+      // unmounted (issue #153). Idempotent, in-process only: the shared log
+      // is never rewritten.
       ensureLegacySessionEventTypes()
       // The target session's own preset (from its persisted log) — never the
       // current preference: a resume re-enters the composition its history
@@ -5554,6 +5573,17 @@ ${output}
         // Whole-list snapshot — latest write wins; log-only UI state.
         state.todos = event.data.todos
         break
+      case LIANGSHEN_PLAN_PROMPT_EVENT:
+        // Transcript projection for the durable /planPrompt switch: every
+        // append site only logs a real state change, so one notice row per
+        // toggle is correct on the live stream AND on replay.
+        state.rows.push({
+          id: nextRowId,
+          kind: 'notice',
+          text: event.data.active ? t('plan-prompt-on') : t('plan-prompt-off'),
+        })
+        nextRowId += 1
+        break
       default:
         // Logged preset switch (blank sessions only, issue #8): a transcript
         // marker so a replayed log shows which composition produced the
@@ -5807,10 +5837,7 @@ ${output}
             // `/planPrompt` back-on in the same tick must not be cleared.
             if (foldPlanActive(session.events) || !foldPlanPromptEnabled(session.events)) return
             try {
-              ;(session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-                LIANGSHEN_PLAN_PROMPT_EVENT,
-                { active: false },
-              )
+              session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
             } catch (error) {
               ctx.logger.warn(
                 `dsh-tui: failed to clear the /planPrompt switch: ${error instanceof Error ? error.message : String(error)}`,
@@ -5887,10 +5914,7 @@ ${output}
       !foldPlanActive(agent.session.events) &&
       foldPlanPromptEnabled(agent.session.events)
     ) {
-      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-        LIANGSHEN_PLAN_PROMPT_EVENT,
-        { active: false },
-      )
+      agent.session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
     }
   }
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
