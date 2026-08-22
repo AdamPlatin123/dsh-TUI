@@ -20,7 +20,7 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
-import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, runningPresetOf, serviceForAgent } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
@@ -180,6 +180,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return filterMinimalPresetTools(assembled, presetId)
   })
   const questionStore = new QuestionStore()
+  // "Exit planning" must leave plan mode through dsh-plan-mode's own
+  // controller. Appending `plan/mode { active: false }` directly cannot
+  // replace a queued `/plan on` pending intent; the stale intent would win
+  // at the next accepted pre-step and silently re-enter plan mode. The raw
+  // event append stays as the fallback for bare compositions without the
+  // controller.
+  questionStore.setPlanModeOffHandler(agent => {
+    let planMode: { set(agent: Agent, active: boolean): unknown } | undefined
+    try {
+      planMode = serviceForAgent<{ set(agent: Agent, active: boolean): unknown }>(ctx, agent, 'planMode')
+    } catch {
+      planMode = undefined
+    }
+    if (planMode?.set !== undefined) {
+      planMode.set(agent, false)
+    } else {
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+        'plan/mode',
+        { active: false },
+      )
+    }
+  })
   // Packaged skills (/audit, /bug, …): contribute them through the host's
   // skill registry so they resolve with zero manual copying.
   registerPackagedSkills(ctx)
@@ -198,6 +220,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     })
     ctx.effect(() => () => {
       questionStore.setExitPlanReviewHandler(undefined)
+      questionStore.setPlanModeOffHandler(undefined)
       questionStore.rejectAll()
     })
   } catch (error) {

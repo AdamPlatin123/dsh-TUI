@@ -14,9 +14,10 @@
  *   plan-mode treats it as keep-planning-with-feedback.
  * - Exit planning (exitPlanning only): the displayed replacement for the
  *   asker's first non-approve option. It never answers the ask;
- *   `onExitPlanning` appends `plan/mode` off, rejects the question with
- *   PLAN_REVIEW_EXITED, and aborts the calling agent's turn so the
- *   unapproved plan cannot run.
+ *   `onExitPlanning` leaves plan mode through dsh-plan-mode's controller
+ *   (replacing any queued `/plan on` pending intent, not just appending
+ *   `plan/mode` off), rejects the question with PLAN_REVIEW_EXITED, and
+ *   aborts the calling agent's turn so the unapproved plan cannot run.
  * - Keep planning / feedback: the decline option (or the feedback row)
  *   sends `{ selected: [declineLabel], custom? }` where declineLabel is the
  *   asker's first option that is not the approve label.

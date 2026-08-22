@@ -138,6 +138,16 @@ export class QuestionStore {
    * hook is installed, `exitPlanReview` cancels the agent directly.
    */
   private exitPlanReviewHandler: ((agent: Agent) => void) | undefined
+  /**
+   * Installed by the TUI plugin: routes the plan-mode half of "Exit
+   * planning" through dsh-plan-mode's controller (`planMode.set(agent,
+   * false)`), which owns the pending-intent queue. A direct `plan/mode`
+   * append cannot cancel a queued `/plan on`; that stale intent would win
+   * at the next accepted pre-step and silently re-enter plan mode. When no
+   * handler is installed (scripts, bare embeds), the raw event append is
+   * the fallback.
+   */
+  private planModeOffHandler: ((agent: Agent) => void) | undefined
 
   /**
    * Install (or clear) the "Exit planning" turn-abort hook.
@@ -146,6 +156,17 @@ export class QuestionStore {
    */
   setExitPlanReviewHandler(handler: ((agent: Agent) => void) | undefined): void {
     this.exitPlanReviewHandler = handler
+  }
+
+  /**
+   * Install (or clear) the hook that turns real plan mode off for the
+   * calling agent. The handler must prefer dsh-plan-mode's controller over
+   * appending `plan/mode` itself so queued pending intents are replaced,
+   * not merely raced by a logged event.
+   * @param handler - Called with the agent whose plan review the user exited.
+   */
+  setPlanModeOffHandler(handler: ((agent: Agent) => void) | undefined): void {
+    this.planModeOffHandler = handler
   }
 
   /**
@@ -290,15 +311,19 @@ export class QuestionStore {
 
   /**
    * The user chose the plan-review panel's "Exit planning" row: leave plan
-   * mode WITHOUT approving the plan. Plan mode is the durable `plan/mode`
-   * event, so this appends `active: false` to the calling agent's session
-   * directly (an open turn must not wait for the next accepted pre-step);
-   * the channel's `session/event` arm then clears the `/planPrompt` switch.
-   * The pending ask is rejected with {@link PLAN_REVIEW_EXITED} so the
-   * model-facing `exit_plan_mode` tool reports "stop here" instead of
-   * treating the selection as keep-planning feedback — and the installed
-   * handler aborts the calling agent's turn, because a rejected tool result
-   * alone does not stop the agent loop from continuing the unapproved plan.
+   * mode WITHOUT approving the plan. The installed {@link planModeOffHandler}
+   * routes this through dsh-plan-mode's `planMode.set(agent, false)`, which
+   * owns the pending-intent queue — appending `active: false` to the session
+   * directly would leave a queued `/plan on` in place, and that stale intent
+   * would win at the next accepted pre-step and silently re-enter plan mode.
+   * The raw `plan/mode` append is kept as the no-handler fallback (scripts,
+   * bare embeds); the channel's `session/event` arm then clears the
+   * `/planPrompt` switch once the plan-mode exit is committed. The pending
+   * ask is rejected with {@link PLAN_REVIEW_EXITED} so the model-facing
+   * `exit_plan_mode` tool reports "stop here" instead of treating the
+   * selection as keep-planning feedback — and the installed handler aborts
+   * the calling agent's turn, because a rejected tool result alone does not
+   * stop the agent loop from continuing the unapproved plan.
    */
   exitPlanReview(): void {
     const pending = this.active
@@ -320,9 +345,14 @@ export class QuestionStore {
     }
     if (agent !== undefined) {
       try {
-        ;(agent.session as unknown as {
-          append(type: string, data: Record<string, unknown>): unknown
-        }).append('plan/mode', { active: false })
+        const planModeOff = this.planModeOffHandler
+        if (planModeOff !== undefined) {
+          planModeOff(agent)
+        } else {
+          ;(agent.session as unknown as {
+            append(type: string, data: Record<string, unknown>): unknown
+          }).append('plan/mode', { active: false })
+        }
       } catch (error) {
         // Never leave the panel parked: settle the ask with the real reason.
         this.active = undefined
