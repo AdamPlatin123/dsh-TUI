@@ -36,6 +36,10 @@ jobs:
           # 容错提取：从输出中剥离平衡 JSON 块（模型可能带叙述/围栏），再校验渲染
           # 三级取提取器：origin/main → base sha → raw URL；全败则置空（走原文回退）
           { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || git show "${{ github.event.pull_request.base.sha }}":.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py || true
+          echo "::group::extract 诊断"
+          echo "extract size: $(wc -c < extract-review.py 2>/dev/null || echo MISSING)"
+          python3 extract-review.py 2>&1 | head -5 || echo "python exit=$?"
+          echo "::endgroup::"
           if [ -s extract-review.py ] && python3 extract-review.py; then
             printf '## AI 审核参考（⚠️ 输出格式异常，以下为原始内容）\n\n```\n' > review.md
             cat raw.out >> review.md
