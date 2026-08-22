@@ -293,17 +293,49 @@ export class LogUpdate {
     //
     // Without this, every row above the stale mark stays unreachable and
     // the window silently stops painting.
+    //
+    // Restarting the mark is a CLAIM about where the terminal shows the
+    // frame, though, and on its own nothing has moved to make it true. The
+    // frame has to be re-anchored in the same breath, or the engine believes
+    // the viewport top holds a frame row that physically sits several rows
+    // higher: every cursor-up that reaches for it clamps at the viewport top
+    // and the whole frame lands offset. The claim used to be made and then
+    // dropped into the ordinary erase-tail + relative-diff path, so the error
+    // was remade on every settle shrink and grew a few rows per turn. It
+    // hides while only tail rows change (those are addressed from the parked
+    // cursor, which never drifts) and erupts the first time a frame rewrites
+    // its whole visible window — the garbled inline screen after a fullscreen
+    // round trip that scrolled.
+    //
+    // shrinkAnchoredRepaint is what makes the claim true: it re-seats the
+    // frame against the viewport bottom and reports the scrollback depth it
+    // left behind. repaintViewportInPlace would re-anchor too, but it paints
+    // the whole window unconditionally and so re-materializes rows whose
+    // originals are still frozen in scrollback (the duplicated-transcript
+    // family); the anchored repaint's seam check and scrollback clamp skip
+    // exactly those. The two shrink branches further down are the same call
+    // for frames that end up SHORTER than the viewport; this one covers the
+    // frames that stay taller, which is every shrink once the transcript has
+    // outgrown the window.
     if (
+      !altScreen &&
       viewportTop > 0 &&
       (next.screen.height <= viewportTop ||
         (next.screen.height < prev.screen.height &&
           !scrollbackRowsUnchanged(prev.screen, next.screen, viewportTop)))
     ) {
-      this.state.peakHeight = next.screen.height
-      viewportTop = Math.max(
-        0,
-        next.screen.height - prev.viewport.height + cursorRestoreScroll,
+      const { patches, anchoredPad } = shrinkAnchoredRepaint(
+        prev,
+        next,
+        stylePool,
+        viewportTop,
       )
+      this.state.anchoredPad = anchoredPad
+      this.state.peakHeight = next.screen.height
+      logForDebugging(
+        `Anchored repaint (mark restart): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}, top=${viewportTop}, skip=${anchoredPad}`,
+      )
+      return patches
     }
 
     // One-shot viewport re-anchor (see requestViewportReanchor): repaint
@@ -890,6 +922,9 @@ function scrollbackRowsUnchanged(
  *    nothing in scrollback represents the new frame — repaint the whole
  *    short frame top-anchored, matching a fresh render (collapse-shrink's
  *    contract), pad 0.
+ *
+ * `anchoredPad` reports the row the paint actually started at, so the
+ * caller's frame-row bookkeeping matches the pixels.
  */
 function shrinkAnchoredRepaint(
   prev: Frame,
@@ -931,8 +966,35 @@ function shrinkAnchoredRepaint(
     return { patches: [{ type: 'stdout', content: anchor }, ...screen.diff], anchoredPad: 0 }
   }
 
-  const rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip))
-  const startY = height - rowsToPaint
+  let rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip))
+  let startY = height - rowsToPaint
+  // Re-seating the frame at the viewport bottom pulls rows back into view
+  // whose originals are frozen in scrollback, and the terminal keeps both —
+  // so the overlap is paid for in duplicated history. Whether that price is
+  // worth paying is decided by how deep the divergence runs, measured
+  // against the deepest row this repaint could address at all (a full window
+  // above the frame's bottom):
+  //
+  //  - The seam sits INSIDE that window: only rows the re-anchor is about to
+  //    expose have changed, so the frame is still a continuation of the
+  //    history above it — a settling streaming glyph, a fold. Keep the
+  //    history authoritative and start painting at the scrollback boundary
+  //    instead, leaving the divergent rows stale. A stale glyph in scrolled
+  //    off history is invisible; a second copy of a transcript line is the
+  //    duplicated-transcript report (#38 #39 #19). The diff loop makes the
+  //    same trade every frame (see the `y < viewportY` skip).
+  //  - The seam sits BELOW it: rows this repaint cannot even reach have
+  //    changed too, which is the signature of a wholesale re-layout (a
+  //    panel collapsing, an overlay closing). Nothing in scrollback stands
+  //    for this frame any more, so paint the full window — the "duplicates"
+  //    are corrections, and clamping here would leave the window mostly
+  //    blank.
+  const addressableTop = Math.max(0, height - Math.max(1, viewportHeight - 1))
+  const paintFloor = Math.min(scrollbackRows, height - 1)
+  if (skip >= addressableTop && startY < paintFloor) {
+    startY = paintFloor
+    rowsToPaint = height - startY
+  }
   const blankBand = Math.max(0, viewportHeight - 1 - rowsToPaint)
   const anchor =
     CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
@@ -940,10 +1002,16 @@ function shrinkAnchoredRepaint(
   renderFrameSlice(screen, next, startY, height, stylePool, false)
   return {
     patches: [{ type: 'stdout', content: anchor }, ...screen.diff],
-    // Cap at height-1: a seam that matches every row of a very short frame
-    // must not mark the WHOLE frame as scrollback — the last row (the
-    // input area) stays live and repaintable.
-    anchoredPad: Math.min(skip, height - 1),
+    // The pad is the scrollback depth this repaint leaves behind, which is
+    // wherever it actually started painting — not the seam it found. They
+    // differ whenever the clamp above pushed startY deeper into the frame,
+    // and reporting the seam then under-counts the rows the diff must leave
+    // alone: it would paint into the blank band, restoring exactly the
+    // duplicate the clamp just avoided. Cap at
+    // height-1: a repaint that starts at the frame's last row must not mark
+    // the WHOLE frame as scrollback — the input area stays live and
+    // repaintable.
+    anchoredPad: Math.min(startY, height - 1),
   }
 }
 
