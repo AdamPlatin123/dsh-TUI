@@ -34,38 +34,7 @@ jobs:
         run: |
           claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err || { echo "exit=$?"; head -20 review.err; exit 1; }
           # 容错提取：从输出中剥离平衡 JSON 块（模型可能带叙述/围栏），再校验渲染
-          cat > extract.py <<'PYEOF'
-          import json, sys
-          raw = open('raw.out', encoding='utf-8').read()
-          start = raw.find('{"verdict"')
-          obj, depth, instr, esc = None, 0, False, False
-          if start >= 0:
-              for i, ch in enumerate(raw[start:], start):
-                  if esc: esc = False; continue
-                  if ch == '\\': esc = True; continue
-                  if ch == '"': instr = not instr; continue
-                  if instr: continue
-                  if ch == '{': depth += 1
-                  elif ch == '}':
-                      depth -= 1
-                      if depth == 0:
-                          try: obj = json.loads(raw[start:i+1])
-                          except Exception: obj = None
-                          break
-          if not obj or obj.get('verdict') not in ('Mergeable', 'Need Minor Fix', 'Need Major Fix'):
-              sys.exit(1)
-          L = ['## AI 审核参考：%s' % obj['verdict'], '', '### ✅ 验证过做对的部分']
-          L += ['- %s' % c for c in obj.get('correct') or ['（无）']]
-          L += ['', '### ⚠️ 发现清单']
-          for it in obj.get('issues') or []:
-              L.append('- **%s:%s** — %s' % (it.get('file'), it.get('line'), it.get('problem', '')))
-              if it.get('fix'): L.append('  建议：%s' % it['fix'])
-          if not (obj.get('issues') or []): L.append('-（无）')
-          L += ['', '**理由**：%s' % obj.get('reason', ''), '',
-                '_由 ai-review 生成（DeepSeek · 结构化输出 · 只读审查）_']
-          open('review.md', 'w', encoding='utf-8').write('\n'.join(L))
-          PYEOF
-          if python3 extract.py; then
+          if python3 .github/scripts/extract-review.py; then
             printf '## AI 审核参考（⚠️ 输出格式异常，以下为原始内容）\n\n```\n' > review.md
             cat raw.out >> review.md
             printf '\n```\n' >> review.md
