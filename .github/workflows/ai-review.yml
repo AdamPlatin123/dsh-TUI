@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - name: Install claude CLI + gh
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @anthropic-ai/claude-code@2.1.233   # 钉本地已验证版本
       - name: Run AI review
         env:
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
@@ -41,7 +41,7 @@ jobs:
           纪律：文案/目录名类改动对照源码常量核实；不改任何文件；最终输出为纯 markdown 评论稿。
           PROMPT
           )" --output-format text --max-turns 24 > /tmp/review.md 2>/tmp/review.err || {
-            echo "::warning::claude 退出码 $?（见 artifact）"; tail -5 /tmp/review.err; exit 1;
+            echo "::warning::claude 退出码 $?"; echo "--- stderr 全量（前60行）---"; head -60 /tmp/review.err; echo "--- review.md 已产出 $(wc -c < /tmp/review.md 2>/dev/null || echo 0) 字节"; exit 1;
           }
           head -c 300 /tmp/review.md
       - name: Post comment
