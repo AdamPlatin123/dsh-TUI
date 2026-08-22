@@ -24,17 +24,36 @@ jobs:
           printf '{"hasCompletedOnboarding":true,"theme":"dark"}' > ~/.claude.json
           gh pr diff "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > "$GITHUB_WORKSPACE/.pr-review.diff" || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.pull_request.head.sha }}" > "$GITHUB_WORKSPACE/.pr-review.diff"
           wc -l "$GITHUB_WORKSPACE/.pr-review.diff"
-      - name: Run AI review
+      - name: Run AI review（结构化）
         env:
-          GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
           ANTHROPIC_MODEL: deepseek-v4-flash-vision-exp
           ANTHROPIC_API_KEY: dummy-not-used
           CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
         run: |
-          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可自由读取源码核对 diff 涉及文件的上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。输出：1) 审核参考：Mergeable/Need Minor Fix/Need Major Fix 三选一 2) 发现清单（文件:行号+问题+建议，先列做对的部分）3) 一句话理由。不修改任何文件。" --output-format text --max-turns 14 > .pr-review.out 2> .pr-review.err || { echo "exit=$?"; cat .pr-review.err | head -20; exit 1; }
-          head -c 200 .pr-review.out
+          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err || { echo "exit=$?"; head -20 review.err; exit 1; }
+          # JSON 校验 + 模板渲染（格式不依赖模型自觉）
+          if jq -e '.verdict and (.verdict | test("Mergeable|Need Minor Fix|Need Major Fix"))' raw.out > /dev/null 2>&1; then
+            {
+              echo "## AI 审核参考：$(jq -r .verdict raw.out)"
+              echo
+              echo "### ✅ 验证过做对的部分"
+              jq -r '.correct[]? | "- \(.)"' raw.out
+              echo
+              echo "### ⚠️ 发现清单"
+              jq -r '.issues[]? | "- **\(.file):\(.line)** — \(.problem)\n  建议：\(.fix)"' raw.out
+              echo
+              echo "**理由**：$(jq -r .reason raw.out)"
+              echo
+              echo "_由 ai-review 生成（DeepSeek · 结构化输出 · 只读审查）_"
+            } > review.md
+          else
+            printf '## AI 审核参考（⚠️ 输出格式异常，以下为原始内容）\n\n```\n' > review.md
+            cat raw.out >> review.md
+            printf '\n```\n' >> review.md
+          fi
+          head -c 200 review.md
       - name: Post comment
         if: success()
         env: { GH_TOKEN: "${{ github.token }}" }
