@@ -28,6 +28,9 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
           ANTHROPIC_MODEL: deepseek-v4-flash-vision-exp
           ANTHROPIC_API_KEY: dummy-not-used
+          # 未知模型（非 Claude 名）的两大解药：恢复等待-API 行为 + 禁非必要模型调用
+          CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_MODEL_CALLS: '1'
         run: |
           claude -p "$(cat <<'PROMPT'
           审查当前仓库工作区的 PR 改动（已检出 PR head）。输出（严格遵守）：
