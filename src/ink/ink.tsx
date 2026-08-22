@@ -16,6 +16,7 @@ import App from './components/App.js';
 import type { CursorDeclaration, CursorDeclarationSetter } from './components/CursorDeclarationContext.js';
 import { FRAME_INTERVAL_MS } from './constants.js';
 import * as dom from './dom.js';
+import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
 import { KeyboardEvent } from './events/keyboard-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
@@ -351,6 +352,7 @@ export default class Ink {
     // settling). Same-dimension events are no-ops; skip to avoid redundant
     // frame resets and renders.
     if (cols === this.terminalColumns && rows === this.terminalRows) return;
+    noteFrameCause('resize');
     this.terminalColumns = cols;
     this.terminalRows = rows;
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
@@ -522,10 +524,12 @@ export default class Ink {
    */
   reanchorViewport() {
     if (this.altScreenActive) return;
+    noteFrameCause('reanchor');
     this.log.requestViewportReanchor();
   }
   /** Render synchronously and invalidate older trailing/drain callbacks. */
   private renderNow(): void {
+    noteFrameCause('immediate');
     this.renderGeneration++;
     this.pendingRenderGeneration = null;
     this.scheduleRender.cancel?.();
@@ -539,6 +543,7 @@ export default class Ink {
     if (this.isUnmounted || this.isPaused) {
       return;
     }
+    if (GEOMETRY_TRACE_ENABLED) beginGeometryFrame(this.renderGeneration);
     // Entering a render cancels any pending drain tick — this render will
     // handle the drain (and re-schedule below if needed). Prevents a
     // wheel-event-triggered render AND a drain-timer render both firing.
@@ -921,6 +926,7 @@ export default class Ink {
     // quarter interval (~250fps, setTimeout practical floor) for max scroll
     // speed. Regular renders stay at FRAME_INTERVAL_MS via the throttle.
     if (frame.scrollDrainPending) {
+      noteFrameCause('scroll-drain');
       this.drainTimer = setTimeout(this.renderNow, FRAME_INTERVAL_MS >> 2);
     }
     const yogaMs = getLastYogaMs();
@@ -935,6 +941,7 @@ export default class Ink {
       cacheHits: 0,
       live: 0
     };
+    endGeometryFrame(performance.now() - renderStart);
     this.options.onFrame?.({
       durationMs: performance.now() - renderStart,
       phases: {

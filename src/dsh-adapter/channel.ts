@@ -539,10 +539,11 @@ export interface Channel {
   readonly contextBarEnabled: boolean
   /**
    * Current same-session goal projection, when a goal exists. Derived live
-   * from the durable `goal/change` context events (round-zero goal-sourced
-   * user messages) in the session log — every goal mutation appends one, so
-   * this snapshot tracks create/edit/pause/resume/complete/block/clear in
-   * real time and replays correctly on resume/rewind.
+   * from the durable goal events in the session log — top-level
+   * `goal/change` snapshots (every goal mutation appends one) plus the
+   * goal-sourced continuation rounds that advance the counter — so this
+   * snapshot tracks create/edit/pause/resume/complete/block/clear in real
+   * time and replays correctly on resume/rewind.
    */
   readonly goal: ChannelGoal | undefined
   /**
@@ -1425,8 +1426,7 @@ export function createChannel(
       try {
         runtime.interrupt(target, { kind: 'ancestor', agent })
         subagentStore.onCancelled(agentId, 'interrupted')
-        state.subagents = subagentStore.snapshot()
-        syncSubagentRows()
+        syncSubagentsNow()
         state.emit()
         return true
       } catch {
@@ -1460,9 +1460,12 @@ export function createChannel(
   /**
    * Sync subagentStore state into ChatRows (insert/update in state.rows).
    * Called whenever subagent state changes (spawned/completed/failed/output).
+   * Accepts a caller-taken snapshot to avoid the double copy on the hot path
+   * (session/event fires per subagent token: snapshot here + snapshot in the
+   * caller = two full state copies before emitStream's 16ms throttle).
    */
-  const syncSubagentRows = (): void => {
-    const snapshot = subagentStore.snapshot()
+  const syncSubagentRows = (preSnapshot?: readonly SubagentState[]): void => {
+    const snapshot = preSnapshot ?? subagentStore.snapshot()
     for (const sub of snapshot) {
       let row = subagentRowsByAgentId.get(sub.agentId)
       if (!row) {
@@ -1545,6 +1548,31 @@ export function createChannel(
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
+  /** True while subagent assistant/chunk deltas have deferred their
+   *  snapshot+projection to the frame-aligned flush (emitStream's timer).
+   *  Chunks arrive at token rate (100-300 events/s) and the projection is a
+   *  full deep state copy (SubagentActivityStore.snapshot) plus a SubagentRow
+   *  rebuild per tracked agent — running that per token sits BEFORE
+   *  emitStream's 16ms coalescing and defeats it. Non-chunk events
+   *  (tool/call, subagent/end, interrupt) project immediately and clear
+   *  this flag, so lifecycle transitions stay synchronous. */
+  let subagentStreamDirty = false
+  /** Deferred projection for the frame-aligned flush: runs INSIDE the
+   *  emitStream timer, before listeners wake, so React always reads fully
+   *  projected rows. No-op unless a chunk marked the projection dirty. */
+  const flushSubagentStream = (): void => {
+    if (!subagentStreamDirty) return
+    subagentStreamDirty = false
+    state.subagents = subagentStore.snapshot()
+    syncSubagentRows(state.subagents)
+  }
+  /** Immediate projection; supersedes any pending deferred flush (the fresh
+   *  snapshot already contains everything the deferred pass would project). */
+  const syncSubagentsNow = (): void => {
+    subagentStreamDirty = false
+    state.subagents = subagentStore.snapshot()
+    syncSubagentRows(state.subagents)
+  }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
@@ -2477,6 +2505,9 @@ export function createChannel(
       streamNotifyScheduled = true
       const timer = setTimeout(() => {
         streamNotifyScheduled = false
+        // Deferred subagent projection rides this same frame: flush BEFORE
+        // the listeners wake so React reads fully projected rows.
+        flushSubagentStream()
         foldRows(state.rows, MAX_ROWS, foldCursor)
         for (const listener of listeners) listener()
       }, 16)
@@ -4831,28 +4862,49 @@ ${output}
   }
 
   /**
+   * One durable goal mutation as the goal service records it (the `data` of
+   * a top-level `goal/change` session event, and of the snapshot a round-zero
+   * goal-sourced `user/message` may inline). Declared structurally: the
+   * pinned peer's `SessionEvent` union predates the event type, so the fold
+   * admits the payload by shape, not by union membership.
+   */
+  type GoalChangePayload = {
+    kind: 'goal/change'
+    version: number
+    operation:
+      | 'create'
+      | 'edit'
+      | 'pause'
+      | 'resume'
+      | 'complete'
+      | 'block'
+      | 'clear'
+    goal?: Omit<ChannelGoal, 'roundsStarted'>
+    roundsStarted?: number
+  }
+
+  /** Fold one goal mutation into the channel's goal projection. */
+  const applyGoalChange = (change: GoalChangePayload): void => {
+    if (change.operation === 'clear') {
+      state.goal = undefined
+    } else if (change.goal !== undefined) {
+      state.goal = {
+        ...change.goal,
+        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
+      }
+    }
+  }
+
+  /**
    * Fold one goal-sourced message into the channel's goal projection.
-   * Round-zero goal messages carry the full durable snapshot (or a clear
+   * Round-zero goal messages may carry the full durable snapshot (or a clear
    * tombstone) in their source; positive-round messages are admitted
    * continuation prompts that only advance the rounds counter.
    */
   const applyGoalEvent = (event: SessionEvent<'user/message'>): void => {
     const source = event.data.source as unknown as {
       round: number
-      change?: {
-        kind: 'goal/change'
-        version: 1
-        operation:
-          | 'create'
-          | 'edit'
-          | 'pause'
-          | 'resume'
-          | 'complete'
-          | 'block'
-          | 'clear'
-        goal?: ChannelGoal
-        roundsStarted?: number
-      }
+      change?: GoalChangePayload
     }
     if (source.round > 0) {
       // Admitted continuation round — the snapshot itself is unchanged.
@@ -4867,14 +4919,7 @@ ${output}
     const change = source.change
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may not match the static type
     if (change === undefined || change.kind !== 'goal/change') return
-    if (change.operation === 'clear') {
-      state.goal = undefined
-    } else if (change.goal !== undefined) {
-      state.goal = {
-        ...change.goal,
-        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
-      }
-    }
+    applyGoalChange(change)
   }
 
   /** True while the durable transcript is being replayed (boot /resume /
@@ -4902,6 +4947,15 @@ ${output}
   }
 
   const renderEvent = (event: SessionEvent): void => {
+    // Top-level `goal/change` events are how the goal service actually
+    // records durable goal mutations (create/edit/pause/resume/complete/
+    // block/clear) — confirmed in production logs. The pinned peer's
+    // SessionEvent union predates the type, so admit it structurally: the
+    // goal chip and panel stay dark without this fold.
+    if ((event as { type: string }).type === 'goal/change') {
+      applyGoalChange((event as { data: GoalChangePayload }).data)
+      return
+    }
     switch (event.type) {
       case 'user/message': {
         // Compaction checkpoint: `source = { kind: 'plugin', plugin:
@@ -4947,10 +5001,13 @@ ${output}
           contextWarned = false
           break
         }
-        // Same-session goal domain: round-zero goal-sourced messages carry
-        // the durable goal snapshot (or clear tombstone) in their source.
-        // They are not transcript bubbles — they drive the goal panel's
-        // live projection (replayed on resume/rewind like every other event).
+        // Same-session goal domain: goal-sourced messages are the round
+        // driver's continuation prompts (positive rounds advance the
+        // counter); some hosts also inline the durable snapshot in a
+        // round-zero source. They are not transcript bubbles — they drive
+        // the goal panel's live projection (replayed on resume/rewind like
+        // every other event; the snapshot itself arrives as the top-level
+        // `goal/change` event admitted above).
         if ((event.data.source as { kind: string }).kind === 'goal') {
           applyGoalEvent(event)
           break
@@ -5537,10 +5594,17 @@ ${output}
         const subagentId = subagentStore.getSubagentIdBySession(session)
         if (subagentId) {
           subagentStore.onSessionEvent(subagentId, event)
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
-          if (event.type === 'assistant/chunk') state.emitStream()
-          else state.emit()
+          if (event.type === 'assistant/chunk') {
+            // Token-rate path (100-300 events/s): the store append stays
+            // synchronous (cheap); the expensive snapshot + row projection
+            // defers to the frame-aligned flush inside emitStream's 16ms
+            // timer, so it coalesces exactly like the main-agent stream.
+            subagentStreamDirty = true
+            state.emitStream()
+          } else {
+            syncSubagentsNow()
+            state.emit()
+          }
           return
         }
         // Otherwise handle main agent session
@@ -5599,8 +5663,7 @@ ${output}
           } catch {
             // Session discovery is best-effort and must not break the parent turn.
           }
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
+          syncSubagentsNow()
           state.emit()
         })
         const disposeEnd = ctx.on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
@@ -5618,8 +5681,7 @@ ${output}
           if (info.stopReason === 'completed') subagentStore.onCompleted(info.id, output, info.stopReason)
           else if (info.stopReason === 'cancelled' || info.stopReason === 'aborted') subagentStore.onCancelled(info.id, info.stopReason, output)
           else subagentStore.onFailed(info.id, info.stopReason || 'Unknown error')
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
+          syncSubagentsNow()
           state.emit()
         })
         return () => {

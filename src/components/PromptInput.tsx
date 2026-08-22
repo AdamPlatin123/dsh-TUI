@@ -8,6 +8,7 @@ import { EffortInputBorder } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
+import { noteAuxNumber } from '../ink/geometry-trace.js'
 import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
@@ -1112,6 +1113,7 @@ export function PromptInput({
   // loaded-context toggle (see Chat.tsx). One-shot, only on SHRINK:
   // growth scrolls the terminal naturally and needs no recovery.
   const contentRows = value.length === 0 ? 1 : visibleLines.length
+  noteAuxNumber('promptContentRows', contentRows)
   const prevContentRowsRef = React.useRef(contentRows)
   React.useLayoutEffect(() => {
     if (contentRows < prevContentRowsRef.current) {

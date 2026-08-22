@@ -192,6 +192,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       tps: false,
       gitBranch: false,
       sessionTitle: false,
+      sessionId: false,
       mode: false,
       contextBar: false,
       activity: false,

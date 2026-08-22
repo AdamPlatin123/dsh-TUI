@@ -3,6 +3,7 @@ import type { Except } from 'type-fest';
 import { markScrollActivity } from '../../bootstrap/state.js';
 import type { DOMElement } from '../dom.js';
 import { markDirty, scheduleRenderFrom } from '../dom.js';
+import { noteFrameCause } from '../geometry-trace.js';
 import { markCommitStart } from '../reconciler.js';
 import type { Styles } from '../styles.js';
 import Box from './Box.js';
@@ -104,6 +105,7 @@ function ScrollBox({
     // check) to skip their next tick — they compete for the event loop and
     // contributed to 1402ms max frame gaps during scroll drain.
     markScrollActivity();
+    noteFrameCause('scroll');
     markDirty(el);
     markCommitStart();
     notify();
