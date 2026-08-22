@@ -5,11 +5,15 @@
 输出：review.md；verdict 非法时 exit 1（调用方走原始内容回退）。
 """
 import json
+import re
 import sys
 
 VERDICTS = ('Mergeable', 'Need Minor Fix', 'Need Major Fix')
 
 raw = open('raw.out', encoding='utf-8').read()
+# claude CLI 输出可能混入 ANSI 转义与 CRLF：JSON 严格模式拒绝字符串内控制字符，
+# 解析前剥离（本地复现用 GitHub 评论（已剥离）成功、CI 原始输出失败的差异即在此）。
+raw = re.sub(r'\x1b\[[0-9;?]*[ -/]*[@-~]', '', raw).replace('\r\n', '\n').replace('\r', '\n')
 start = raw.find('{"verdict"')
 obj = None
 if start >= 0:
