@@ -4,18 +4,23 @@ name: ai-review
 on:
   pull_request:
     types: [opened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review（批量补触发用，绕过事件限流）'
+        required: true
 permissions:
   contents: read
   pull-requests: write
   issues: write
 jobs:
   review:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ github.event.pull_request.head.sha }}", submodules: recursive, fetch-depth: 0 }
+        with: { ref: "${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}", submodules: recursive, fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install -g @anthropic-ai/claude-code@2.1.233
@@ -23,7 +28,7 @@ jobs:
         run: |
           mkdir -p ~/.claude
           printf '{"hasCompletedOnboarding":true,"theme":"dark"}' > ~/.claude.json
-          gh pr diff "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > .pr-review.diff || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.pull_request.head.sha }}" > .pr-review.diff
+          gh pr diff "${{ github.event.inputs.pr_number || github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > .pr-review.diff || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}" > .pr-review.diff
           { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py
           test -s extract-review.py
         env: { GH_TOKEN: "${{ github.token }}" }
@@ -51,7 +56,7 @@ jobs:
             cat raw.out >> review.md
             printf '\n```\n' >> review.md
           fi
-          gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file review.md
+          gh pr comment "${{ github.event.inputs.pr_number || github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file review.md
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
