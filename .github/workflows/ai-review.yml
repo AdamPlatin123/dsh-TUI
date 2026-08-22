@@ -1,0 +1,31 @@
+# AI 预审（试点）：DeepSeek Anthropic 兼容端点驱动 Claude Code 审查 PR。
+# key 只经 secrets 引用，绝不入库。触发：PR 开启/更新（CI 并行，不依赖 build）。
+name: ai-review
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            审查当前 PR，输出（严格遵守）：
+            1. 审核参考：Mergeable / Need Minor Fix / Need Major Fix 三选一
+            2. 发现清单：每条 文件:行号 + 问题 + 建议（先列验证过做对的部分；无问题则明说）
+            3. 测试记录：你实跑的命令 + 结果（如 tsc --noEmit / 相关 verify 脚本；跑不了要说明原因）
+            4. 一句话理由
+            纪律：文案/目录名类改动对照源码常量核实；评论稿先肯定后按严重度排序；不修改 PR 分支。
+        env:
+          # DeepSeek 的 Anthropic 兼容端口（CLI 层覆盖，dummy key 不被使用）
+          ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
+          ANTHROPIC_MODEL: deepseek-v4-flash-vision-exp
+          anthropic-api-key: 'dummy-not-used-base-url-overrides'
