@@ -2637,8 +2637,12 @@ export function Chat({
             position={questionSnapshot.position}
             total={questionSnapshot.total}
             answered={questionSnapshot.answered}
+            initialDraft={questionSnapshot.draft}
             onAnswer={selection => questionStore.answerCurrent(selection)}
             onCancel={() => questionStore.cancelCurrent()}
+            onBack={questionSnapshot.canGoBack
+              ? draft => questionStore.backCurrent(draft)
+              : undefined}
           />
         ) : (
           <PromptInput
