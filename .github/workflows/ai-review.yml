@@ -22,6 +22,10 @@ jobs:
         with: { node-version: 22 }
       - name: Install claude CLI + gh
         run: npm install -g @anthropic-ai/claude-code@2.1.233   # 钉本地已验证版本
+      - name: Preseed claude config（CI 全新 HOME 需跳过 onboarding）
+        run: |
+          mkdir -p ~/.claude
+          printf '{"hasCompletedOnboarding":true,"theme":"dark","bypassPermissionsModeAccepted":true}' > ~/.claude.json
       - name: Run AI review
         env:
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
