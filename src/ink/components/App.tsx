@@ -4,6 +4,7 @@ import { logForDebugging } from "../../utils/debug.js";
 import { stopCapturingEarlyInput } from "../../utils/earlyInput.js";
 import { isEnvTruthy } from "../../utils/envUtils.js";
 import { isMouseClicksDisabled } from "../../utils/fullscreen.js";
+import { logMouseDebug } from "../../utils/debug.js";
 import { logError } from "../../utils/log.js";
 import { EventEmitter } from "../events/emitter.js";
 import { InputEvent } from "../events/input-event.js";
@@ -577,6 +578,27 @@ function processKeysInBatch(
 	_unused1: undefined,
 	_unused2: undefined,
 ): void {
+	// Mouse-chain diagnostics: the single choke point every parsed mouse and
+	// wheel event passes through. Empty log here = the terminal never sent
+	// the sequences (tracking modes, ConPTY) rather than an in-app loss.
+	if (process.env.DSH_TUI_DEBUG_MOUSE) {
+		for (const item of items) {
+			if (item.kind === "mouse") {
+				logMouseDebug("mouse arrive", {
+					button: item.button,
+					action: item.action,
+					col: item.col,
+					row: item.row,
+					clicksDisabled: isMouseClicksDisabled(),
+				});
+			} else if (
+				item.kind === "key" &&
+				(item.name === "wheelup" || item.name === "wheeldown")
+			) {
+				logMouseDebug("wheel arrive", { name: item.name });
+			}
+		}
+	}
 	// Update interaction time for notification timeout tracking.
 	// This is called from the central input handler to avoid having multiple
 	// stdin listeners that can cause race conditions and dropped input.

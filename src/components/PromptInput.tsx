@@ -2,15 +2,23 @@ import React from 'react'
 import { readFile, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
-import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
+import { EffortChargeGlyph } from './EffortChargeGlyph.js'
+import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortTierBadge } from './EffortTierBadge.js'
+import { isLightThemeActive } from '../theme.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
+import { noteAuxNumber } from '../ink/geometry-trace.js'
+import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { parseCommandName } from '../commands.js'
+import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
+import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
@@ -42,6 +50,86 @@ function wordBoundaryRight(text: string, cursor: number): number {
   while (index < length && !/\s/.test(text[index]!)) index++
   while (index < length && /\s/.test(text[index]!)) index++
   return index
+}
+
+// --- grapheme-cluster geometry ---------------------------------------------
+// The caret, editing keys, and wrapping MUST agree on one text unit. Mixing
+// UTF-16 code units (arrows/backspace), code points (wrap), and display
+// cells (stringWidth) lets the caret land inside a surrogate pair or a ZWJ
+// emoji — the inverted caret then shows half a glyph, Backspace deletes
+// half a character, and `line.slice()` splits clusters. All offsets below
+// are UTF-16 indices snapped to grapheme boundaries via the shared
+// Intl.Segmenter (utils/intl.ts).
+
+/** Ascending grapheme boundary offsets of `text` (starts at 0, ends at
+ *  `text.length`). Empty text yields `[0]`. */
+function graphemeBoundaries(text: string): number[] {
+  const bounds = [0]
+  for (const { index, segment } of getGraphemeSegmenter().segment(text)) {
+    const end = index + segment.length
+    if (end > bounds[bounds.length - 1]!) bounds.push(end)
+  }
+  return bounds
+}
+
+/** Largest grapheme boundary `<= offset` (clamped into the text). Snaps a
+ *  cursor that landed mid-cluster back onto a boundary. */
+function boundaryAtOrBefore(bounds: number[], offset: number): number {
+  let lo = 0
+  let hi = bounds.length - 1
+  let ans = bounds[0]!
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (bounds[mid]! <= offset) {
+      ans = bounds[mid]!
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return ans
+}
+
+/** Largest grapheme boundary strictly before `offset` (0 when none). */
+function previousGraphemeBoundary(bounds: number[], offset: number): number {
+  let lo = 0
+  let hi = bounds.length - 1
+  let ans = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (bounds[mid]! < offset) {
+      ans = bounds[mid]!
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return ans
+}
+
+/** Smallest grapheme boundary strictly after `offset` (text.length when
+ *  none). Returns `offset` unchanged when it already is the last boundary. */
+function nextGraphemeBoundary(bounds: number[], offset: number): number {
+  let lo = 0
+  let hi = bounds.length - 1
+  let ans = bounds[hi] ?? 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (bounds[mid]! > offset) {
+      ans = bounds[mid]!
+      hi = mid - 1
+    } else {
+      lo = mid + 1
+    }
+  }
+  return ans
+}
+
+/** Snap an arbitrary UTF-16 offset onto a grapheme boundary of `text`,
+ *  clamping into range. The safety net under every cursor write. */
+function normalizeCursorOffset(text: string, offset: number): number {
+  const clamped = Math.max(0, Math.min(offset, text.length))
+  return boundaryAtOrBefore(graphemeBoundaries(text), clamped)
 }
 
 /**
@@ -96,9 +184,10 @@ export interface PromptInputProps {
 /**
  * Claude Code style prompt input: rounded border box (top+bottom borders
  * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
- * block cursor at the cursor position, and below it the slash-command
- * suggestion overlay (name column + description, selected row in the
- * `suggestion` color — mirroring Claude Code's PromptInputFooterSuggestions).
+ * block cursor at the cursor position, and above it the slash-command /
+ * file-completion suggestion card (SuggestionCard: rounded panel with the
+ * selected row behind a `❯` pointer in the theme's `suggestion` color,
+ * mirroring Claude Code's PromptInputFooterSuggestions layout).
  *
  * Empty input: a solid block caret on a blank cell and nothing else — no
  * placeholder text, so the terminal-painted IME preedit (pinyin) at the
@@ -108,7 +197,7 @@ export interface PromptInputProps {
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
  * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
- * cursor, Tab completes the selected command, Ctrl+X opens the draft in the
+ * cursor, Tab completes the selected command, Ctrl+G opens the draft in the
  * external editor ($VISUAL/$EDITOR), Escape clears (or closes the help
  * menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
@@ -134,6 +223,7 @@ export function PromptInput({
   onRewindRequest,
   controllerRef,
 }: PromptInputProps) {
+  const [themeName] = useTheme()
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const valueRef = React.useRef(value)
@@ -167,10 +257,7 @@ export function PromptInput({
   React.useEffect(() => {
     if (fillText && fillText !== lastFill.current) {
       lastFill.current = fillText
-      valueRef.current = fillText
-      cursorRef.current = fillText.length
-      setValue(fillText)
-      setCursor(fillText.length)
+      setInput(fillText)
       onFillConsumed?.()
     }
   }, [fillText, onFillConsumed])
@@ -179,7 +266,7 @@ export function PromptInput({
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /** True while the external editor owns the terminal (Ctrl+X round-trip). */
+  /** True while the external editor owns the terminal (Ctrl+G round-trip). */
   const editorBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
@@ -189,6 +276,21 @@ export function PromptInput({
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
+  const helpScrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  // Help viewport budget: the overlay anchors at the composer's top edge
+  // (OverlayAbove bottom:'100%') and grows UP, so its budget is the space
+  // ABOVE that anchor — smallest on an empty session, where the whale
+  // splash (~15 rows) sits between the screen top and the composer
+  // (terminalRows minus chrome only applies once the transcript fills the
+  // viewport). Take the conservative intersection: 15 rows of viewport (16
+  // with the hint + margin) fits the empty-session anchor on the default
+  // layout at any terminal size, and the renderer's bottom-anchored
+  // clipping for absolute overlays (no negative-y clamp) then never has
+  // to eat the overlay's FIRST rows — the shortcut-column headers. The
+  // command registry scrolls inside the viewport, so a taller terminal
+  // loses nothing functional. (PR #446; restored after the picker
+  // snapshot's cherry-pick resurrected the old formula.)
+  const helpViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
 
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
@@ -201,27 +303,30 @@ export function PromptInput({
   // CARET, so `@` works mid-message (`看看 @src/a.ts 这个`), not only when it
   // is the input's first character. The cwd listing loads when the trigger
   // appears.
-  const [fileList, setFileList] = React.useState<readonly string[]>([])
+  const [fileMatches, setFileMatches] = React.useState<readonly FileCandidate[]>([])
   const [fileSelected, setFileSelected] = React.useState(0)
   const mention = mentionAtCaret(value, cursor)
   const atTrigger = mention !== undefined
+  const fileRequestId = React.useRef(0)
+  const selectedFile = fileMatches[fileSelected]
   React.useEffect(() => {
-    if (atTrigger) {
-      void channel.listFiles().then(setFileList)
+    const requestId = ++fileRequestId.current
+    if (!mention) {
+      setFileMatches([])
+      setFileSelected(0)
+      return
     }
-  }, [atTrigger, channel])
-  const atRest = (mention?.query ?? '').toLowerCase()
-  // Match the relative path prefix OR the basename (CC's IDE suggestions do
-  // both): `@src/ink` and `@ink` both find `src/ink/Box.js`.
-  const fileMatches = atTrigger
-    ? fileList.filter(file => {
-        const lower = file.toLowerCase()
-        if (lower.startsWith(atRest)) return true
-        if (atRest.includes('/')) return false
-        const base = lower.split('/').pop() ?? ''
-        return base.startsWith(atRest)
-      })
-    : []
+    const previous = selectedFile
+    // Deps key on `mention.query` (and trigger on/off) only: cursor movement
+    // within the same token must NOT refetch, and `selectedFile`/`fileSelected`
+    // are read as their render-time values only to seed selection preservation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void channel.listFileCandidates(mention.query, { topK: 50 }).then(next => {
+      if (requestId !== fileRequestId.current) return
+      setFileMatches(next)
+      setFileSelected(preserveSelection(previous, next, fileSelected))
+    })
+  }, [channel, mention?.query, atTrigger])
   // Esc dismisses the overlay for the token being edited (it reopens once the
   // text changes); it must NOT clear a mid-message input.
   const fileEscRef = React.useRef(-1)
@@ -236,7 +341,11 @@ export function PromptInput({
 
   const setInput = (next: string, cursorOffset = next.length) => {
     valueRef.current = next
-    cursorRef.current = Math.max(0, Math.min(cursorOffset, next.length))
+    // Normalize onto a grapheme boundary (also clamps into range): every
+    // caller passes a caret they believe is on a character edge — paste
+    // merges, history fills, and IME composition can still hand back an
+    // offset inside a surrogate pair or combining cluster.
+    cursorRef.current = normalizeCursorOffset(next, cursorOffset)
     setValue(next)
     setCursor(cursorRef.current)
   }
@@ -247,10 +356,11 @@ export function PromptInput({
    * directory inserts `@dir/` without a trailing space so completion
    * continues into it; a file completes the token with a space.
    */
-  const acceptFile = (file: string) => {
+  const acceptFile = (candidate: FileCandidate) => {
     if (!mention) return
+    const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
-    const insert = file.endsWith('/') ? body : `${body} `
+    const insert = candidate.kind === 'directory' ? body : `${body} `
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length)
     setFileSelected(0)
@@ -354,16 +464,19 @@ export function PromptInput({
   }
 
   /**
-   * Execute a slash command (built-in or plugin-registered) when the input
-   * resolves to one: the name parses as the first token so `/plan off`
-   * dispatches `plan` with its argument text, and the merged command list
-   * (locals + registry) decides whether the line is a command at all.
+   * Execute a slash command (built-in, plugin-registered, or hidden) when
+   * the input resolves to one: the name parses as the first token so
+   * `/plan off` dispatches `plan` with its argument text, and the merged
+   * command list (locals + registry) decides whether the line is a command
+   * at all. Hidden commands are recognized even though they are intentionally
+   * absent from the suggestion/help catalogs.
    */
   const tryRunCommand = (text: string): boolean => {
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
     const known = channel.commandList.some(command => command.name === parsed.name)
+      || isHiddenCommandName(parsed.name)
     if (!known) return false
     const handled = onRunCommand(parsed.name, parsed.rawInput)
     if (handled) {
@@ -411,6 +524,9 @@ export function PromptInput({
     // the text/caret produced by the preceding event in that batch.
     const value = valueRef.current
     const cursor = cursorRef.current
+    // Grapheme boundaries of the current text: every caret move / delete
+    // below snaps onto one of these offsets (never mid-cluster).
+    const bounds = graphemeBoundaries(value)
 
     /** Insert text at the caret (typing, paste) and dismiss overlays. */
     const insertAtCaret = (text: string) => {
@@ -486,14 +602,23 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+X / Cmd+X: edit the current draft in $VISUAL/$EDITOR (issue #123,
+    // Help is modal for modified keys and every Enter variant. Ctrl+V above
+    // is the intentional exception: paste closes Help and inserts visibly.
+    // Swallow here before editor/submit/interrupt branches can mutate hidden
+    // composer or working-turn state; plain typing still dismisses Help below.
+    if (helpOpen && !key.escape && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
+      event.stopImmediatePropagation()
+      return
+    }
+
+    // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
     // readline's edit-and-execute-command). The draft is written to a temp
     // file, the terminal is handed to the editor (Ink's alt-screen handoff),
     // and the saved text replaces the input when it differs. The util maps
     // every failure to an outcome, but the catch/finally here is the hard
     // guarantee: a rejected promise must never kill the process, and the
-    // busy flag must always clear or Ctrl+X stays locked forever.
-    if (isMod(key) && input === 'x') {
+    // busy flag must always clear or Ctrl+G stays locked forever.
+    if (key.ctrl && input === 'g') {
       editorBusyRef.current = true
       void (async () => {
         try {
@@ -552,10 +677,15 @@ export function PromptInput({
       }
       if (channel.working && value.trim() !== '') {
         // CC's immediate-command semantics: /btw is exempt from steering —
-        // the side question never interrupts the running turn. Every other
-        // input keeps the steer behavior so /new /model etc. stay idle-only.
+        // the side question never interrupts the running turn. Hidden
+        // UI-only easter eggs (e.g. /deepseek) are also safe to run while
+        // streaming. Every other input keeps the steer behavior so /new
+        // /model etc. stay idle-only.
         const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-        if (parsed?.name === 'btw' && channel.commandList.some(c => c.name === 'btw')) {
+        if (parsed !== undefined && (
+          (parsed.name === 'btw' && channel.commandList.some(c => c.name === 'btw'))
+          || isHiddenCommandName(parsed.name)
+        )) {
           tryRunCommand(value)
           return
         }
@@ -614,6 +744,12 @@ export function PromptInput({
       handleEnter()
       return
     }
+    // Help is modal over the composer. Backtab must not cycle the session
+    // mode invisibly behind it, and plain Tab has no Help action.
+    if (helpOpen && key.tab) {
+      event.stopImmediatePropagation()
+      return
+    }
     // Shift+Tab cycles the configured session modes (default: 默认 →
     // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
     // see the `modes` config). Must precede the plain-Tab arms — the parser
@@ -637,6 +773,41 @@ export function PromptInput({
     if (key.tab && channel.working && value.trim() !== '') {
       queueSend(value)
       return
+    }
+    // Help is a viewport, not prompt history. It deliberately owns every
+    // vertical navigation event while visible; otherwise Up/Down silently
+    // walk the input history and the clipped command rows remain unreachable.
+    if (helpOpen) {
+      const page = Math.max(1, helpViewportHeight - 2)
+      if (key.upArrow || key.wheelUp) {
+        helpScrollRef.current?.scrollBy(key.wheelUp ? -3 : -1)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.downArrow || key.wheelDown) {
+        helpScrollRef.current?.scrollBy(key.wheelDown ? 3 : 1)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.pageUp || key.pageDown) {
+        helpScrollRef.current?.scrollBy(key.pageUp ? -page : page)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.home) {
+        helpScrollRef.current?.scrollTo(0)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.end) {
+        // Use a deliberately oversized absolute target rather than the
+        // sticky-bottom path: compact Help may still be measuring nested
+        // sections in this commit, while ScrollBox's render clamp resolves
+        // the target to the exact current maximum without a follow-up frame.
+        helpScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
+        event.stopImmediatePropagation()
+        return
+      }
     }
     if (key.meta && key.upArrow) {
       // Alt+Up: pull the last pending message back for editing (pi/Codex).
@@ -724,21 +895,25 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
-      setInput(value, Math.max(0, cursor - 1))
+      // Grapheme-step: skip the whole cluster (surrogate pair, ZWJ emoji,
+      // combining mark) so the caret never sits inside one.
+      setInput(value, previousGraphemeBoundary(bounds, cursor))
       return
     }
     if (key.rightArrow) {
-      setInput(value, Math.min(value.length, cursor + 1))
+      setInput(value, nextGraphemeBoundary(bounds, cursor))
       return
     }
     if (key.backspace) {
       if (cursor === 0) return
-      setInput(value.slice(0, cursor - 1) + value.slice(cursor), cursor - 1)
+      const start = previousGraphemeBoundary(bounds, cursor)
+      setInput(value.slice(0, start) + value.slice(cursor), start)
       return
     }
     if (key.delete) {
-      if (cursor >= value.length) return
-      setInput(value.slice(0, cursor) + value.slice(cursor + 1), cursor)
+      const end = nextGraphemeBoundary(bounds, cursor)
+      if (end === cursor) return
+      setInput(value.slice(0, cursor) + value.slice(end), cursor)
       return
     }
     if (key.home) {
@@ -863,7 +1038,10 @@ export function PromptInput({
   // === Render: hard-wrap every logical line at the input width, then show
   // the window of visual lines with the caret row always visible (CC's
   // maxVisibleLines behavior with automatic wrapping).
-  const inputWidth = Math.max(10, columns - 3)
+  // Narrow terminals: the usable width follows the real terminal down to a
+  // single column — a fixed floor of 10 would wrap far too early and park
+  // the declared cursor past the value box's actual width.
+  const inputWidth = Math.max(1, columns - 3)
   const visualLines = wrapToWidth(value, inputWidth)
   const caretVisualLine = wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
   const windowStart = Math.max(
@@ -906,11 +1084,17 @@ export function PromptInput({
         </Text>
       )
     }
-    // Caret row: invert the char at the caret column (solid block).
+    // Caret row: invert the grapheme cluster at the caret column (solid
+    // block). `col` is a cluster boundary by construction (the cursor is
+    // normalized onto boundaries and wrapping only breaks between
+    // graphemes), so [col, next boundary) covers the WHOLE cluster — a
+    // surrogate pair or ZWJ emoji inverts as one glyph, never two broken
+    // halves.
     const col = caretCharCol()
+    const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(line), col)
     const before = line.slice(0, col)
-    const at = line[col] ?? ' '
-    const after = line.slice(col + 1)
+    const at = clusterEnd > col ? line.slice(col, clusterEnd) : ' '
+    const after = line.slice(clusterEnd)
     return (
       <Text key={absoluteLine} wrap="truncate-end">
         {before}
@@ -919,6 +1103,26 @@ export function PromptInput({
       </Text>
     )
   })
+
+  // Composer height shrink: clearing multi-line text (Enter/Esc/Ctrl+C/
+  // Backspace) collapses the input area within one commit, shifting the
+  // status line up and the whole chrome with it. The renderer's
+  // full-damage pass (didLayoutShift) repaints the shifted siblings, but
+  // inline mode's virtual↔scrollback correspondence needs the stronger
+  // in-place viewport repaint — same treatment as Ctrl+O and the
+  // loaded-context toggle (see Chat.tsx). One-shot, only on SHRINK:
+  // growth scrolls the terminal naturally and needs no recovery.
+  const contentRows = value.length === 0 ? 1 : visibleLines.length
+  noteAuxNumber('promptContentRows', contentRows)
+  const prevContentRowsRef = React.useRef(contentRows)
+  React.useLayoutEffect(() => {
+    if (contentRows < prevContentRowsRef.current) {
+      const ink = instances.get(process.stdout) ?? instances.values().next().value
+      ink?.invalidatePrevFrame()
+      ink?.reanchorViewport()
+    }
+    prevContentRowsRef.current = contentRows
+  }, [contentRows])
 
   const lastNotification =
     channel.notifications[channel.notifications.length - 1]
@@ -932,7 +1136,10 @@ export function PromptInput({
   // relative to the value box the ref attaches to.
   const valueBoxRef = useDeclaredCursor({
     line: caretVisualLine - windowStart,
-    column: caretVisualCol(),
+    // Clamp the declared column to the wrap width: a grapheme wider than
+    // the last remaining column (emoji at width 1) can push the visual
+    // column past inputWidth, and the park must stay inside the value box.
+    column: Math.min(caretVisualCol(), inputWidth),
     active: !selectionActive,
   })
 
@@ -941,6 +1148,8 @@ export function PromptInput({
   // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。
   const floatersOpen = helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen
+  // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
+  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -948,13 +1157,18 @@ export function PromptInput({
           帧高不随面板开关涨落——否则帧顶行会被滚进 scrollback 并在关闭
           重绘时二次写入（/model 切换多一份启动画的根因，见 OverlayAbove）。 */}
       {floatersOpen && (
-      <OverlayAbove maxHeight={Math.max(terminalRows - 6, 4)}>
+      <OverlayAbove maxHeight={Math.max(terminalRows - 6, 1)}>
         {helpOpen && (
           <Box marginBottom={1}>
-            <HelpMenu commands={channel.commandList} />
+            <HelpMenu
+              commands={channel.commandList}
+              viewportHeight={helpViewportHeight}
+              viewportWidth={columns}
+              scrollRef={helpScrollRef}
+            />
           </Box>
         )}
-        {channel.pending.length > 0 && (
+        {!helpOpen && channel.pending.length > 0 && (
           <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
             {channel.pending.some(item => item.placement === 'steer') && (
               <Box flexDirection="column">
@@ -984,22 +1198,22 @@ export function PromptInput({
           </Box>
         )}
         {fileOverlayOpen && (
-          <Box paddingLeft={2} paddingBottom={1}>
-            <FileSuggestions
-              files={fileMatches}
-              selectedIndex={fileSelected}
-              columns={columns}
-            />
-          </Box>
+          <FileSuggestions
+            files={fileMatches}
+            selectedIndex={fileSelected}
+            columns={columns}
+            query={mention?.query ?? ''}
+            accent={promptAccent}
+          />
         )}
         {overlayOpen && (
-          <Box paddingLeft={2} paddingBottom={1}>
-            <CommandSuggestions
-              commands={suggestions}
-              selectedIndex={selectedCommand}
-              columns={columns}
-            />
-          </Box>
+          <CommandSuggestions
+            commands={suggestions}
+            selectedIndex={selectedCommand}
+            columns={columns}
+            query={value}
+            accent={promptAccent}
+          />
         )}
       </OverlayAbove>
       )}
@@ -1029,31 +1243,47 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      <Box
-        flexDirection="column"
-        alignItems="flex-start"
-        justifyContent="flex-start"
-        borderColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
-        borderStyle="round"
-        borderLeft={false}
-        borderRight={false}
-        borderBottom
-        width="100%"
+      {/* The prompt's own top/bottom border rows, self-drawn so the effort
+          overlay can play on them (sweep → tier name → fade; see
+          EffortInputBorder). Idle colour keeps the plan-mode accent the old
+          Box border carried. */}
+      <EffortInputBorder
+        effort={channel.reasoningEffort}
+        levels={channel.effortLevels}
+        columns={columns}
+        onLight={isLightThemeActive(themeName)}
+        idleColor={promptAccent}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
-          <Text dimColor={channel.working}>❯ </Text>
+          <EffortChargeGlyph
+            effort={channel.reasoningEffort}
+            levels={channel.effortLevels}
+            working={channel.working}
+          />
           <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
-              <Text inverse> </Text>
+              <>
+                <Text inverse> </Text>
+                {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
+                    本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
+                    时不显示）。 */}
+                <EffortTierBadge
+                  effort={channel.reasoningEffort}
+                  levels={channel.effortLevels}
+                  onLight={isLightThemeActive(themeName)}
+                  columns={columns}
+                  leadingColumns={3}
+                />
+              </>
             ) : (
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
         </Box>
-      </Box>
+      </EffortInputBorder>
     </Box>
   )
 }
@@ -1061,10 +1291,15 @@ export function PromptInput({
 /**
  * Hard-wrap text into visual rows of at most `width` columns (CJK-aware via
  * stringWidth). Used by the input renderer so long lines wrap instead of
- * truncating, with exact caret-row mapping.
+ * truncating, with exact caret-row mapping. Wrapping only ever breaks
+ * BETWEEN grapheme clusters: iterating code points would split ZWJ emoji
+ * and combining sequences across rows, leaving a broken half at each edge
+ * and desyncing the caret's row arithmetic (which walks cluster
+ * boundaries).
  */
 function wrapToWidth(text: string, width: number): string[] {
   const rows: string[] = []
+  const segmenter = getGraphemeSegmenter()
   for (const line of text.split('\n')) {
     if (line === '') {
       rows.push('')
@@ -1072,14 +1307,14 @@ function wrapToWidth(text: string, width: number): string[] {
     }
     let current = ''
     let currentWidth = 0
-    for (const ch of line) {
-      const w = stringWidth(ch)
+    for (const { segment } of segmenter.segment(line)) {
+      const w = stringWidth(segment)
       if (currentWidth + w > width && current !== '') {
         rows.push(current)
-        current = ch
+        current = segment
         currentWidth = w
       } else {
-        current += ch
+        current += segment
         currentWidth += w
       }
     }
