@@ -826,6 +826,7 @@ const dict = {
   'tui-persist-hint': { zh: '持久化    ~/.dsh/settings.yaml 的 dsh-tui.fullscreen（重启后仍生效）', en: 'Persisted    ~/.dsh/settings.yaml dsh-tui.fullscreen (survives restart)' },
   'tui-already': { zh: '已是{{mode}}模式', en: 'Already in {{mode}} mode' },
   'tui-switched': { zh: '已切换到{{mode}}模式', en: 'Switched to {{mode}} mode' },
+  'tui-switched-pref-failed': { zh: '已切换到{{mode}}模式，但默认偏好写入失败（重启后不保留）', en: 'Switched to {{mode}} mode, but writing the default preference failed (won\'t persist after restart)' },
   'tui-unknown': { zh: '未知模式「{{mode}}」· /tui 查看用法', en: 'Unknown mode "{{mode}}" · /tui to view usage' },
   'tui-usage': { zh: '用法：/tui | /tui fullscreen | /tui default', en: 'Usage: /tui | /tui fullscreen | /tui default' },
 

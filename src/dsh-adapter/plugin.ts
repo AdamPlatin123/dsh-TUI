@@ -38,7 +38,7 @@ import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { withHostRootCapability } from './host-access.js'
-import { render, ThemeProvider } from '../ui.js'
+import { render, ThemeProvider, DisplayFrame } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -867,9 +867,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
     extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
-    // Full-screen surfaces inside Chat — the trajectory scene and the session
-    // browser — enter the alt screen themselves in inline mode; Chat wraps
-    // itself when channel.fullscreen is on, so they must not nest.
+    // Overlay screens inside Chat enter the alt screen themselves in inline
+    // mode; DisplayFrame already owns DEC 1049 when channel.fullscreen is
+    // on, so they must not nest.
     fullscreen: channel.fullscreen,
     onExit: () => handleExit(),
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -912,10 +912,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       })
     },
   })
+  function DisplayRoot(): React.ReactNode {
+    React.useSyncExternalStore(channel.subscribe, () => channel.version)
+    return React.createElement(DisplayFrame, { active: channel.fullscreen }, chat)
+  }
   const tree = React.createElement(
     ThemeProvider,
     null,
-    chat,
+    React.createElement(DisplayRoot),
   )
   instance = await render(tree, { exitOnCtrlC: false })
 

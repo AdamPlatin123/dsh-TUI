@@ -14,7 +14,7 @@ const [
   { PassThrough, Writable },
   React,
   { Terminal: XTerm },
-  { render, ThemeProvider },
+  { render, ThemeProvider, DisplayFrame },
   { Chat },
   { StatusLine },
   { QuestionStore },
@@ -88,6 +88,27 @@ function countNeedle(text: string, needle: string): number {
 function bindInkToProcessStdout(stdout: { columns: number }): void {
   const ink = instances.get(stdout as never) ?? [...instances.values()].at(-1)
   if (ink) instances.set(process.stdout, ink)
+}
+
+/** Product host wraps Chat in DisplayFrame; tests that drive `/tui` must too. */
+function ChatHarness({
+  channel,
+  questionStore,
+  approvalStore,
+}: {
+  channel: Record<string, unknown>
+  questionStore: never
+  approvalStore: never
+}): React.ReactNode {
+  React.useSyncExternalStore(
+    channel.subscribe as (listener: () => void) => () => void,
+    () => channel.version as number,
+  )
+  return (
+    <DisplayFrame active={channel.fullscreen === true}>
+      <Chat channel={channel as never} questionStore={questionStore} approvalStore={approvalStore} />
+    </DisplayFrame>
+  )
 }
 
 const tuiChildren = (path: readonly string[]) => path.length === 1 && path[0] === 'tui'
@@ -275,8 +296,8 @@ console.log('/tui writes settings fullscreen:')
   }
 
   const instance = await render(
-    <Chat
-      channel={channel as never}
+    <ChatHarness
+      channel={channel}
       questionStore={new QuestionStore() as never}
       approvalStore={new ApprovalStore() as never}
     />,
@@ -412,8 +433,8 @@ console.log('/tui fullscreen → default does not ghost the logo:')
   }
 
   const instance = await render(
-    <Chat
-      channel={channel as never}
+    <ChatHarness
+      channel={channel}
       questionStore={new QuestionStore() as never}
       approvalStore={new ApprovalStore() as never}
     />,
