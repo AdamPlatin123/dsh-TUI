@@ -26,6 +26,8 @@ jobs:
         run: |
           mkdir -p ~/.claude
           printf '{"hasCompletedOnboarding":true,"theme":"dark","bypassPermissionsModeAccepted":true}' > ~/.claude.json
+          # 日志官方指引：modelOverrides 让 CLI 识别非 Claude 模型（消除 generate_session_title 致命失败）
+          printf '%s' '{"modelOverrides":{"deepseek-v4-flash-vision-exp":{"contextWindow":128000,"maxOutputTokens":16384,"supportsCacheControl":true}}}' > ~/.claude/settings.json
       - name: Run AI review
         env:
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
