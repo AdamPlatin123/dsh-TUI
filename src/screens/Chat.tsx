@@ -26,6 +26,8 @@ import { useCopyOnSelect } from '../ink/hooks/use-copy-on-select.js'
 import { useSelection } from '../ink/hooks/use-selection.js'
 import { NoSelect } from '../ink/components/NoSelect.js'
 import { LogoHeader, MessageList } from '../components/MessageList.js'
+import { TimelineRail } from '../components/TimelineRail.js'
+import type { TimelineSnapshot } from '../ink/timeline-rail.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
@@ -131,8 +133,11 @@ function searchableText(row: ChatRow): string {
 
 /**
  * Main chat screen in the Claude Code layout: a scrollable transcript
- * (with the current turn's prompt pinned above the viewport while scrolled
- * up), transient notifications, the working spinner, the bordered prompt
+ * (with the user message the viewport is showing pinned above the transcript
+ * while scrolled up, and a 1-column minimap scrollbar with one node per
+ * user message — the current message's node is highlighted, clicking a node
+ * jumps to it), transient notifications, the working spinner, the bordered
+ * prompt
  * input (with slash-command overlay) and the status line pinned at the
  * bottom.
  *
@@ -270,9 +275,30 @@ export function Chat({
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)
+  /**
+   * Conversation timeline snapshot (reported by MessageList): one entry
+   * per user turn plus the viewport-derived navigation targets. The
+   * ACTIVE turn — the one whose content owns the viewport top row — pins
+   * the sticky prompt header AND highlights the transcript rail's tick,
+   * from one report so the two can never disagree; upId/downId drive the
+   * rail's ▲/▼. Null activeId while pinned to the bottom only when there
+   * are no turns (header hidden there anyway).
+   */
+  const [timeline, setTimeline] = React.useState<TimelineSnapshot>({
+    turns: [],
+    activeId: null,
+    upId: null,
+    downId: null,
+  })
   const [selectionActive, setSelectionActive] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
+    () => new Set(),
+  )
+  /** 流式 reasoning 行的用户折叠（点击/进入折叠态）。与 expandedRows 分开：
+   *  流式默认展开，用户点一下 = 折叠（preview ticker 或单行头）；落定后
+   *  默认折叠，此集合不再参与——两种默认互不翻转。 */
+  const [streamFoldedRows, setStreamFoldedRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
   const [modelPickerOpen, setModelPickerOpen] = React.useState(false)
@@ -623,6 +649,31 @@ export function Chat({
         { color: 'error' },
       )
     })
+  }
+
+  /**
+   * Run one /workspace menu row (Enter path, shared with the mouse click):
+   * built-ins dispatch locally, extension commands go through the channel.
+   */
+  const runWorkspaceMenuOption = (option: { id: string } | undefined): void => {
+    setWorkspaceMenuOpen(false)
+    if (option === undefined) return
+    if (option.id === 'resume') {
+      openWorkspaceResume()
+    } else if (option.id === 'rename') {
+      channel.notify(t('workspace-rename-usage'))
+    } else if (option.id === 'open') {
+      channel.notify(t('workspace-open-usage'))
+    } else {
+      void channel.runWorkspaceCommand(option.id, '').then((result) => {
+        if (result !== undefined) handleWorkspaceResult(result)
+      }).catch((error: unknown) => {
+        channel.notify(
+          t('workspace-command-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'error', timeoutMs: 8000 },
+        )
+      })
+    }
   }
 
   /**
@@ -1549,7 +1600,12 @@ export function Chat({
     const el = rowRefsRef.current.get(forceMountRowId)
     if (el) {
       handle?.scrollToElement(el)
-      setForceMountRowId(null)
+      // Clear deferred to a macrotask: clearing here would let React's
+      // synchronous re-render narrow the virtualization window and unmount
+      // the row BEFORE the renderer's deferred pass reads its Yoga top
+      // (scrollAnchor processing runs in a microtask) — the seek would
+      // silently no-op (detached anchor element).
+      setTimeout(() => setForceMountRowId(null), 0)
     }
   })
 
@@ -1614,6 +1670,14 @@ export function Chat({
       return next
     })
   }, [])
+  const toggleStreamFolded = React.useCallback((rowId: number) => {
+    setStreamFoldedRows((previous) => {
+      const next = new Set(previous)
+      if (next.has(rowId)) next.delete(rowId)
+      else next.add(rowId)
+      return next
+    })
+  }, [])
   const registerRowRef = React.useCallback((rowId: number, el: DOMElement | null) => {
     if (el) rowRefsRef.current.set(rowId, el)
     else rowRefsRef.current.delete(rowId)
@@ -1644,12 +1708,30 @@ export function Chat({
     // Mouse wheel scrolls the transcript even while a question/approval/
     // dialog panel is open — those panels own arrow/Enter/Esc keys, but the
     // transcript above them should still be scrollable in fullscreen mode.
-    // Help is different: its own ScrollBox owns wheel input, so Chat must
-    // yield before stopping propagation or both covered layers would move.
+    //
+    // Wheel routing is position-first: events landing over a ScrollBox
+    // (transcript, help, subagent panels…) are consumed by that box in
+    // App's input batch (onWheelAt) and never reach this branch. What
+    // arrives here is the fallback: wheel over non-scroll areas (prompt,
+    // status bar) or over floating overlays.
+    //   - Help stays yielded: PromptInput's help ScrollBox handles the
+    //     remaining global wheel while help is open (both covered layers
+    //     must not move).
+    //   - Pickers/dialogs are modal: wheel that fell through over them
+    //     must NOT scroll the transcript behind (the audit's
+    //     pass-through gap), so yield like the keyboard guards above.
     // Events only arrive with mouse tracking on; inline mode never sees
     // them, so this is a no-op there.
     if (key.wheelUp || key.wheelDown) {
       if (helpOpen) return
+      const overlayOpen =
+        thinkingOpen || searchOpen || historyOpen || rewindOpen || tipsOpen ||
+        modelPickerOpen || skillsPickerOpen || themePickerOpen ||
+        langPickerOpen || planPickerOpen || permissionPickerOpen ||
+        activityPickerOpen || presetPickerOpen || effortSliderOpen ||
+        workspaceMenuOpen || workspaceFlow !== null ||
+        (workspacePickerOpen && workspaceTargets.length > 0)
+      if (overlayOpen) return
       handle?.scrollBy(key.wheelUp ? -3 : 3)
       event.stopImmediatePropagation()
       return
@@ -1837,24 +1919,7 @@ export function Chat({
         setWorkspaceMenuIndex(index => (index >= menu.length - 1 ? 0 : index + 1))
       } else if (plainReturn) {
         const option = menu[workspaceMenuIndex]
-        setWorkspaceMenuOpen(false)
-        if (option === undefined) return
-        if (option.id === 'resume') {
-          openWorkspaceResume()
-        } else if (option.id === 'rename') {
-          channel.notify(t('workspace-rename-usage'))
-        } else if (option.id === 'open') {
-          channel.notify(t('workspace-open-usage'))
-        } else {
-          void channel.runWorkspaceCommand(option.id, '').then((result) => {
-            if (result !== undefined) handleWorkspaceResult(result)
-          }).catch((error: unknown) => {
-            channel.notify(
-              t('workspace-command-failed', { err: error instanceof Error ? error.message : String(error) }),
-              { color: 'error', timeoutMs: 8000 },
-            )
-          })
-        }
+        runWorkspaceMenuOption(option)
       } else if (key.escape) {
         setWorkspaceMenuOpen(false)
       }
@@ -2383,20 +2448,38 @@ export function Chat({
     permissionPickerOpen || planPickerOpen || langPickerOpen || historyOpen ||
     rewindOpen || searchOpen || tipsOpen
 
+  // The sticky header pins the turn owning the viewport top row
+  // (timeline.activeId, reported by MessageList) — scrolled up to an old
+  // turn, it carries THAT turn's prompt, not the latest one.
+  // channel.rows is a live in-place array, so the lookup is per-render.
+  const anchorUserRowId = timeline.activeId
+  const anchorUserText =
+    anchorUserRowId === null
+      ? null
+      : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
+
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
-      {!isSticky && channel.lastUserText && (
+      {!isSticky && anchorUserText && (
         <StickyPromptHeader
-          text={channel.lastUserText}
+          text={anchorUserText}
           onClick={() => {
-            // Click jumps back to the pinned prompt (CC's StickyPromptHeader).
-            const lastUser = [...channel.rows].reverse().find(row => row.kind === 'user')
-            if (lastUser) seekRow(lastUser.id)
+            // Click snaps the pinned prompt to the viewport top (CC's
+            // StickyPromptHeader). Jump by the SAME content coordinate the
+            // rail's tick uses (timeline turn top = the prompt TEXT top):
+            // the element-based seek lands the row wrapper's margin at the
+            // top instead — one row shy of the text top the anchor rule
+            // compares against — and the header would flip to the previous
+            // turn immediately after the click.
+            const turn = timeline.turns.find(t => t.id === anchorUserRowId)
+            if (turn) handle?.scrollTo(turn.top)
+            else if (anchorUserRowId !== null) seekRow(anchorUserRowId)
             else handle?.scrollToBottom()
           }}
         />
       )}
-      <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} width="100%">
+        <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
           key={logoNonce}
           model={channel.model}
@@ -2424,6 +2507,8 @@ export function Chat({
           expandedRows={expandedRows}
           selectedId={selectionActive ? selectedId : null}
           onToggleRow={toggleRowExpanded}
+          streamFoldedRows={streamFoldedRows}
+          onToggleStreamFold={toggleStreamFolded}
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
@@ -2438,8 +2523,20 @@ export function Chat({
           forceMountRowId={forceMountRowId}
           newSinceRowId={isSticky ? null : lastSeenRowIdRef.current}
           onUnseenCount={setUnseenCount}
+          onTimeline={setTimeline}
+          onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
         />
-      </ScrollBox>
+        </ScrollBox>
+        <TimelineRail
+          handle={handle}
+          turns={timeline.turns}
+          activeId={timeline.activeId}
+          upId={timeline.upId}
+          downId={timeline.downId}
+          terminalWidth={terminalColumns}
+          hoverEnabled={!promptSelectionActive}
+        />
+      </Box>
       {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
           let flex shrink squeeze these fixed-height rows — the ScrollBox
           above absorbs all overflow (it is the scroll container). */}
@@ -2581,6 +2678,14 @@ export function Chat({
             <ThinkingToggle
               currentValue={thinkingVisible}
               focusIndex={thinkingFocus}
+              onPick={(index) => {
+                // 点击行 = 设焦点 + 应用（与 Enter 同一条路径）
+                const visible = index === 0
+                setThinkingFocus(index)
+                setThinkingVisible(visible)
+                setThinkingOpen(false)
+                channel.notify(t('thinking-toggled', { state: visible ? t('thinking-on') : t('thinking-off') }))
+              }}
             />
           )}
           {workspacePickerOpen && workspaceTargets.length > 0 && (
@@ -2589,12 +2694,27 @@ export function Chat({
                 targets={workspaceTargets}
                 focusIndex={workspaceIndex}
                 currentCwd={channel.cwd}
+                onPick={(index) => {
+                  // 点击行 = 设焦点 + 切换（与 Enter 同一条路径）
+                  const target = workspaceTargets[index]
+                  setWorkspaceIndex(index)
+                  setWorkspacePickerOpen(false)
+                  if (target !== undefined) void channel.switchWorkspace(target)
+                }}
               />
             </Box>
           )}
           {workspaceMenuOpen && (
             <Box flexDirection="column" marginTop={1}>
-              <WorkspaceMenuPicker options={workspaceMenuOptions} focusIndex={workspaceMenuIndex} />
+              <WorkspaceMenuPicker
+                options={workspaceMenuOptions}
+                focusIndex={workspaceMenuIndex}
+                onPick={(index) => {
+                  // 点击行 = 设焦点 + 执行（与 Enter 同一条路径）
+                  setWorkspaceMenuIndex(index)
+                  runWorkspaceMenuOption(workspaceMenuOptions[index])
+                }}
+              />
             </Box>
           )}
           {workspaceFlow !== null && (
@@ -2605,6 +2725,14 @@ export function Chat({
                 focusIndex={workspaceFlowIndex}
                 busy={workspaceFlowBusy}
                 input={workspaceFlowInput}
+                onPick={(index) => {
+                  // 点击行 = 设焦点 + 执行分支（与 Enter 同一条路径）；
+                  // busy/输入态在组件侧禁点
+                  const choice = workspaceFlow.choices[index]
+                  if (choice === undefined) return
+                  setWorkspaceFlowIndex(index)
+                  runWorkspaceFlowAction(signal => choice.choose(signal))
+                }}
               />
             </Box>
           )}
@@ -2617,6 +2745,17 @@ export function Chat({
                   models={models}
                   focusIndex={modelIndex}
                   currentModel={`${channel.provider}/${channel.model}`}
+                  onPick={(index) => {
+                    // 点击行 = 设焦点 + 应用（与 Enter 同一条路径）
+                    const model = models[index]
+                    if (!model) return
+                    setModelIndex(index)
+                    setModelPickerOpen(false)
+                    channel.notify(t('model-switching', { name: model.name }))
+                    void channel.switchModel(model.provider, model.id).then((ok) => {
+                      if (ok) channel.notify(t('model-switched', { name: model.name }))
+                    })
+                  }}
                 />
               )}
             </Box>
@@ -2629,6 +2768,13 @@ export function Chat({
                 <SkillsPicker
                   skills={skillsList}
                   focusIndex={skillsIndex}
+                  onPick={(index) => {
+                    const skill = skillsList[index]
+                    if (!skill) return
+                    setSkillsIndex(index)
+                    setSkillsPickerOpen(false)
+                    if (skill.userInvocable) setHistoryFill(`/${skill.name} `)
+                  }}
                 />
               )}
             </Box>
@@ -2638,6 +2784,12 @@ export function Chat({
               <ActivityPicker
                 focusIndex={activityIndex}
                 currentPreset={channel.activityFrames}
+                onPick={(index) => {
+                  setActivityIndex(index)
+                  setActivityPickerOpen(false)
+                  const name = PRESET_NAMES[index]
+                  if (name) channel.setActivityFrames(name)
+                }}
               />
             </Box>
           )}
@@ -2647,6 +2799,12 @@ export function Chat({
                 options={effortOptions}
                 focusIndex={effortIndex}
                 currentId={channel.reasoningEffort}
+                // 点击档位 = 移到该档并即时应用（与 ←/→ 同语义）
+                onPick={(index) => {
+                  setEffortIndex(index)
+                  const option = effortOptions[index]
+                  if (option) void channel.setEffort(option.id)
+                }}
               />
             </Box>
           )}
@@ -2656,6 +2814,12 @@ export function Chat({
                 presets={presetOptions}
                 focusIndex={presetIndex}
                 currentPreset={channel.agentPreset}
+                onPick={(index) => {
+                  setPresetIndex(index)
+                  setPresetPickerOpen(false)
+                  const option = presetOptions[index]
+                  if (option) void channel.switchPreset(option.id)
+                }}
               />
             </Box>
           )}
@@ -2665,22 +2829,68 @@ export function Chat({
                 focusIndex={permissionIndex}
                 currentMode={channel.mode.sandbox}
                 cwd={channel.cwd}
+                onPick={(index) => {
+                  setPermissionIndex(index)
+                  setPermissionPickerOpen(false)
+                  const id = PERMISSION_PRESET_IDS[index]
+                  if (id !== undefined) {
+                    void channel.runExternalCommand('permission', ` ${id}`).then((text) => {
+                      if (text !== undefined && text !== '') channel.notify(text)
+                    })
+                  }
+                }}
               />
             </Box>
           )}
           {planPickerOpen && (
             <Box flexDirection="column" marginTop={1}>
-              <PlanPicker focusIndex={planIndex} currentOn={channel.mode.plan === true} />
+              <PlanPicker
+                focusIndex={planIndex}
+                currentOn={channel.mode.plan === true}
+                onPick={(index) => {
+                  setPlanIndex(index)
+                  setPlanPickerOpen(false)
+                  const on = index === 0
+                  void channel.runExternalCommand('plan', on ? '' : ' off').then((text) => {
+                    if (text !== undefined && text !== '') channel.notify(text)
+                  })
+                }}
+              />
             </Box>
           )}
           {langPickerOpen && (
             <Box flexDirection="column" marginTop={1}>
-              <LangPicker focusIndex={langIndex} currentLang={getLang()} />
+              <LangPicker
+                focusIndex={langIndex}
+                currentLang={getLang()}
+                onPick={(index) => {
+                  const lang = LANGS[index]
+                  if (lang === undefined) return
+                  setLangIndex(index)
+                  setLangPickerOpen(false)
+                  applyLang(lang)
+                }}
+              />
             </Box>
           )}
           {themePickerOpen && (
             <Box flexDirection="column" marginTop={1}>
-              <ThemePicker focusIndex={themeIndex} currentTheme={themeName} />
+              <ThemePicker
+                focusIndex={themeIndex}
+                currentTheme={themeName}
+                onPick={(index) => {
+                  setThemeIndex(index)
+                  setThemePickerOpen(false)
+                  const name = getThemeOptions()[index]?.value
+                  if (name !== undefined) {
+                    const ok = setTheme(name)
+                    channel.notify(
+                      ok ? t('theme-switched-saved', { name }) : t('theme-switch-failed', { name }),
+                      { color: ok ? 'success' : 'error' },
+                    )
+                  }
+                }}
+              />
             </Box>
           )}
           {historyOpen && (
@@ -2690,6 +2900,14 @@ export function Chat({
                 cursorOffset={historyCursor}
                 matches={historyMatches}
                 focusIndex={historyFocus}
+                onPick={(index) => {
+                  // 点击行 = 填入该历史命令（与 Enter 同路径）
+                  const entry = historyMatches[index]
+                  if (entry) {
+                    setHistoryFill(entry.text)
+                    setHistoryOpen(false)
+                  }
+                }}
               />
             </Box>
           )}
@@ -2702,6 +2920,30 @@ export function Chat({
                 modes={rewindModes}
                 modeIndex={rewindModeIndex}
                 busy={rewindBusy}
+                onPickRow={(index) => {
+                  // 列表页点击只选中：进入确认态保留键盘 Enter 显式触发
+                  setRewindIndex(index)
+                }}
+                onConfirm={() => {
+                  // 确认页即显式确认层，点击直接执行（与 Enter 同路径）
+                  const row = rewindConfirm
+                  if (row === null) return
+                  setRewindOpen(false)
+                  setRewindConfirm(null)
+                  void performRewind(row)
+                }}
+                onPickMode={(index) => {
+                  // 模式列表点击直接执行该模式（与 Enter 同路径）
+                  const row = rewindConfirm
+                  if (row === null) return
+                  // 模式页仅当 rewindModes 非空才渲染，这里空安全取值
+                  const mode = index === 0 ? null : (rewindModes?.[index - 1]?.id ?? null)
+                  setRewindModeIndex(index)
+                  setRewindOpen(false)
+                  setRewindConfirm(null)
+                  setRewindModes(null)
+                  void performRewind(row, mode)
+                }}
               />
             </Box>
           )}
@@ -2716,7 +2958,11 @@ export function Chat({
 /**
  * The pinned prompt header shown above the ScrollBox while the user has
  * scrolled up (mirroring Claude Code's FullscreenLayout.StickyPromptHeader).
- * Fixed at 1 row so the ScrollBox never shifts when the text changes.
+ * Pins the user message the transcript viewport is currently showing — the
+ * topmost visible user message, or the nearest one above when only assistant
+ * content fills the view — so it tracks which turn the user is reading
+ * instead of always carrying the latest prompt. Fixed at 1 row so the
+ * ScrollBox never shifts when the text changes.
  */
 function StickyPromptHeader({
   text,

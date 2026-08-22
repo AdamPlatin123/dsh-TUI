@@ -1,10 +1,11 @@
-import React, { type PropsWithChildren, type Ref, useImperativeHandle, useRef, useState } from 'react';
+import React, { type PropsWithChildren, type Ref, useCallback, useImperativeHandle, useRef, useState } from 'react';
 import type { Except } from 'type-fest';
 import { markScrollActivity } from '../../bootstrap/state.js';
 import type { DOMElement } from '../dom.js';
 import { markDirty, scheduleRenderFrom } from '../dom.js';
 import { noteFrameCause } from '../geometry-trace.js';
 import { markCommitStart } from '../reconciler.js';
+import type { WheelEvent } from '../events/wheel-event.js';
 import type { Styles } from '../styles.js';
 import Box from './Box.js';
 export type ScrollBoxHandle = {
@@ -97,6 +98,10 @@ function ScrollBox({
   const [, forceRender] = useState(0);
   const listenersRef = useRef(new Set<() => void>());
   const renderQueuedRef = useRef(false);
+  // The imperative handle, kept in a ref so the onWheel handler below can
+  // call scrollBy through the full public path (clamp bounds, sticky
+  // clearing, subscriber notify) instead of duplicating its logic.
+  const handleRef = useRef<ScrollBoxHandle | null>(null);
   const notify = () => {
     for (const l of listenersRef.current) l();
   };
@@ -116,7 +121,8 @@ function ScrollBox({
       scheduleRenderFrom(el);
     });
   }
-  useImperativeHandle(ref, (): ScrollBoxHandle => ({
+  useImperativeHandle(ref, (): ScrollBoxHandle => {
+    const handle: ScrollBoxHandle = {
     scrollTo(y: number) {
       const el = domRef.current;
       if (!el) return;
@@ -197,12 +203,23 @@ function ScrollBox({
       el.scrollClampMin = min;
       el.scrollClampMax = max;
     }
-  }),
+  };
+  handleRef.current = handle;
+  return handle;
+  },
   // notify/scrollMutated are inline (no useCallback) but only close over
   // refs + imports — stable. Empty deps avoids rebuilding the handle on
   // every render (which re-registers the ref = churn).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   []);
+
+  // Position-routed wheel events (pointer over this box) scroll THIS box
+  // through the public scrollBy path — clamp bounds, sticky clearing, and
+  // subscriber notify all apply. Horizontal wheel (deltaX) has no renderer
+  // support yet (no scrollLeft in the DOM model) and is ignored.
+  const handleWheel = useCallback((e: WheelEvent) => {
+    if (e.deltaY !== 0) handleRef.current?.scrollBy(e.deltaY);
+  }, []);
 
   // Structure: outer viewport (overflow:scroll, constrained height) >
   // inner content (flexGrow:1, flexShrink:0 — fills at least the viewport
@@ -223,7 +240,7 @@ function ScrollBox({
       // must reach React subscribers too — see dom.ts onStickyRestore.
       el.onStickyRestore = notify;
     }
-  }} style={{
+  }} onWheel={handleWheel} style={{
     flexWrap: 'nowrap',
     flexDirection: style.flexDirection ?? 'row',
     flexGrow: style.flexGrow ?? 0,

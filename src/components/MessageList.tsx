@@ -1,6 +1,7 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
+import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow } from '../dsh-adapter/channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
@@ -18,6 +19,7 @@ import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
+import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
 
 /**
@@ -58,6 +60,7 @@ function layoutSignature(
   columns: number,
   expanded: boolean,
   expandedRows: ReadonlySet<number>,
+  streamFolded: ReadonlySet<number>,
   thinkingVisible: boolean,
   thinkingFold: string,
   diffLayout: string,
@@ -77,8 +80,9 @@ function layoutSignature(
       break
     case 'reasoning':
       // thinkingFold (preview vs full) and the visibility filter change the
-      // folded card's height; streaming shows verbose live.
-      parts.push(row.streaming === true, expanded, expandedRows.has(row.id), thinkingVisible, thinkingFold)
+      // folded card's height; streaming shows verbose live unless the user
+      // clicked it folded (streamFolded collapses to the ticker/header).
+      parts.push(row.streaming === true, expanded, expandedRows.has(row.id), streamFolded.has(row.id), thinkingVisible, thinkingFold)
       break
     case 'tool': {
       const tool = row.tool
@@ -123,6 +127,8 @@ export function MessageList({
   expandedRows,
   selectedId,
   onToggleRow,
+  streamFoldedRows,
+  onToggleStreamFold,
   model,
   diffLayout = 'auto',
   thinkingFold = 'preview',
@@ -137,14 +143,19 @@ export function MessageList({
   forceMountRowId,
   newSinceRowId,
   onUnseenCount,
+  onTimeline,
   failureHintRowId,
   failureHint,
+  onOpenSubagent,
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
   expandedRows: ReadonlySet<number>
   selectedId: number | null
   onToggleRow: (rowId: number) => void
+  /** 流式 reasoning 行被用户折叠（点击展开/折叠对流式行同样有效）。 */
+  streamFoldedRows: ReadonlySet<number>
+  onToggleStreamFold: (rowId: number) => void
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout?: 'auto' | 'split' | 'unified'
@@ -173,6 +184,29 @@ export function MessageList({
   /** Reports how many new rows still sit below the viewport bottom edge. */
   onUnseenCount?: (count: number) => void
   /**
+   * Reports the conversation timeline snapshot for the sticky prompt
+   * header AND the transcript's turn rail: one entry per user turn
+   * (stable row id + content-space text top + preview line), plus the
+   * viewport-derived navigation targets, all computed from the same
+   * offsets[]/base geometry the mount window uses:
+   *
+   *  - active: the LAST turn whose prompt top is at-or-above the viewport
+   *    top (the turn whose content owns the top row — the one being
+   *    read); the FIRST turn stands in while pre-turn content (logo /
+   *    loaded-context) owns the top. Never null while any turn exists.
+   *    Top-anchored on purpose (Grok timeline semantics), not
+   *    "topmost visible prompt": the highlight moves only when a turn
+   *    boundary crosses the viewport top, so it never leaps when nudging
+   *    off the bottom, and the header/rail can never disagree.
+   *  - upId: nearest turn STRICTLY above the viewport top (▲ target).
+   *  - downId: nearest turn below the top whose top ≤ maxScroll — turns
+   *    past maxScroll can never own the top row (the renderer clamps
+   *    there), so naming them would make ▼ repeat itself forever.
+   *
+   * Reported post-commit, only when the signature changes.
+   */
+  onTimeline?: (state: TimelineSnapshot) => void
+  /**
    * Row id that should carry the trajectory footnote — the newest unseen
    * failure, or null. Exactly one row ever carries it: repeating the pointer
    * under every historical failure is the clutter this design avoids.
@@ -180,6 +214,8 @@ export function MessageList({
   failureHintRowId?: number | null
   /** Footnote text, e.g. `ctrl+t for the full trajectory`. */
   failureHint?: string
+  /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
+  onOpenSubagent?: (agentId: string) => void
 }) {
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
@@ -287,6 +323,7 @@ export function MessageList({
         columns,
         expanded,
         expandedRows,
+        streamFoldedRows,
         thinkingVisible,
         thinkingFold,
         diffLayout,
@@ -489,6 +526,64 @@ export function MessageList({
     }
   })
 
+  // Conversation timeline snapshot: one entry per user turn (stable id +
+  // content-space text top + preview), plus the viewport-derived targets
+  // consumed by BOTH the sticky prompt header (active) and the transcript
+  // turn rail (active highlight, ▲/▼). Top-anchored semantics (Grok
+  // timeline): active = the LAST turn whose prompt top is at-or-above the
+  // viewport top — the turn whose content owns the top row, "the turn
+  // being read" — with the first turn standing in while pre-turn content
+  // (logo / loaded-context) owns the top. The highlight moves only when a
+  // turn boundary crosses the viewport top, never when a later prompt
+  // merely becomes visible lower on screen, so it cannot leap when
+  // nudging off the bottom and the header/rail can never disagree. The
+  // projected top (scrollTop + pending) is used so boundary crossings
+  // register during wheel bursts, not one drain frame late. Same
+  // rows-space math as the mount window (offsets are rows-space,
+  // scrollTop content-space — add the header base). downId additionally
+  // requires the turn's top ≤ maxScroll: the renderer clamps scrollTop
+  // there, so a turn past it could never own the top row, and naming it
+  // would make ▼ repeat itself forever (the stuck-▼ bug). Reported
+  // post-commit, only when the signature changes.
+  const timelineTurns: TimelineTurn[] = []
+  let activeTurnIndex: number | null = null
+  let upTurnIndex: number | null = null
+  let downTurnIndex: number | null = null
+  {
+    const viewTop = scrollTop + pending
+    const maxScroll = Math.max(0, (scrollHandle?.getScrollHeight() ?? 0) - viewport)
+    let index = 0
+    for (let i = 0; i < visibleRows.length; i++) {
+      const row = visibleRows[i]!
+      if (row.kind !== 'user') continue
+      const textTop = base + offsets[i]! + (margins.get(row.id) === true ? 1 : 0)
+      timelineTurns.push({ id: row.id, top: textTop, preview: clipPreview(row.text) })
+      if (textTop <= viewTop) activeTurnIndex = index
+      if (textTop < viewTop) upTurnIndex = index
+      if (downTurnIndex === null && textTop > viewTop && textTop <= maxScroll) {
+        downTurnIndex = index
+      }
+      index++
+    }
+    if (index > 0 && activeTurnIndex === null) activeTurnIndex = 0
+  }
+  const timeline: TimelineSnapshot = {
+    turns: timelineTurns,
+    activeId: activeTurnIndex === null ? null : timelineTurns[activeTurnIndex]!.id,
+    upId: upTurnIndex === null ? null : timelineTurns[upTurnIndex]!.id,
+    downId: downTurnIndex === null ? null : timelineTurns[downTurnIndex]!.id,
+  }
+  const lastTimelineReportRef = React.useRef('')
+  React.useEffect(() => {
+    const sig =
+      timelineTurns.map(t => `${t.id}:${t.top}:${t.preview}`).join('|') +
+      `#a${timeline.activeId}#u${timeline.upId}#d${timeline.downId}`
+    if (sig !== lastTimelineReportRef.current) {
+      lastTimelineReportRef.current = sig
+      onTimeline?.(timeline)
+    }
+  })
+
   // Post-commit: measure mounted rows, derive the content-space base from
   // the first mounted row's Yoga top, and clamp render-time scrollTop to the
   // mounted coverage so burst scrolls never show blank spacer.
@@ -561,14 +656,10 @@ export function MessageList({
   return (
     <>
       {rows.some(row => row.folded) && (
-        <Box marginTop={1} onClick={onLoadOlder}>
-          <Divider title={t('load-earlier')} />
-        </Box>
+        <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
       {!showAll && hiddenCount > 0 && (
-        <Box marginTop={1} onClick={onToggleAll}>
-          <Divider title={t('show-previous-messages', { n: hiddenCount })} />
-        </Box>
+        <ClickableDivider title={t('show-previous-messages', { n: hiddenCount })} onClick={onToggleAll} />
       )}
       {topPad > 0 && <Box height={topPad} flexShrink={0} />}
       {visibleRows
@@ -614,6 +705,9 @@ export function MessageList({
               toolDurationMs={tool?.durationMs}
               subagent={subagent}
               onToggleRow={onToggleRow}
+              onToggleStreamFold={onToggleStreamFold}
+              streamFolded={streamFoldedRows.has(row.id)}
+              onOpenSubagent={onOpenSubagent}
               setRowRef={setRowRef}
             />
           )
@@ -674,7 +768,29 @@ type MemoRowProps = {
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
   onToggleRow: (rowId: number) => void
+  /** 流式 reasoning 行折叠开关（默认展开 live，点击折叠；落定行用 onToggleRow）。 */
+  onToggleStreamFold: (rowId: number) => void
+  /** 该行是否被用户折叠（仅流式 reasoning 行消费）。 */
+  streamFolded: boolean
+  onOpenSubagent: ((agentId: string) => void) | undefined
   setRowRef: (rowId: number, el: DOMElement | null) => void
+}
+
+/** Load-earlier / show-previous divider row with a mouse hover tint — the
+ *  clickability is otherwise invisible (audit C-04). */
+function ClickableDivider({ title, onClick }: { title: string; onClick?: () => void }): React.ReactNode {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <Box
+      marginTop={1}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      backgroundColor={hovered ? 'userMessageBackgroundHover' : undefined}
+    >
+      <Divider title={title} />
+    </Box>
+  )
 }
 
 function TranscriptRow({
@@ -710,6 +826,9 @@ function TranscriptRow({
   toolDurationMs,
   subagent,
   onToggleRow,
+  onToggleStreamFold,
+  streamFolded,
+  onOpenSubagent,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
   const ref = React.useCallback(
@@ -718,9 +837,26 @@ function TranscriptRow({
     },
     [setRowRef, rowId],
   )
-  const onClick = React.useCallback((): void => {
+  // 可折叠行（工具卡/思考/compact 摘要）共用：点击切换展开，全宽行右侧
+  // 空白（屏幕缓冲未写入单元格）不触发——点击空白想选字/拖拽时不再误触
+  // 展开/收起（审计 C-03/cellIsBlank 零消费）。纯文本行（user/assistant）
+  // 保持不可点：转录是阅读区（用户反馈），折叠语义留给带视觉指示的行。
+  const foldOnClick = React.useCallback((event: ClickEvent): void => {
+    if (event.cellIsBlank) return
     onToggleRow(rowId)
   }, [onToggleRow, rowId])
+  // 流式 reasoning 行：点击折叠/展开 live 视图（默认展开，与落定行的
+  // 默认折叠相反——所以走独立开关，落定后语义自动回到 foldOnClick）。
+  const streamFoldOnClick = React.useCallback((event: ClickEvent): void => {
+    if (event.cellIsBlank) return
+    onToggleStreamFold(rowId)
+  }, [onToggleStreamFold, rowId])
+  // 子代理卡：点击打开详情场景（不是折叠）。
+  const openSubagent = React.useCallback(() => {
+    if (subagent !== undefined) onOpenSubagent?.(subagent.agentId)
+  }, [onOpenSubagent, subagent])
+  // compact 摘要折叠行 hover 轻指示（∴ 提亮，不刷背景）。
+  const [compactHovered, setCompactHovered] = useState(false)
 
   switch (kind) {
     case 'user':
@@ -730,7 +866,6 @@ function TranscriptRow({
             text={text}
             addMargin={addMargin}
             isSelected={isSelected}
-            onClick={onClick}
           />
         </Box>
       )
@@ -776,7 +911,6 @@ function TranscriptRow({
             addMargin={addMargin}
             isSelected={isSelected}
             isExpanded={isExpanded}
-            onClick={onClick}
           />
         </Box>
       )
@@ -789,17 +923,17 @@ function TranscriptRow({
             streaming={streaming}
             preview={
               streaming &&
+              !streamFolded &&
               thinkingFold === 'preview' &&
-              !expanded &&
               !isExpanded
             }
-            // Streaming reasoning shows expanded live, then folds
-            // automatically once the turn settles (unless Ctrl+O or a
-            // single-row expansion keeps it open).
-            verbose={isExpanded || expanded || streaming}
+            // Streaming reasoning shows expanded live (click collapses to the
+            // ticker/header via streamFolded); settled rows keep the
+            // fold-on-settle default and expand via expandedRows/Ctrl+O.
+            verbose={isExpanded || expanded || (streaming && !streamFolded)}
             durationMs={durationMs}
             isSelected={isSelected}
-            onClick={onClick}
+            onClick={streaming ? streamFoldOnClick : foldOnClick}
           />
         </Box>
       )
@@ -840,6 +974,7 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
+            onClick={foldOnClick}
           />
         </Box>
       )
@@ -871,21 +1006,24 @@ function TranscriptRow({
       )
     case 'compact':
       // The post-compaction summary defaults to a folded one-liner with a
-      // text preview; Ctrl+O (global) or message-selection Enter reveals
-      // the full summary.
+      // text preview; Ctrl+O (global), message-selection Enter, or a click
+      // reveals the full summary.
       return (
         <Box
           marginTop={addMargin ? 1 : 0}
           paddingLeft={2}
           backgroundColor={background}
           ref={ref}
-          onClick={onClick}
+          onClick={foldOnClick}
+          onMouseEnter={() => setCompactHovered(true)}
+          onMouseLeave={() => setCompactHovered(false)}
         >
           {expanded || isExpanded ? (
             <Text dimColor>{text}</Text>
           ) : (
-            <Text dimColor italic>
-              ∴ {t('compact-summary-folded')} · {compactPreview(text)}{' '}
+            <Text dimColor italic color={compactHovered ? 'text' : undefined}>
+              <Text color={compactHovered ? 'text' : undefined}>∴</Text>
+              {' '}{t('compact-summary-folded')} · {compactPreview(text)}{' '}
               {t('hint-expand-ctrl-o')}
             </Text>
           )}
@@ -900,7 +1038,7 @@ function TranscriptRow({
             addMargin={addMargin}
             activityFrames={activityFrames}
             isExpanded={isExpanded}
-            onClick={() => onToggleRow(rowId)}
+            onClick={openSubagent}
           />
         </Box>
       )

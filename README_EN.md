@@ -108,11 +108,23 @@ extension; available on the VS Code Marketplace) — see
 See [Getting started](docs/getting-started.en.md) for profile composition,
 source builds, and troubleshooting.
 
-Inside the TUI, `/update` updates the installed
-`@deepseek-harness-tui/dsh-tui` package and automatically restarts into the current session.
+The TUI checks the configured registry for newer versions in the background
+after startup (the check never blocks the first frame and silently ignores
+offline or registry errors). When an update is available, just type `/update`
+for a one-shot upgrade: it updates the runtime actually running in the current
+`dsh-tui` profile, verifies the install result, then restarts automatically and
+resumes the current session.
 
-The TUI also checks npm for updates in the background after startup. The check
-never blocks the first frame and silently ignores offline or registry errors.
+When launched through the global `dsh-tui` command, newer versions
+automatically migrate/align the global entry to a delegating launcher: the
+global command only forwards to the copy inside the profile, so the startup
+logic always follows the profile version.
+
+Under normal circumstances no extra manual step is needed:
+
+```sh
+npm install -g @deepseek-harness-tui/dsh-tui
+```
 
 For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 [Getting started](docs/getting-started.en.md#migrate-from-the-former-package).
