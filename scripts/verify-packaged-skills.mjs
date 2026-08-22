@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { packagedSkillRoot, registerPackagedSkills } from '../src/dsh-adapter/packaged-skills.ts'
+import { fileURLToPath } from 'node:url'
+import { packagedSkillRoot as srcPackagedSkillRoot } from '../src/dsh-adapter/packaged-skills.ts'
+import {
+  packagedSkillRoot as compiledPackagedSkillRoot,
+  registerPackagedSkills,
+} from '../lib/types/dsh-adapter/packaged-skills.js'
 
 const workspace = new URL('..', import.meta.url)
 const workspacePath = fileURLToPath(workspace)
 const packagedRoot = join(workspacePath, 'skills')
 
-assert.equal(packagedSkillRoot(), packagedRoot)
-const compiledModulePath = join(workspacePath, 'lib/types/dsh-adapter/packaged-skills.js')
+assert.equal(srcPackagedSkillRoot(), packagedRoot)
+assert.equal(compiledPackagedSkillRoot(), packagedRoot)
 assert.equal(existsSync(join(workspacePath, 'lib/skills')), false)
-assert.equal(
-  packagedSkillRoot(pathToFileURL(compiledModulePath).href),
-  packagedRoot,
-)
 
 const registered = []
 const ctx = {

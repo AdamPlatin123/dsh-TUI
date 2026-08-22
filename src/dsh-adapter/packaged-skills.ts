@@ -59,8 +59,10 @@ export function packagedSkillRoot(moduleUrl: string = import.meta.url): string {
 
 /**
  * Register every `skills/<name>/SKILL.md` shipped in this package. No-op when
- * the composition mounts no skill registry (bare standalone boots); duplicate
- * or invalid entries are skipped so a skill can never take down the TUI boot.
+ * the composition mounts no skill registry (bare standalone boots). If a
+ * registry is present but the packaged skill root is missing, boot fails loudly;
+ * duplicate or invalid entries are skipped so one bad skill cannot take down
+ * the TUI boot.
  *
  * @param ctx - the plugin's cordis context
  */
