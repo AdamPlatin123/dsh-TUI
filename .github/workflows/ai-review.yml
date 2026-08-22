@@ -34,8 +34,9 @@ jobs:
         run: |
           claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err || { echo "exit=$?"; head -20 review.err; exit 1; }
           # 容错提取：从输出中剥离平衡 JSON 块（模型可能带叙述/围栏），再校验渲染
-          git show origin/main:.github/scripts/extract-review.py > extract-review.py 2>/dev/null || git show "${{ github.event.pull_request.base.sha }}":.github/scripts/extract-review.py > extract-review.py
-          if python3 extract-review.py; then
+          # 三级取提取器：origin/main → base sha → raw URL；全败则置空（走原文回退）
+          { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || git show "${{ github.event.pull_request.base.sha }}":.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py || true
+          if [ -s extract-review.py ] && python3 extract-review.py; then
             printf '## AI 审核参考（⚠️ 输出格式异常，以下为原始内容）\n\n```\n' > review.md
             cat raw.out >> review.md
             printf '\n```\n' >> review.md
