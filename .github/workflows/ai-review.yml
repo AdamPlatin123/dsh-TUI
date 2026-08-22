@@ -20,22 +20,22 @@ jobs:
       - run: npm install -g @anthropic-ai/claude-code@2.1.233
       - name: Preseed config + package review material
         run: |
-          mkdir -p ~/.claude /tmp/material
+          mkdir -p ~/.claude
           printf '{"hasCompletedOnboarding":true,"theme":"dark"}' > ~/.claude.json
-          git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.pull_request.head.sha }}" > /tmp/material/pr.diff
-          wc -l /tmp/material/pr.diff
+          gh pr diff "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > "$GITHUB_WORKSPACE/.pr-review.diff" || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.pull_request.head.sha }}" > "$GITHUB_WORKSPACE/.pr-review.diff"
+          wc -l "$GITHUB_WORKSPACE/.pr-review.diff"
       - name: Run AI review
-        working-directory: /tmp/material
         env:
+          GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
           ANTHROPIC_MODEL: deepseek-v4-flash-vision-exp
           ANTHROPIC_API_KEY: dummy-not-used
           CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
         run: |
-          claude -p "审查 /tmp/material/pr.diff 中的 PR diff（仓库 $GITHUB_REPOSITORY，diff 涉及的文件如需上下文可读仓库 /home/runner/work 下的检出，但优先基于 diff 自身）。输出：1) 审核参考：Mergeable/Need Minor Fix/Need Major Fix 三选一 2) 发现清单（文件:行号+问题+建议，先列做对的部分）3) 一句话理由。不修改任何文件。" --output-format text --max-turns 12 > review.md 2> review.err || { echo "exit=$?"; cat review.err | head -20; exit 1; }
-          head -c 200 review.md
+          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可自由读取源码核对 diff 涉及文件的上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。输出：1) 审核参考：Mergeable/Need Minor Fix/Need Major Fix 三选一 2) 发现清单（文件:行号+问题+建议，先列做对的部分）3) 一句话理由。不修改任何文件。" --output-format text --max-turns 14 > .pr-review.out 2> .pr-review.err || { echo "exit=$?"; cat .pr-review.err | head -20; exit 1; }
+          head -c 200 .pr-review.out
       - name: Post comment
         if: success()
         env: { GH_TOKEN: "${{ github.token }}" }
-        run: gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file /tmp/material/review.md
+        run: gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file .pr-review.out
