@@ -26,8 +26,6 @@ export interface ApprovalSnapshot {
   readonly reason?: string
   /** The gated command, recovered from the paired tool/call event. */
   readonly command?: string
-  /** File path for file-operation tools (edit, write, read). */
-  readonly filePath?: string
 }
 
 /** One queued or active approval ask. */
@@ -49,10 +47,11 @@ const EDIT_PREVIEW_LINES = 4
  * links to an already-presented tool call via `callId`, so the arguments
  * are not duplicated on the request. Mirrors the web client's `commandOf`.
  * @param req - The pending approval request.
- * @returns An object with `command` and/or `filePath`, or undefined when
- *   the call cannot be found.
+ * @returns The `command` argument when present, a human-readable preview
+ *   for file-operation tools (path first, then content/diff), else the raw
+ *   arguments string (clipped), else undefined when the call cannot be found.
  */
-function commandOf(req: ApprovalRequest): { command?: string, filePath?: string } | undefined {
+function commandOf(req: ApprovalRequest): string | undefined {
   if (req.callId === undefined) return undefined
   const events = req.agent.session.events
   for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -65,18 +64,18 @@ function commandOf(req: ApprovalRequest): { command?: string, filePath?: string 
       if (parsed !== null && typeof parsed === 'object') {
         // bash tool: has a `command` field — return it directly.
         if ('command' in parsed && typeof parsed.command === 'string') {
-          return { command: parsed.command }
+          return parsed.command
         }
-        // write tool: file_path + content → human-readable preview.
+        // write tool: file_path + content → path line, then content preview.
         const obj = parsed as Record<string, unknown>
         if (typeof obj.file_path === 'string' && typeof obj.content === 'string') {
           const lines = obj.content.split('\n')
           const preview = lines.slice(0, WRITE_PREVIEW_LINES).map(l => `  + ${l}`).join('\n')
           const remaining = lines.length - WRITE_PREVIEW_LINES
           const suffix = remaining > 0 ? `\n  ... +${remaining} more lines` : ''
-          return { command: `${preview}${suffix}\n`, filePath: obj.file_path }
+          return `${obj.file_path}\n\n${preview}${suffix}\n`
         }
-        // edit tool: file_path + old_string + new_string → diff preview.
+        // edit tool: file_path + old_string + new_string → path line, then diff preview.
         if (typeof obj.file_path === 'string' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
           const parts: string[] = []
           if (obj.old_string !== '') {
@@ -91,13 +90,13 @@ function commandOf(req: ApprovalRequest): { command?: string, filePath?: string 
             const newRemaining = newLines.length - EDIT_PREVIEW_LINES
             parts.push(newPreview + (newRemaining > 0 ? `\n  ... +${newRemaining} more lines` : ''))
           }
-          return { command: `${parts.join('\n')}\n`, filePath: obj.file_path }
+          return `${obj.file_path}\n\n${parts.join('\n')}\n`
         }
       }
     } catch {
       // Not JSON — fall through to the raw string.
     }
-    return { command: raw.length <= COMMAND_CLIP ? raw : `${raw.slice(0, COMMAND_CLIP)}…` }
+    return raw.length <= COMMAND_CLIP ? raw : `${raw.slice(0, COMMAND_CLIP)}…`
   }
   return undefined
 }
@@ -160,14 +159,13 @@ export class ApprovalStore {
    */
   park(req: ApprovalRequest): Promise<ApprovalOutcome> {
     return new Promise<ApprovalOutcome>(resolve => {
-      const result = commandOf(req)
+      const command = commandOf(req)
       const pending: PendingApproval = {
         key: String(++this.seq),
         snapshot: {
           toolName: req.toolName,
           ...(req.reason !== undefined ? { reason: req.reason } : {}),
-          ...(result?.command !== undefined ? { command: result.command } : {}),
-          ...(result?.filePath !== undefined ? { filePath: result.filePath } : {}),
+          ...(command !== undefined ? { command } : {}),
         },
         resolve,
         onAbort: () => {

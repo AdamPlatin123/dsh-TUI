@@ -57,14 +57,10 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
 
   // Sanitize untrusted fields to prevent ANSI injection.
   const TOOL_NAME_LIMIT = 40
-  const FILE_PATH_LIMIT = 200
   const COMMAND_LINE_LIMIT = 200
   const REASON_LINE_LIMIT = 500
 
   const safeToolName = cleanRenderText(approval.toolName, TOOL_NAME_LIMIT)
-  const safeFilePath = approval.filePath !== undefined
-    ? cleanRenderText(approval.filePath, FILE_PATH_LIMIT)
-    : undefined
   const safeCommand = approval.command !== undefined
     ? approval.command.split('\n').map(line => cleanRenderText(line, COMMAND_LINE_LIMIT)).join('\n')
     : undefined
@@ -72,19 +68,15 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
     ? approval.reason.split('\n').map(line => cleanRenderText(line, REASON_LINE_LIMIT)).join('\n')
     : undefined
 
-  const titleTool = safeFilePath !== undefined
-    ? `${safeToolName} ${safeFilePath}`
-    : safeToolName
-
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={t('approval-waiting', { tool: titleTool })} padding={4} />
+      <Divider color="permission" title={t('approval-waiting', { tool: safeToolName })} padding={4} />
       <Box flexDirection="column" marginTop={1}>
         {safeCommand !== undefined && (
           <Box flexDirection="column" paddingX={2}>
             {safeCommand.split('\n').map((line, index) => {
-              const isOld = /^\s*- /.test(line)
-              const isNew = /^\s*\+ /.test(line)
+              const isOld = /^\s*-( |$)/.test(line)
+              const isNew = /^\s*\+( |$)/.test(line)
               return (
                 <Text
                   key={`cmd-${index}`}
