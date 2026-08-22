@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
@@ -15,11 +15,25 @@ export type HistoryEntry = {
 }
 
 const HISTORY_LIMIT = 200
-const LOCK_RETRY_LIMIT = 200
-const LOCK_RETRY_DELAY_MS = 10
+const LOCK_RETRY_LIMIT = 50
+const LOCK_RETRY_DELAY_MS = 5
+const STALE_LOCK_MS = 30_000
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function removeStaleHistoryLock(): boolean {
+  try {
+    const ageMs = Date.now() - statSync(HISTORY_LOCK).mtimeMs
+    if (ageMs < STALE_LOCK_MS) return false
+    rmSync(HISTORY_LOCK, { recursive: true, force: true })
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return true
+    throw error
+  }
 }
 
 function withHistoryLock(write: () => void): void {
@@ -36,6 +50,7 @@ function withHistoryLock(write: () => void): void {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       if (code !== 'EEXIST') throw error
+      if (removeStaleHistoryLock()) continue
       sleepSync(LOCK_RETRY_DELAY_MS)
     }
   }

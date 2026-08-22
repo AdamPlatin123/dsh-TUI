@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,6 +37,76 @@ try {
   assert.equal(capped.length, 200, 'persisted history stays capped')
   assert.equal(capped[0]?.text, 'cmd 249')
   assert.equal(capped.at(-1)?.text, 'cmd 50')
+
+  const staleLock = join(fakeHome, '.dsh-tui', 'history.jsonl.lock')
+  mkdirSync(staleLock, { recursive: true })
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(staleLock, old, old)
+  appendHistory('after stale lock')
+  assert.equal(existsSync(staleLock), false, 'stale history lock is removed')
+  assert.equal(loadHistory()[0]?.text, 'after stale lock', 'append recovers after stale lock')
+
+  const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { HistorySearchDialog }] =
+    await Promise.all([
+      import('node:stream'),
+      import('react'),
+      import('@xterm/headless'),
+      import('../src/ui.js'),
+      import('../src/components/HistorySearchDialog.js'),
+    ])
+  const terminal = new XTerm({ cols: 80, rows: 20, scrollback: 0, allowProposedApi: true })
+  class FakeStdout extends Writable {
+    columns = 80
+    rows = 20
+    isTTY = true
+    _write(chunk, _encoding, callback) {
+      terminal.write(String(chunk), callback)
+    }
+  }
+  class FakeStdin extends PassThrough {
+    isTTY = true
+    setRawMode() {
+      return this
+    }
+    ref() {
+      return this
+    }
+    unref() {
+      return this
+    }
+  }
+  const stdout = new FakeStdout()
+  const stdin = new FakeStdin()
+  const lines = () =>
+    Array.from({ length: 20 }, (_, y) => terminal.buffer.active.getLine(y)?.translateToString(true) ?? '')
+  const renderedText = () => lines().join('\n')
+  const app = await render(
+    React.createElement(HistorySearchDialog, {
+      query: 'dup',
+      cursorOffset: 3,
+      matches: [
+        { text: 'duplicate command', ts: Date.now() - 1000 },
+        { text: 'duplicate command', ts: Date.now() - 2000 },
+      ],
+      focusIndex: 0,
+    }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+  )
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.match(renderedText(), /duplicate command/, 'history dialog renders duplicate matches')
+  app.rerender(
+    React.createElement(HistorySearchDialog, {
+      query: 'nomatch',
+      cursorOffset: 7,
+      matches: [],
+      focusIndex: 0,
+    }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 100))
+  const emptyRender = renderedText()
+  assert.equal(emptyRender.includes('duplicate command'), false, 'empty history search clears old rows')
+  assert.match(emptyRender, /没有匹配的命令|No matching commands/, 'empty history search shows empty state')
+  app.unmount()
 
   const parallelHome = mkdtempSync(join(tmpdir(), 'dsh-tui-history-parallel-'))
   try {
@@ -79,4 +149,4 @@ try {
   rmSync(fakeHome, { recursive: true, force: true })
 }
 
-console.log('history search OK (unique duplicate keys, filtering data, capped persistence)')
+console.log('history search OK (keys, stale lock recovery, empty render, capped persistence)')
