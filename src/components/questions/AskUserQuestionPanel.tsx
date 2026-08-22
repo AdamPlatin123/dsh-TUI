@@ -55,6 +55,10 @@ export type AskUserQuestionPanelProps = {
   /** Plan-review Exit planning row; defaults to onCancel for non-Chat
    *  callers that render a plan-review question without the store hook. */
   readonly onExitPlanning?: () => void
+  /** Enable the plan-review Exit planning row (Liangshen preset with
+   *  `/planPrompt` on). When false (the default), the panel shows the
+   *  asker's own decline option verbatim with keep-planning semantics. */
+  readonly exitPlanning?: boolean
 }
 
 export function AskUserQuestionPanel({
@@ -65,6 +69,7 @@ export function AskUserQuestionPanel({
   onAnswer,
   onCancel,
   onExitPlanning,
+  exitPlanning,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the CC-style decision card instead of the generic questionnaire. The
@@ -76,6 +81,7 @@ export function AskUserQuestionPanel({
         onAnswer={onAnswer}
         onCancel={onCancel}
         onExitPlanning={onExitPlanning ?? onCancel}
+        exitPlanning={exitPlanning}
       />
     )
   }

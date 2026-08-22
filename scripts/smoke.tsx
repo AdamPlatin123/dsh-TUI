@@ -559,6 +559,10 @@ const interactChannel = {
   lastUserText: '',
   notifications: [],
   pushLocal: () => {},
+  // Liangshen + /planPrompt on: the only scope where the Exit planning row
+  // is enabled (the gate is preset AND the durable injection switch).
+  agentPreset: 'liangshen',
+  planPromptEnabled: () => true,
 } as never
 const interactStdin = new FakeStdin()
 const interactStdout = new FakeStdout()
@@ -669,6 +673,54 @@ const dismissCode = await reviewDismiss.then(
   (error: unknown) => error instanceof UserQuestionError ? error.code : 'other',
 )
 console.log('--- dismiss rejects ASK_CANCELLED?', dismissCode === 'ASK_CANCELLED')
+
+// Review 5: a standard-preset session must keep the legacy plan-review
+// panel — the asker's own decline row (Keep planning) with its description
+// and quick-pick hint, and digit 2 resolves keep-planning (NOT the
+// Exit-planning turn abort).
+const standardInteractChannel = {
+  ...channel,
+  version: 2,
+  rows: [],
+  lastUserText: '',
+  notifications: [],
+  pushLocal: () => {},
+  agentPreset: 'standard',
+  planPromptEnabled: () => false,
+} as never
+const standardInteractStdin = new FakeStdin()
+const standardInteractStdout = new FakeStdout()
+const standardInteractQuestions = new QuestionStore()
+const standardInteractApprovals = new ApprovalStore()
+await render(
+  <Chat channel={standardInteractChannel} questionStore={standardInteractQuestions} approvalStore={standardInteractApprovals} />,
+  {
+    stdout: standardInteractStdout,
+    stdin: standardInteractStdin,
+    stderr: new FakeStderr(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+  },
+)
+await new Promise(resolve => setTimeout(resolve, 600))
+
+mark = standardInteractStdout.frames.length
+const standardReview = standardInteractQuestions.ask(reviewRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+const standardReviewFrame = plainText(standardInteractStdout.frames.slice(mark))
+console.log(
+  '--- standard plan-review keeps legacy decline row?',
+  standardReviewFrame.includes('Keep planning') &&
+  standardReviewFrame.includes('Stay in plan mode and keep refining the plan.') &&
+  !standardReviewFrame.includes('Exit planning') &&
+  standardReviewFrame.includes('1/2 quick-pick'),
+)
+standardInteractStdin.write('2')
+const standardDeclineAnswer = await standardReview
+console.log(
+  '--- standard digit 2 keeps planning?',
+  JSON.stringify(standardDeclineAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Keep planning'] }] }),
+)
 
 // Approval while a question is parked: the approval panel takes precedence.
 const fakeApprovalReq = (callId: string, command: string) => ({

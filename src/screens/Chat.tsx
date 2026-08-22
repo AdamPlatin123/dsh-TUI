@@ -2582,6 +2582,7 @@ export function Chat({
             onAnswer={selection => questionStore.answerCurrent(selection)}
             onCancel={() => questionStore.cancelCurrent()}
             onExitPlanning={() => questionStore.exitPlanReview()}
+            exitPlanning={channel.agentPreset === 'liangshen' && channel.planPromptEnabled()}
           />
         ) : (
           <PromptInput
