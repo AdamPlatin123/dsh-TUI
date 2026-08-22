@@ -183,6 +183,58 @@ export function MessageList({
     baseRef.current = null
   }
 
+  // --- layout signature: stale-height invalidation ------------------------
+  // heightsRef entries outlive the commits that measured them, but many
+  // state changes rewrite a row's height WITHOUT a columns change: Ctrl+O
+  // (expanded), single-row expand (expandedRows), reasoning stream→fold,
+  // a tool result/error/footnote arriving, diff layout switch, assistant
+  // text growth, thinking visibility. A cached height from before such a
+  // change feeds topPad/bottomPad spacers, the offsets scan, and the
+  // ScrollBox clamps with geometry that no longer exists — blank bands,
+  // overlapping rows, wrong scrollTop after toggles (the audit's stale
+  // height cache). Track the inputs that decide each row's height; when
+  // one changes, drop the cached height. The window extension further
+  // down remounts invalidated rows so useLayoutEffect re-measures them.
+  // Text identity uses length as an O(1) proxy — per-frame full-text
+  // hashing over every row would defeat virtualization's budget, and a
+  // same-length miss only degrades to the previous behavior.
+  const sigRef = React.useRef(new Map<number, string>())
+  {
+    const sigs = sigRef.current
+    for (let i = 0; i < visibleRows.length; i++) {
+      const row = visibleRows[i]!
+      const tool = row.tool
+      const sig = [
+        columns,
+        row.kind,
+        row.text?.length ?? 0,
+        row.streaming === true,
+        expanded,
+        expandedRows.has(row.id),
+        thinkingVisible,
+        thinkingFold,
+        diffLayout,
+        // Model only renders on expanded rows (MessageMetadata) — folding
+        // it out of the signature keeps an idle /model switch from
+        // invalidating every cached height at once.
+        expanded ? model : '',
+        tool?.status ?? '',
+        tool?.resultText?.length ?? 0,
+        tool?.resultFull?.length ?? 0,
+        tool?.errorText?.length ?? 0,
+        row.id === failureHintRowId ? failureHint ?? '' : '',
+      ].join('|')
+      if (sigs.get(row.id) !== sig) {
+        if (sigs.size >= HEIGHTS_CACHE_MAX) {
+          const oldest = sigs.keys().next().value
+          if (oldest !== undefined) sigs.delete(oldest)
+        }
+        sigs.set(row.id, sig)
+        heightsRef.current.delete(row.id)
+      }
+    }
+  }
+
   // Scrolling bypasses React (imperative DOM scrollTop): subscribe so the
   // window follows the viewport.
   React.useEffect(() => {
@@ -266,6 +318,27 @@ export function MessageList({
         break
       }
     }
+    // Unknown-height extension (layout signature, see sigRef): a row whose
+    // cached height was just INVALIDATED must remount to re-measure even
+    // when it sits outside the window — its spacer otherwise falls back to
+    // DEFAULT_ROW_HEIGHT until the row scrolls back into view, leaving the
+    // content geometry wrong for exactly that long (blank band after
+    // Ctrl+O, unreachable scroll bottom after a tool result lands). One
+    // remount per change; the measure tick + hold then tighten again.
+    // Guard: only rows that have actually MOUNTED here once qualify
+    // (paintedOnce fills from localRefs post-commit) — a brand-new
+    // streaming row has never been measured, and extending over it would
+    // mount everything below the window every frame while the user reads
+    // scrolled-up (virtualization defeated, per-frame full mount = the
+    // long-session stall). New rows keep the original path: their height
+    // lands once the window reaches them.
+    for (let i = 0; i < start; i++) {
+      const rowId = visibleRows[i]!.id
+      if (!heightsRef.current.has(rowId) && paintedOnceRef.current.has(rowId)) {
+        start = i
+        break
+      }
+    }
     // Expansion hold — AFTER the extension so it tracks the FINAL window:
     // never tighten within the hold window after a widen. React commits
     // inside one ink frame coalesce; a mount followed by the measure-tick
@@ -278,6 +351,15 @@ export function MessageList({
       holdUntilRef.current = performance.now() + 120
     }
     lastStartRef.current = start
+  }
+  // Tail-side invalidated-height extension (see the start-side loop above
+  // for the rationale and the mounted-once guard): rows BELOW the window
+  // whose height was just invalidated remount to re-measure, so bottomPad
+  // keeps real geometry while the user reads scrolled-up content and the
+  // tail streams. Runs for non-sticky views; sticky mounts the tail anyway.
+  for (let i = end; i < visibleRows.length; i++) {
+    const rowId = visibleRows[i]!.id
+    if (!heightsRef.current.has(rowId) && paintedOnceRef.current.has(rowId)) end = i + 1
   }
   if (forceMountRowId !== undefined && forceMountRowId !== null) {
     const idx = visibleRows.findIndex(row => row.id === forceMountRowId)

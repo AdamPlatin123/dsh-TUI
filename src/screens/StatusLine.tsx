@@ -5,6 +5,7 @@ import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { Byline } from '../components/design-system/Byline.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
+import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -140,6 +141,16 @@ export function StatusLine({
   ]
 
   const rightParts = [
+    // Goal chip first: session-level state outranks repo/location details.
+    ...(statusBar.goal && channel.goal !== undefined
+      ? [
+          <GoalStatusChip
+            key="goal"
+            goal={channel.goal}
+            minimal={channel.minimal}
+          />,
+        ]
+      : []),
     ...(statusBar.gitBranch && channel.gitBranch
       ? [
           <Text key="git" color="professionalBlue">

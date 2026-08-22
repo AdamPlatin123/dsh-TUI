@@ -7,6 +7,15 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
 
+const [{ mkdtempSync, rmSync }, { tmpdir }, { join }] = await Promise.all([
+  import('node:fs'),
+  import('node:os'),
+  import('node:path'),
+])
+const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-tui-keybindings-'))
+process.env.HOME = fakeHome
+process.env.USERPROFILE = fakeHome
+
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { resolveKeybindings }] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -160,7 +169,7 @@ const screen = (): string => {
 await sleep(500)
 stdin.write('\x19') // Ctrl+Y
 await sleep(400)
-check('custom historySearch chord opens history search', screen().includes('Search history'))
+check('custom historySearch chord opens history search', screen().includes('Type to search'), screen())
 
 stdin.write('\x1b')
 await sleep(250)
@@ -231,4 +240,5 @@ check('second Ctrl+D still exits with a custom interrupt chord', exited)
 
 instance.unmount()
 term.dispose()
+rmSync(fakeHome, { recursive: true, force: true })
 process.exit(failed === 0 ? 0 : 1)
