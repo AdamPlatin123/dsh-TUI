@@ -34,8 +34,10 @@ jobs:
           ANTHROPIC_MODEL: deepseek-v4-flash-vision-exp
           ANTHROPIC_API_KEY: dummy-not-used
           CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
+          # 批量并发下 generate_session_title（异步辅助调用）高发致命错——禁非必要模型调用
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_MODEL_CALLS: '1'
         run: |
-          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err
+          claude -p "审查当前工作区的 .pr-review.diff（本仓库 PR 的权威 diff）。当前目录即 PR head 检出，可读取源码核对上下文（注释/文案改动务必对照源码常量与相关函数实际行为）。最终输出必须且只能是一个 JSON 对象，不要 markdown 代码块包裹：{\"verdict\":\"Mergeable|Need Minor Fix|Need Major Fix 三选一\",\"correct\":[\"验证过做对的点\"],\"issues\":[{\"file\":\"路径\",\"line\":行号,\"problem\":\"问题\",\"fix\":\"建议\"}],\"reason\":\"一句话\"}" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err || { echo "首次失败，60s 后重试"; sleep 60; claude -p "$(cat /tmp/prompt.txt)" --output-format text --max-turns 14 --allowedTools "Read" "Grep" "Glob" > raw.out 2> review.err; }
           echo "claude exit=$? raw=$(wc -c < raw.out)B"
           test -s raw.out
       - name: Render and post
