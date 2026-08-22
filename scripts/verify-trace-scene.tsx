@@ -192,6 +192,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       tps: false,
       gitBranch: false,
       sessionTitle: false,
+      sessionId: false,
       mode: false,
       contextBar: false,
       activity: false,
@@ -629,9 +630,14 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   // B — the wake strip lives on the hint row, and every assertion below is
   // scoped to that row on purpose: the startup tip also names the key, so a
-  // whole-screen search could not tell the two channels apart.
+  // whole-screen search could not tell the two channels apart. The `/tips`
+  // guard is the same discipline: the logo tip line always ends with
+  // "… · /tips 更多技巧" and 1-in-90 tips (keys-help) even contains
+  // "快捷键", which made the finder grab the TIP row, never the status row
+  // (CI flake, verify-trace-scene ladder step). The status line never
+  // contains "/tips", so excluding it pins the finder to the real hint row.
   const hintRowOf = (text: string): string =>
-    text.split('\n').find(line => line.includes('shortcuts') || line.includes('快捷键')) ?? ''
+    text.split('\n').find(line => !line.includes('/tips') && (line.includes('shortcuts') || line.includes('快捷键'))) ?? ''
   const statusArea = hintRowOf(startup)
   check('the status line carries a live wake strip', /[▁▂▃▄▅▆▇█]/.test(statusArea),
     statusArea.trim().slice(-42))
@@ -712,7 +718,15 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     let hintRow: string | undefined
     for (let attempt = 0; attempt < 25; attempt++) {
       const rows = screen().split('\n')
-      hintRow = rows.find(line => /[▁▂▃▄▅▆▇█▶·]/.test(line) && (line.includes('shortcuts') || line.includes('快捷键')))
+      // Same `/tips` guard as hintRowOf above: the glyph class includes the
+      // middle dot, and the logo tip line ("… · /tips 更多技巧") always has
+      // one — when the random startup tip happens to contain "快捷键"
+      // (keys-help, 1/90) the finder matched the TIP row and this check
+      // failed as "wake sits … ends at 104" after polling to exhaustion.
+      hintRow = rows.find(line =>
+        /[▁▂▃▄▅▆▇█▶·]/.test(line)
+        && !line.includes('/tips')
+        && (line.includes('shortcuts') || line.includes('快捷键')))
       const settledAtRight = hintRow !== undefined
         && stringWidth(hintRow.replace(/\s+$/, '')) === cols - 1
       if (settledAtRight || miniWakeWidth(cols) === 0) break

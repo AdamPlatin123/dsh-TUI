@@ -23,6 +23,10 @@ export interface StatusBarConfig {
   gitBranch: boolean
   /** Current session title. */
   sessionTitle: boolean
+  /** Short session id (# + first 8 chars), matching the session log filename. */
+  sessionId: boolean
+  /** Compact goal chip (phase glyph + rounds) while a goal exists. */
+  goal: boolean
   /** Non-default session mode. */
   mode: boolean
   /** Segmented context progress bar on its own footer row. */
@@ -47,6 +51,8 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   tps: false,
   gitBranch: false,
   sessionTitle: false,
+  sessionId: false,
+  goal: true,
   mode: false,
   contextBar: false,
   activity: false,

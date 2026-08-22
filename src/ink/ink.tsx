@@ -16,10 +16,12 @@ import App from './components/App.js';
 import type { CursorDeclaration, CursorDeclarationSetter } from './components/CursorDeclarationContext.js';
 import { FRAME_INTERVAL_MS } from './constants.js';
 import * as dom from './dom.js';
+import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
 import { KeyboardEvent } from './events/keyboard-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
 import { dispatchClick, dispatchHover } from './hit-test.js';
+import { logMouseDebug } from '../utils/debug.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
@@ -33,7 +35,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -355,9 +357,23 @@ export default class Ink {
     // settling). Same-dimension events are no-ops; skip to avoid redundant
     // frame resets and renders.
     if (cols === this.terminalColumns && rows === this.terminalRows) return;
+    noteFrameCause('resize');
     this.terminalColumns = cols;
     this.terminalRows = rows;
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
+
+    // Invalidate every render that was scheduled against the OLD size: a
+    // queued microtask generation or a scroll-drain timer would otherwise
+    // fire after this resize completes and paint a frame computed for the
+    // pre-resize layout (mixed-width rows, off-by-reflow writes). The
+    // re-render below schedules fresh work at the new dimensions.
+    this.renderGeneration++;
+    this.pendingRenderGeneration = null;
+    this.scheduleRender.cancel?.();
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
 
     // Every cached measurement in the tree was taken against a width that no
     // longer exists. Nothing here is "dirty" in the reconciler's sense — no
@@ -513,10 +529,12 @@ export default class Ink {
    */
   reanchorViewport() {
     if (this.altScreenActive) return;
+    noteFrameCause('reanchor');
     this.log.requestViewportReanchor();
   }
   /** Render synchronously and invalidate older trailing/drain callbacks. */
   private renderNow(): void {
+    noteFrameCause('immediate');
     this.renderGeneration++;
     this.pendingRenderGeneration = null;
     this.scheduleRender.cancel?.();
@@ -530,6 +548,7 @@ export default class Ink {
     if (this.isUnmounted || this.isPaused) {
       return;
     }
+    if (GEOMETRY_TRACE_ENABLED) beginGeometryFrame(this.renderGeneration);
     // Entering a render cancels any pending drain tick — this render will
     // handle the drain (and re-schedule below if needed). Prevents a
     // wheel-event-triggered render AND a drain-timer render both firing.
@@ -543,9 +562,27 @@ export default class Ink {
     // Done before the render to avoid dirtying state that would trigger
     // an extra React re-render cycle.
     flushInteractionTime();
+
+    // Dimension consistency: onComputeLayout laid the tree out against
+    // this.terminalColumns/Rows (the cached values handleResize owns), so
+    // the renderer and the diff engine MUST paint that same size. Reading
+    // the live stdout size here mixed the two when a resize event had not
+    // fired yet (Windows Terminal emits 'resize' after columns already
+    // changed): Yoga laid out for the old width while log-update wrapped
+    // and diffed at the new one — rows painted off by the reflow delta.
+    // On drift, route through the resize path (cache sync + markTreeDirty
+    // + re-render) and bail: the render handleResize schedules paints the
+    // correctly-laid-out frame.
+    const liveColumns = this.options.stdout.columns || 80;
+    const liveRows = this.options.stdout.rows || 24;
+    if (this.options.stdout.isTTY && (liveColumns !== this.terminalColumns || liveRows !== this.terminalRows)) {
+      this.handleResize();
+      return;
+    }
+
     const renderStart = performance.now();
-    const terminalWidth = this.options.stdout.columns || 80;
-    const terminalRows = this.options.stdout.rows || 24;
+    const terminalWidth = this.terminalColumns;
+    const terminalRows = this.terminalRows;
     const frame = this.renderer({
       frontFrame: this.frontFrame,
       backFrame: this.backFrame,
@@ -557,10 +594,11 @@ export default class Ink {
     });
     const rendererMs = performance.now() - renderStart;
 
-    // Sticky/auto-follow scrolled the ScrollBox this frame. Translate the
-    // selection by the same delta so the highlight stays anchored to the
-    // TEXT (native terminal behavior — the selection walks up the screen
-    // as content scrolls, eventually clipping at the top). frontFrame
+    // Sticky/auto-follow or wheel-drain scrolled one or more ScrollBoxes
+    // this frame. Translate the selection by the same delta so the highlight
+    // stays anchored to the TEXT (native terminal behavior — the
+    // selection walks up the screen as content scrolls, eventually
+    // clipping at the top). frontFrame
     // still holds the PREVIOUS frame's screen (swap is at ~500 below), so
     // captureScrolledRows reads the rows that are about to scroll out
     // before they're overwritten — the text stays copyable until the
@@ -568,20 +606,35 @@ export default class Ink {
     // (screen-local) so only anchor shifts — selection grows toward the
     // mouse as the anchor walks up. After release, both ends are text-
     // anchored and move as a block.
-    const follow = consumeFollowScroll();
-    if (follow && this.selection.anchor &&
-    // Only translate if the selection is ON scrollbox content. Selections
-    // in the footer/prompt/StickyPromptHeader are on static text — the
-    // scroll doesn't move what's under them. Without this guard, a
-    // footer selection would be shifted by -delta then clamped to
-    // viewportBottom, teleporting it into the scrollbox. Mirror the
-    // bounds check the deleted check() in ScrollKeybindingHandler had.
-    this.selection.anchor.row >= follow.viewportTop && this.selection.anchor.row <= follow.viewportBottom) {
+    const follow = pickFollowForSelection(
+      consumeFollowScroll(),
+      this.selection.anchor?.row ?? null,
+    );
+    // pickFollowForSelection already checked anchor-in-viewport (that IS
+    // the "selection is on scrollbox content" guard — footer/prompt
+    // selections on static text match no viewport and follow nothing).
+    // Innermost-viewport wins attributes correctly when several boxes
+    // scrolled this frame (transcript draining while an overlay panel's
+    // box scrolls): panels render on top, so overlap-row selections
+    // belong to the panel, not the covered transcript.
+    if (follow && this.selection.anchor) {
       const {
         delta,
         viewportTop,
         viewportBottom
       } = follow;
+      // Signed delta: >0 = content moved up (at-bottom follow or
+      // wheel-down drain); <0 = content moved down (wheel-up drain, #438).
+      // The capture window is the viewport-edge rows about to scroll out
+      // (top edge when content moves up, bottom edge when it moves down),
+      // and the shift re-anchors the endpoints by the same amount in the
+      // OPPOSITE direction so they track the text, not the screen.
+      const rows = Math.abs(delta);
+      const up = delta > 0;
+      const firstRow = up ? viewportTop : viewportBottom - rows + 1;
+      const lastRow = up ? viewportTop + rows - 1 : viewportBottom;
+      const side: 'above' | 'below' = up ? 'above' : 'below';
+      const shift = up ? -rows : rows;
       // captureScrolledRows and shift* are a pair: capture grabs rows about
       // to scroll off, shift moves the selection endpoint so the same rows
       // won't intersect again next frame. Capturing without shifting leaves
@@ -591,9 +644,9 @@ export default class Ink {
       // each shift branch so the pairing can't be broken by a new guard.
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, viewportTop, viewportTop + delta - 1, 'above');
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
         }
-        shiftAnchor(this.selection, -delta, viewportTop, viewportBottom);
+        shiftAnchor(this.selection, shift, viewportTop, viewportBottom);
       } else if (
       // Flag-3 guard: the anchor check above only proves ONE endpoint is
       // on scrollbox content. A drag from row 3 (scrollbox) into the
@@ -609,14 +662,16 @@ export default class Ink {
       // is correct there even when focus is in the footer).
       !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, viewportTop, viewportTop + delta - 1, 'above');
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
         }
-        const cleared = shiftSelectionForFollow(this.selection, -delta, viewportTop, viewportBottom);
-        // Auto-clear (both ends overshot minRow) must notify React-land
-        // so useHasSelection re-renders and the footer copy/escape hint
-        // disappears. notifySelectionChange() would recurse into onRender;
-        // fire the listeners directly — they schedule a React update for
-        // LATER, they don't re-enter this frame.
+        const cleared = shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom);
+        // Auto-clear (both ends overshot an edge — off the top via
+        // follow/wheel-down, off the bottom via wheel-up) must notify
+        // React-land so useHasSelection re-renders and the footer
+        // copy/escape hint disappears. notifySelectionChange() would
+        // recurse into onRender; fire the listeners directly — they
+        // schedule a React update for LATER, they don't re-enter this
+        // frame.
         if (cleared) for (const cb of this.selectionListeners) cb();
       }
     }
@@ -876,6 +931,7 @@ export default class Ink {
     // quarter interval (~250fps, setTimeout practical floor) for max scroll
     // speed. Regular renders stay at FRAME_INTERVAL_MS via the throttle.
     if (frame.scrollDrainPending) {
+      noteFrameCause('scroll-drain');
       this.drainTimer = setTimeout(this.renderNow, FRAME_INTERVAL_MS >> 2);
     }
     const yogaMs = getLastYogaMs();
@@ -890,6 +946,7 @@ export default class Ink {
       cacheHits: 0,
       live: 0
     };
+    endGeometryFrame(performance.now() - renderStart);
     this.options.onFrame?.({
       durationMs: performance.now() - renderStart,
       phases: {
@@ -1127,6 +1184,10 @@ export default class Ink {
     // Cancel any pending throttled render so it doesn't fire between
     // cleanupTerminalModes() and process.exit() and write to main screen.
     this.scheduleRender.cancel?.();
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
     this.app?.detachForShutdown();
     // Shutdown bypasses the normal unmount path, so release the process and
     // stdout listeners here as well. Otherwise a SIGCONT or resize arriving
@@ -1134,6 +1195,11 @@ export default class Ink {
     // through this detached instance after terminal cleanup has completed.
     this.unsubscribeTTYHandlers?.();
     this.unsubscribeExit();
+    // unmount() early-returns on isUnmounted above, so its instances.delete
+    // never runs — a detached instance would stay in the map and a later
+    // instances.get(stdout) lookup (Chat's reanchorViewport plumbing) could
+    // hand out a dead renderer. Remove the mapping here too.
+    instances.delete(this.options.stdout);
     // `detachForShutdown()` deliberately makes later `unmount()` calls a
     // no-op, so release process-level output patches here rather than relying
     // on unmount() to do it. The shutdown continuation may run an updater
@@ -1505,9 +1571,14 @@ export default class Ink {
    * nodeCache rects map 1:1 to terminal cells (no scrollback offset).
    */
   dispatchClick(col: number, row: number): boolean {
-    if (!this.altScreenActive) return false;
+    if (!this.altScreenActive) {
+      logMouseDebug('dispatchClick skipped — alt screen inactive', { col, row });
+      return false;
+    }
     const blank = isEmptyCellAt(this.frontFrame.screen, col, row);
-    return dispatchClick(this.rootNode, col, row, blank);
+    const handled = dispatchClick(this.rootNode, col, row, blank);
+    logMouseDebug('dispatchClick', { col, row, handled });
+    return handled;
   }
   dispatchHover(col: number, row: number): void {
     if (!this.altScreenActive) return;
@@ -1890,9 +1961,24 @@ export default class Ink {
         logForDebugging(`[stderr] ${text}`, {
           level: 'warn'
         });
-        if (this.altScreenActive && !this.isUnmounted && !this.isPaused) {
-          this.prevFrameContaminated = true;
-          this.scheduleRender();
+        if (!this.isUnmounted && !this.isPaused) {
+          if (this.altScreenActive) {
+            this.prevFrameContaminated = true;
+            this.scheduleRender();
+          } else {
+            // Main-screen (inline): the diff engine's moves are purely
+            // relative to the physical cursor, so ANY unobserved tty write
+            // (one that slipped through before this patch existed, or via
+            // a path it can't intercept — a snapshotted ESM writer) shifts
+            // every later write by N rows with nothing to detect it after
+            // the fact. The stdin-gap reassert covers slow leaks; this
+            // per-write defensive net closes the fast ones: blind
+            // idempotent viewport repaint from the physical cursor. When
+            // nothing drifted (the usual case — the write was swallowed)
+            // it paints the same pixels again at O(viewport) bytes.
+            this.log.requestViewportReanchor();
+            this.scheduleRender();
+          }
         }
       } finally {
         reentered = false;

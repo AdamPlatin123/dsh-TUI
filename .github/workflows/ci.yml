@@ -80,6 +80,24 @@ jobs:
       # inline 重锚残影：帧高涨过视口再缩回后，空闲自愈的 viewport 重锚曾按
       # 当前帧高定位视口顶部，把已进 scrollback 的行重画回视口并被再推一份。
       - run: node --import tsx/esm scripts/repro-reanchor-ghost.tsx
+      # 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
+      # shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
+      # 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。
+      - run: node --import tsx/esm scripts/repro-resize-blank.tsx
+      # 空转重渲染风暴回归（issue #433）：长历史 + 30ms 空转 commit 风暴下
+      # renderScrollTop / 画面 / 输入框行数必须逐帧恒定，几何不震荡。
+      - run: node --import tsx/esm scripts/repro-idle-oscillation.tsx
+      # settled 子代理卡片不得永久持有动画时钟（空闲帧归零回归）：
+      # 曾以 120ms/卡片持续驱动 React commit，N 张相位错开合成 ~30ms
+      # 均匀帧 cadence。
+      - run: node --import tsx/esm scripts/verify-subagent-settle.tsx
+      # 子代理流投影批处理：chunk 风暴的 snapshot+行投影必须按 16ms 帧
+      # 对齐合并（token 率 100-300/s 下的全量深拷贝热路径），且生命周期
+      # 事件（tool/call、subagent/end）保持同步立即可见。
+      - run: node --import tsx/esm scripts/verify-subagent-stream-batching.tsx
+      # resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得
+      # 继续漂、20 次宽度循环无累计漂移、流中 resize 终态 == 冷渲染。
+      - run: node --import tsx/esm scripts/verify-resize-temporal.tsx
 
       # 消息列表虚拟化回归：连续高度校正的嵌套更新上限（#129, React #185）、
       # 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。

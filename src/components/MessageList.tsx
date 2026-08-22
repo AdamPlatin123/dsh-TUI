@@ -10,6 +10,7 @@ import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { isMinimalMode } from '../minimalMode.js'
+import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
@@ -43,6 +44,78 @@ const DEFAULT_ROW_HEIGHT = 2
 /** Cold-start estimate of the header block above the rows; corrected by the
  *  first layout measurement. */
 const DEFAULT_HEADER_LINES = 14
+
+/**
+ * Per-kind layout signature: the O(1) identity of every input that decides a
+ * row's rendered HEIGHT (see sigRef in MessageList). Fields are scoped to the
+ * row's own renderer — a global flat signature over-invalidates (a diffLayout
+ * switch must not drop user-message heights). Text uses length as the proxy:
+ * full-text hashing per row per frame would defeat virtualization's budget,
+ * and a same-length miss only degrades to the previous behavior.
+ */
+function layoutSignature(
+  row: ChatRow,
+  columns: number,
+  expanded: boolean,
+  expandedRows: ReadonlySet<number>,
+  thinkingVisible: boolean,
+  thinkingFold: string,
+  diffLayout: string,
+  model: string,
+  failureHintRowId: number | null | undefined,
+  failureHint: string | undefined,
+): string {
+  // Universal height inputs: width reflows every row; kind switches height
+  // semantics wholesale; text length drives wrapping.
+  const parts: Array<string | number | boolean> = [columns, row.kind, row.text?.length ?? 0]
+  switch (row.kind) {
+    case 'assistant':
+      // Streaming vs settled swaps renderers; Ctrl+O/per-row expand adds the
+      // metadata row (model only renders expanded — keeps an idle /model
+      // switch from touching settled rows).
+      parts.push(row.streaming === true, expanded, expandedRows.has(row.id), expanded ? model : '')
+      break
+    case 'reasoning':
+      // thinkingFold (preview vs full) and the visibility filter change the
+      // folded card's height; streaming shows verbose live.
+      parts.push(row.streaming === true, expanded, expandedRows.has(row.id), thinkingVisible, thinkingFold)
+      break
+    case 'tool': {
+      const tool = row.tool
+      parts.push(
+        expanded,
+        expandedRows.has(row.id),
+        diffLayout,
+        tool?.status ?? '',
+        tool?.resultText?.length ?? 0,
+        tool?.resultFull?.length ?? 0,
+        tool?.errorText?.length ?? 0,
+        row.id === failureHintRowId ? failureHint ?? '' : '',
+      )
+      break
+    }
+    case 'subagent':
+      // 卡片高度输入：running→settled 折叠 waterfall+tool 行（5→1 行），
+      // failed 增加 error 行。缺这些字段的话 offscreen 结算后 cached
+      // height 永不过期 → 滚回 blank band / 滚不到底。
+      parts.push(
+        row.subagent?.status ?? '',
+        row.subagent?.toolCalls.length ?? 0,
+        row.subagent?.outputLines.length ?? 0,
+        row.subagent?.error?.length ?? 0,
+      )
+      break
+    case 'compact':
+      // Folded one-liner vs full summary text.
+      parts.push(expanded, expandedRows.has(row.id))
+      break
+    default:
+      // user / notice / interrupt / local / local-output: height follows
+      // text + columns alone (selection/background never change height).
+      break
+  }
+  return parts.join('|')
+}
 
 export function MessageList({
   rows,
@@ -183,6 +256,55 @@ export function MessageList({
     baseRef.current = null
   }
 
+  // --- layout signature: stale-height invalidation ------------------------
+  // heightsRef entries outlive the commits that measured them, but many
+  // state changes rewrite a row's height WITHOUT a columns change: Ctrl+O
+  // (expanded), single-row expand (expandedRows), reasoning stream→fold,
+  // a tool result/error/footnote arriving, diff layout switch, assistant
+  // text growth, thinking visibility. A cached height from before such a
+  // change feeds topPad/bottomPad spacers, the offsets scan, and the
+  // ScrollBox clamps with geometry that no longer exists — blank bands,
+  // overlapping rows, wrong scrollTop after toggles (the audit's stale
+  // height cache). Track the inputs that decide each row's height; when
+  // one changes, drop the cached height. The window extension further
+  // down remounts invalidated rows so useLayoutEffect re-measures them.
+  // Text identity uses length as an O(1) proxy — per-frame full-text
+  // hashing over every row would defeat virtualization's budget, and a
+  // same-length miss only degrades to the previous behavior.
+  const sigRef = React.useRef(new Map<number, string>())
+  {
+    const sigs = sigRef.current
+    for (let i = 0; i < visibleRows.length; i++) {
+      const row = visibleRows[i]!
+      // Per-kind signature: only the inputs that row's OWN renderer consumes.
+      // A global flat array (every field × every row) over-invalidates — a
+      // /settings diffLayout switch used to drop every user/assistant/
+      // reasoning height at once, remounting the widened window over rows
+      // whose rendering never changed (Yoga spike + measure churn for
+      // nothing). Base parts cover the universal height inputs.
+      const sig = layoutSignature(
+        row,
+        columns,
+        expanded,
+        expandedRows,
+        thinkingVisible,
+        thinkingFold,
+        diffLayout,
+        model,
+        failureHintRowId,
+        failureHint,
+      )
+      if (sigs.get(row.id) !== sig) {
+        if (sigs.size >= HEIGHTS_CACHE_MAX) {
+          const oldest = sigs.keys().next().value
+          if (oldest !== undefined) sigs.delete(oldest)
+        }
+        sigs.set(row.id, sig)
+        heightsRef.current.delete(row.id)
+      }
+    }
+  }
+
   // Scrolling bypasses React (imperative DOM scrollTop): subscribe so the
   // window follows the viewport.
   React.useEffect(() => {
@@ -266,6 +388,27 @@ export function MessageList({
         break
       }
     }
+    // Unknown-height extension (layout signature, see sigRef): a row whose
+    // cached height was just INVALIDATED must remount to re-measure even
+    // when it sits outside the window — its spacer otherwise falls back to
+    // DEFAULT_ROW_HEIGHT until the row scrolls back into view, leaving the
+    // content geometry wrong for exactly that long (blank band after
+    // Ctrl+O, unreachable scroll bottom after a tool result lands). One
+    // remount per change; the measure tick + hold then tighten again.
+    // Guard: only rows that have actually MOUNTED here once qualify
+    // (paintedOnce fills from localRefs post-commit) — a brand-new
+    // streaming row has never been measured, and extending over it would
+    // mount everything below the window every frame while the user reads
+    // scrolled-up (virtualization defeated, per-frame full mount = the
+    // long-session stall). New rows keep the original path: their height
+    // lands once the window reaches them.
+    for (let i = 0; i < start; i++) {
+      const rowId = visibleRows[i]!.id
+      if (!heightsRef.current.has(rowId) && paintedOnceRef.current.has(rowId)) {
+        start = i
+        break
+      }
+    }
     // Expansion hold — AFTER the extension so it tracks the FINAL window:
     // never tighten within the hold window after a widen. React commits
     // inside one ink frame coalesce; a mount followed by the measure-tick
@@ -278,6 +421,15 @@ export function MessageList({
       holdUntilRef.current = performance.now() + 120
     }
     lastStartRef.current = start
+  }
+  // Tail-side invalidated-height extension (see the start-side loop above
+  // for the rationale and the mounted-once guard): rows BELOW the window
+  // whose height was just invalidated remount to re-measure, so bottomPad
+  // keeps real geometry while the user reads scrolled-up content and the
+  // tail streams. Runs for non-sticky views; sticky mounts the tail anyway.
+  for (let i = end; i < visibleRows.length; i++) {
+    const rowId = visibleRows[i]!.id
+    if (!heightsRef.current.has(rowId) && paintedOnceRef.current.has(rowId)) end = i + 1
   }
   if (forceMountRowId !== undefined && forceMountRowId !== null) {
     const idx = visibleRows.findIndex(row => row.id === forceMountRowId)
@@ -297,6 +449,20 @@ export function MessageList({
   const topPad = offsets[start] ?? 0
   const mountedBottom = end < visibleRows.length ? offsets[end] : total
   const bottomPad = total - mountedBottom
+  noteListGeometry({
+    start,
+    end,
+    topPad,
+    bottomPad,
+    total,
+    base,
+    sticky,
+    pending,
+    viewport,
+    termRows,
+    columns,
+    rowCount: visibleRows.length,
+  })
 
   // New-messages pill count: rows past the seen-anchor whose top edge is
   // still below the viewport bottom. Same rows-space math as the window
@@ -378,6 +544,7 @@ export function MessageList({
       measureQueuedRef.current = true
       queueMicrotask(() => {
         measureQueuedRef.current = false
+        noteFrameCause('measure')
         setMeasureTick(t => t + 1)
       })
     }
@@ -390,11 +557,6 @@ export function MessageList({
     else localRefs.current.delete(rowId)
     registerRowRef?.(rowId, el)
   }, [registerRowRef])
-
-  // Second-resolution clock for the running tool card's live elapsed time.
-  // Computed per render (cheap) but only forwarded to running rows, so
-  // settled rows never see a changing prop.
-  const nowSec = Math.floor(Date.now() / 1000)
 
   return (
     <>
@@ -450,7 +612,6 @@ export function MessageList({
               toolResultView={tool?.resultView}
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
-              nowSec={tool?.status === 'running' ? nowSec : undefined}
               subagent={subagent}
               onToggleRow={onToggleRow}
               setRowRef={setRowRef}
@@ -509,9 +670,6 @@ type MemoRowProps = {
   toolResultView: ToolResultView | undefined
   toolStartedAt: number | undefined
   toolDurationMs: number | undefined
-  /** Second-resolution clock, forwarded only while the tool runs so the
-   *  live elapsed label ticks; settled rows never receive a changing prop. */
-  nowSec: number | undefined
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined

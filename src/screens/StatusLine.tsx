@@ -5,6 +5,7 @@ import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { Byline } from '../components/design-system/Byline.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
+import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -20,7 +21,8 @@ import {
  * The footer under the prompt input, in Claude Code's PromptInputFooter
  * layout: the segmented context progress bar on its own first line, the
  * status line below (left group: model · tokens · think level · cache · tps
- * gauge/sparkline; right group: git · cwd · title, right-aligned), and the
+ * gauge/sparkline; right group: git · cwd · title · short session id,
+ * right-aligned), and the
  * mode/hint line last. The right side of the footer shows the latest
  * transient notification (errors in red, warnings in amber — CC style).
  */
@@ -146,6 +148,16 @@ export function StatusLine({
   ]
 
   const rightParts = [
+    // Goal chip first: session-level state outranks repo/location details.
+    ...(statusBar.goal && channel.goal !== undefined
+      ? [
+          <GoalStatusChip
+            key="goal"
+            goal={channel.goal}
+            minimal={channel.minimal}
+          />,
+        ]
+      : []),
     ...(statusBar.gitBranch && channel.gitBranch
       ? [
           <Text key="git" color="professionalBlue">
@@ -164,6 +176,16 @@ export function StatusLine({
       ? [
           <Text key="title" dimColor>
             {channel.sessionTitle}
+          </Text>,
+        ]
+      : []),
+    // Short id last: a provenance tag trails the content it identifies, and
+    // the 8-char form is what the session log filename starts with, so a
+    // truncated rendering still names the right log for --resume.
+    ...(statusBar.sessionId && channel.agentId
+      ? [
+          <Text key="sessionId" dimColor>
+            {`#${channel.agentId.slice(0, 8)}`}
           </Text>,
         ]
       : []),

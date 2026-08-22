@@ -368,6 +368,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     fullscreen: config.fullscreen === true,
     handle,
   })
+  // Fullscreen is live: `/tui` and `/settings` write the same
+  // `dsh-tui.fullscreen` field, and `channel.setFullscreen` hot-swaps the
+  // alternate screen in the already-mounted tree. The settings injection
+  // below resolves the user layer synchronously when the host settings
+  // service is up — i.e. before the first frame — then watch() keeps the
+  // running session in sync. Exit cleanup reads Ink's live
+  // `isAltScreenActive` rather than a boot-time latch.
   // Register the dsh-tui settings namespace so the /settings screen can
   // edit it (the section below was '命名空间未注册' without this): the
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
@@ -390,6 +397,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
           gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
           sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
+          sessionId: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionId),
+          goal: Schema.boolean().default(DEFAULT_STATUS_BAR.goal),
           mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
           contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
           activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
@@ -416,10 +425,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       lang?: 'zh' | 'en'
       whale?: boolean
       minimal?: boolean
+      fullscreen?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       statusBar?: Partial<StatusBarConfig>
-      fullscreen?: boolean
     }
     const applyLayout = (value: SettingsValue): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
@@ -443,6 +452,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     // Display preferences ride the same namespace: /settings writes them
     // live and future render consumers observe the channel version bump.
+    // Fullscreen is included — mid-session edits hot-swap the alt screen
+    // the same way `/tui` does.
     const applyDisplay = (value: SettingsValue): void => {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
@@ -457,9 +468,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       applyDisplay(next)
     }
     apply(scope.get())
-    scope.watch(next => {
-      apply(next)
-    })
+    scope.watch(apply)
   })
   // The /settings screen's own section: the dsh-tui namespace comes from
   // the settings registration above, and the declared selects write `lang`
@@ -490,6 +499,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             // (env / cordis.yml / lang.json resolution) instead of a
             // blank "unset" that hides the current choice.
             return value === undefined || value === null ? getLang() : String(value)
+          },
+        },
+        {
+          path: ['fullscreen'],
+          label: 'Fullscreen mode',
+          descriptions: { zh: '全屏模式' },
+          hint: 'Alt-screen fullscreen layout with in-app mouse selection and wheel scroll; off keeps the terminal-native scrollback and selection. Applies immediately; `/tui` writes the same field.',
+          hintDescriptions: { zh: '开启：alt-screen 全屏布局，应用内鼠标选择与滚轮滚动；关闭：保留终端原生滚动与选择。立即生效；`/tui` 写入同一字段。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: show this session's live value
+            // (cordis.yml resolution, or a `/tui` hot-swap) instead of a
+            // misleading false.
+            return value === undefined || value === null ? String(channel.fullscreen) : String(value)
           },
         },
         {
@@ -628,6 +651,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           descriptions: { zh: '显示会话标题' },
           hint: 'Show the current session title.',
           hintDescriptions: { zh: '显示当前会话标题。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'sessionId'],
+          label: 'Show session id',
+          descriptions: { zh: '显示会话 ID' },
+          hint: 'Show the short session id (# + first 8 chars) — it matches the session log filename for --resume.',
+          hintDescriptions: { zh: '显示短会话 ID（# + 前 8 位）——与日志文件名对应，方便 --resume 定位。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['statusBar', 'goal'],
+          label: 'Show goal status',
+          descriptions: { zh: '显示 Goal 状态' },
+          hint: 'Show a compact goal chip (phase glyph + rounds) in the status footer while a goal exists.',
+          hintDescriptions: { zh: '存在 Goal 时，在底部状态栏显示紧凑的 Goal 状态（阶段符号与轮次）。' },
           group: 'status-bar',
           kind: 'boolean',
         },

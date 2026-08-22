@@ -109,8 +109,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-home-end',
     group: 'keys',
-    zh: 'Home/End 与 Ctrl+A 快速到行首/行尾',
-    en: 'Home/End and Ctrl+A jump to line start/end',
+    zh: 'Home/End 到行首/行尾，Ctrl+E 到行尾',
+    en: 'Home/End jump to line start/end; Ctrl+E to line end',
+  },
+  {
+    id: 'keys-ctrl-a',
+    group: 'keys',
+    zh: 'Ctrl+A 子代理面板：Enter 看详情 · X 中断 · Esc 关',
+    en: 'Ctrl+A opens the subagent dashboard; Enter details, X interrupt, Esc close',
   },
   {
     id: 'keys-edit-keys',
@@ -333,8 +339,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-permission',
     group: 'commands',
-    zh: '/permission 切换权限预设（read-only/workspace/full）',
-    en: '/permission switches permission presets (read-only/workspace/full)',
+    zh: '/permission 弹出权限预设选择器（只读/工作区读写/完全访问）',
+    en: '/permission opens the permission-preset picker (read-only/workspace-write/full)',
   },
   {
     id: 'cmd-plan-goal',
@@ -377,8 +383,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'flow-at',
     group: 'workflow',
-    zh: '任意位置 @ 补全文件，@ink 也能命中 src/ink',
-    en: '@ completes files anywhere; @ink matches src/ink',
+    zh: '@ 补全支持模糊匹配；@src/ 直达该目录',
+    en: '@ completes files with fuzzy matching; @dir/ lists that directory',
   },
   {
     id: 'flow-question-type',
@@ -417,6 +423,36 @@ export const TIPS: readonly Tip[] = [
     group: 'display',
     zh: '底栏 TPS、轨迹条、上下文条默认关，/settings 里打开',
     en: 'TPS, trajectory, context bars are off by default — enable in /settings',
+  },
+  {
+    id: 'disp-statusbar-session-id',
+    group: 'display',
+    zh: '底栏可显示短会话 ID（# 前 8 位），与日志文件名对应，/settings 里开',
+    en: 'Footer can show the short session id (# + 8 chars, matches the log filename) — enable in /settings',
+  },
+  {
+    id: 'disp-statusbar-title',
+    group: 'display',
+    zh: '底栏可显示会话标题；/rename 随时改',
+    en: 'Footer can show the session title; rename anytime with /rename',
+  },
+  {
+    id: 'disp-statusbar-fields',
+    group: 'display',
+    zh: '底栏字段逐项开关：token 总量、git 分支、模式、活动摘要…… /settings 里配',
+    en: 'Footer fields are per-field switches: token totals, git branch, mode, activity — set in /settings',
+  },
+  {
+    id: 'disp-statusbar-compact',
+    group: 'display',
+    zh: '底栏 compact 开=单行收纳；关=左右分组（指标在左、位置在右）',
+    en: 'Footer compact on = one merged line; off = metrics left, location right',
+  },
+  {
+    id: 'disp-statusbar-hint',
+    group: 'display',
+    zh: "空闲时 '? 查看快捷键' 常驻提示也是底栏开关（shortcutHint）",
+    en: 'The idle "? for shortcuts" reminder is itself a footer switch (shortcutHint)',
   },
   {
     id: 'disp-context-warn',
@@ -491,6 +527,12 @@ export const TIPS: readonly Tip[] = [
     en: 'Drag-select copies instantly in fullscreen; Esc cancels',
   },
   {
+    id: 'disp-wheel-sel',
+    group: 'display',
+    zh: '有文本选区时，滚轮平移选区而非滚动列表',
+    en: 'With a text selection, the wheel translates the selection, not the list',
+  },
+  {
     id: 'disp-whale',
     group: 'display',
     zh: '首屏鲸鱼动画（终端 ≥64 列才显示）',
@@ -539,6 +581,12 @@ export const TIPS: readonly Tip[] = [
     group: 'pitfalls',
     zh: '提示版本错位时，按提示 npm install -g 对齐启动器',
     en: 'On version skew, follow the npm install -g hint to align the launcher',
+  },
+  {
+    id: 'pit-drift',
+    group: 'pitfalls',
+    zh: 'logo ⚠ 提示 dsh 版本不符时，按提示 npm i -g @deepseek-ai/dsh 对齐',
+    en: 'When the logo warns about dsh versions, follow the npm i -g @deepseek-ai/dsh hint',
   },
   {
     id: 'pit-mac',
