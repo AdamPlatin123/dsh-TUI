@@ -1,8 +1,17 @@
 import React from 'react'
+import chalk from 'chalk'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { StreamingMarkdown } from '../StreamingMarkdown.js'
 import { formatDuration } from '../../cc/format.js'
+import {
+  THINKING_SPINNER_FRAMES,
+  THINKING_SPINNER_INTERVAL_MS,
+  THINKING_SETTLED_MARKER,
+} from '../../cc/figures.js'
+import { BRAND, ICE } from '../shimmer.js'
+import { interpolateColor } from '../Spinner/spinnerUtils.js'
+import { isMinimalMode } from '../../minimalMode.js'
 
 /** Preview body rows — a FIXED row count (kimicode-style constant-height
  *  ticker). Ink's truncate slices the whole string across newlines as one
@@ -18,6 +27,10 @@ type Props = {
   addMargin: boolean
   /** True when Ctrl+O transcript/verbose mode is on — show the full text. */
   verbose: boolean
+  /** True while the reasoning block is still streaming — the leading anchor
+   *  becomes a rotating braille spinner (Kimi Code style) and settles back
+   *  to the anchor once the step ends. */
+  streaming?: boolean
   /** Streaming compact mode (thinkingFold=preview): a 3-row live ticker of
    *  the model's latest reasoning lines instead of the full block —
    *  kimicode-style constant height; the block never resizes mid-stream. */
@@ -30,16 +43,19 @@ type Props = {
 }
 
 /**
- * Thinking block: folded `∴ Thinking (ctrl+o to expand)`, expanded shows the
- * full reasoning text indented under `∴ Thinking…`, mirroring Claude Code's
- * `messages/AssistantThinkingMessage.tsx`. When the channel records the
- * reasoning duration, the label carries it (`∴ Thinking · 12s …`) — dsh-tui's
- * take on making thinking time visible in the transcript.
+ * Thinking block: folded `⚓ Thinking (ctrl+o to expand)`, expanded shows the
+ * full reasoning text indented under `⚓ Thinking…`. While the reasoning
+ * streams the leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
+ * style), settling back to the static anchor (`⚓`) once the turn ends. When
+ * the channel records the reasoning duration, the label carries it
+ * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
+ * the transcript.
  */
 export function AssistantThinkingMessage({
   thinking,
   addMargin,
   verbose,
+  streaming = false,
   preview = false,
   durationMs,
   isSelected = false,
@@ -47,10 +63,38 @@ export function AssistantThinkingMessage({
 }: Props): React.ReactNode {
   if (!thinking) return null
 
+  // Spinner frame (80ms cadence, only while the reasoning is still
+  // streaming — same pattern as BtwPanel's answering spinner).
+  const [frame, setFrame] = React.useState(0)
+  React.useEffect(() => {
+    if (!streaming) return
+    const interval = setInterval(() => setFrame(f => f + 1), THINKING_SPINNER_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [streaming])
+
   const duration =
     durationMs !== undefined && durationMs >= 1000
       ? ` · ${formatDuration(durationMs)}`
       : ''
+
+  // Kimi Code style blue pulse: the streaming glyph breathes along the
+  // header's brand→ice ladder, one sine period per ~7 frames (≈0.56s) —
+  // lively without strobing. Minimal mode drops the color (plain glyph);
+  // settled always keeps the plain dim anchor.
+  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ` ${t('hint-expand-ctrl-o')}`}`
+  const minimal = isMinimalMode()
+  const pulse = (Math.sin(frame * 0.9) + 1) / 2
+  const pulseColor = interpolateColor(BRAND, ICE, pulse)
+  const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
+  const header =
+    streaming ? (
+      <Box flexDirection="row">
+        <Text>{minimal ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
+        <Text dimColor italic>{` ${label}`}</Text>
+      </Box>
+    ) : (
+      <Text dimColor italic>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
+    )
 
   if (preview) {
     // Live ticker: the model's last few reasoning lines, dimmed, one Text
@@ -76,19 +120,30 @@ export function AssistantThinkingMessage({
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
       >
-        <Text dimColor italic>
-          ∴ {t('thinking-label')}{duration}…
-        </Text>
-        <Box flexDirection="column" paddingLeft={2}>
+        {header}
+        <Box
+          flexDirection="column"
+          paddingLeft={2}
+          height={PREVIEW_ROWS}
+          flexShrink={0}
+          overflow="hidden"
+        >
           {rows.map((line, i) => (
-            <Text
-              key={i}
-              dimColor
-              italic
-              wrap={i === rows.length - 1 ? 'truncate-start' : 'truncate'}
-            >
-              {i === 0 && clipped ? `…${line}` : line}
-            </Text>
+            <Box key={i} flexDirection="row" height={1}>
+              {/* The bar is a fixed-width column OUTSIDE the truncating text:
+                * ink's truncate-start rewrites the text's leading columns, so
+                * a bar inside the text would be eaten by the ellipsis. */}
+              <Text dimColor italic>{'│ '}</Text>
+              <Box flexDirection="row" flexGrow={1}>
+                <Text
+                  dimColor
+                  italic
+                  wrap={i === rows.length - 1 ? 'truncate-start' : 'truncate'}
+                >
+                  {i === 0 && clipped ? `…${line}` : line}
+                </Text>
+              </Box>
+            </Box>
           ))}
         </Box>
       </Box>
@@ -102,9 +157,7 @@ export function AssistantThinkingMessage({
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
       >
-        <Text dimColor italic>
-          ∴ {t('thinking-label')}{duration} {t('hint-expand-ctrl-o')}
-        </Text>
+        {header}
       </Box>
     )
   }
@@ -118,9 +171,7 @@ export function AssistantThinkingMessage({
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       onClick={onClick}
     >
-      <Text dimColor italic>
-        ∴ {t('thinking-label')}{duration}…
-      </Text>
+      {header}
       <Box paddingLeft={2}>
         {/* StreamingMarkdown: the live thinking text grows per token — the
           incremental stable-prefix + tail budget keeps the per-frame layout

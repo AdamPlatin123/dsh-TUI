@@ -1,13 +1,19 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import * as JsDiff from 'diff'
-import chalk from 'chalk'
 import { extname } from 'node:path'
 import type { ToolFileDiff } from '../dsh-adapter/channel.js'
 import type { Color } from '../ink/styles.js'
 import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
+import { chalkFromToken } from '../cc/syntaxTheme.js'
+import { highlightLines, syntaxThemeSignature, type SyntaxRun } from '../cc/syntaxRuns.js'
+// Backward-compatible re-export: repro scripts import chalkFromToken from
+// this module's old home.
+export { chalkFromToken } from '../cc/syntaxTheme.js'
+export { parseAnsiRuns, highlightLines } from '../cc/syntaxRuns.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
+import type { ToolBackground } from '../tuiDisplayPrefs.js'
 
 /**
  * Side-by-side (two-pane) diff view for Edit/Write tool cards.
@@ -58,153 +64,13 @@ interface DiffRow {
 /** Replace tabs so width math and alignment hold (pi convention). */
 const expandTabs = (text: string): string => text.replaceAll('\t', '   ')
 
-// --- syntax highlighting ----------------------------------------------------
-
-/** highlight.js token classes → theme syntax tokens. `default` catches
- *  every unmapped class so cli-highlight's own yellow never leaks through
- *  (issue #250, P2-6). */
-const SYNTAX_CLASS_TO_TOKEN: Record<string, string> = {
-  keyword: 'syntaxKeyword',
-  built_in: 'syntaxKeyword',
-  literal: 'syntaxKeyword',
-  string: 'syntaxString',
-  subst: 'syntaxString',
-  quote: 'syntaxString',
-  comment: 'syntaxComment',
-  number: 'syntaxNumber',
-  title: 'syntaxFunction',
-  'title.function_': 'syntaxFunction',
-  function: 'syntaxFunction',
-  'title.class_': 'syntaxType',
-  type: 'syntaxType',
-  class: 'syntaxType',
-  tag: 'syntaxType',
-  name: 'syntaxType',
-  attr: 'syntaxVariable',
-  attribute: 'syntaxVariable',
-  variable: 'syntaxVariable',
-  'template-variable': 'syntaxVariable',
-  params: 'syntaxVariable',
-  operator: 'syntaxOperator',
-  punctuation: 'syntaxPunctuation',
-  meta: 'syntaxPunctuation',
-  symbol: 'syntaxConstant',
-  regexp: 'syntaxConstant',
-  default: 'syntaxVariable',
-}
-
-/** chalk style for one raw theme value. Accepts every form the theme
- *  loader documents: #rgb, #rrggbb, #rrggbbaa (alpha stripped), rgb() with
- *  or without spaces, ansi256(n), ansi:name (issue #250, P2-5). */
-export function chalkFromToken(token: string): (text: string) => string {
-  let match = /^#([0-9a-fA-F]{3})$/.exec(token)
-  if (match !== null) {
-    const [r, g, b] = match[1]!.split('').map(c => parseInt(c + c, 16))
-    return chalk.rgb(r!, g!, b!)
-  }
-  match = /^#([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?$/.exec(token)
-  if (match !== null) return chalk.hex(`#${match[1]}`)
-  match = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(token)
-  if (match !== null) return chalk.rgb(Number(match[1]), Number(match[2]), Number(match[3]))
-  match = /^ansi256\((\d+)\)$/.exec(token)
-  if (match !== null) return chalk.ansi256(Number(match[1]))
-  match = /^ansi:(\w+)$/.exec(token)
-  if (match !== null) {
-    const name = match[1] === 'blackBright' ? 'gray' : match[1]
-    const style = (chalk as unknown as Record<string, ((text: string) => string) | undefined>)[name]
-    if (style !== undefined) return style
-  }
-  return (text: string) => text
-}
-
-/** ANSI 16-color SGR codes → rgb() strings (the dark-ansi palette path). */
-const ANSI16: Record<number, string> = {
-  30: 'rgb(0,0,0)', 31: 'rgb(128,0,0)', 32: 'rgb(0,128,0)', 33: 'rgb(128,128,0)',
-  34: 'rgb(0,0,128)', 35: 'rgb(128,0,128)', 36: 'rgb(0,128,128)', 37: 'rgb(192,192,192)',
-  90: 'rgb(128,128,128)', 91: 'rgb(255,0,0)', 92: 'rgb(0,255,0)', 93: 'rgb(255,255,0)',
-  94: 'rgb(0,0,255)', 95: 'rgb(255,0,255)', 96: 'rgb(0,255,255)', 97: 'rgb(255,255,255)',
-}
-
-/** Parse a cli-highlight ANSI string into colored runs, preserving open
- *  spans across embedded newlines (multi-line strings/comments). Handles
- *  truecolor 38;2, 256-color 38;5 (tmux / FORCE_COLOR=2, issue #250 P1-1),
- *  and single-code 16-color SGR. */
-export function parseAnsiRuns(text: string): { text: string; color?: string }[] {
-  const runs: { text: string; color?: string }[] = []
-  let color: string | undefined
-  let rest = text
-  // eslint-disable-next-line no-control-regex -- parsing SGR is the point
-  const sgr = /\x1b\[([0-9;]+)m/
-  while (rest.length > 0) {
-    const match = sgr.exec(rest)
-    const chunk = match === null ? rest : rest.slice(0, match.index)
-    if (chunk !== '') runs.push(color === undefined ? { text: chunk } : { text: chunk, color })
-    if (match === null) break
-    const codes = match[1]!.split(';').map(Number)
-    if (codes.includes(0) || codes.includes(39)) color = undefined
-    else if (codes[0] === 38 && codes[1] === 2 && codes.length >= 5) {
-      color = `rgb(${codes[2]},${codes[3]},${codes[4]})`
-    } else if (codes[0] === 38 && codes[1] === 5 && codes.length >= 3) {
-      color = `ansi256(${codes[2]})`
-    } else if (codes.length === 1 && ANSI16[codes[0]!] !== undefined) {
-      color = ANSI16[codes[0]!]
-    }
-    rest = rest.slice(match.index + match[0].length)
-  }
-  return runs
-}
-
-/** Split flat runs into per-line run arrays at embedded newlines. */
-function splitRunsToLines(runs: readonly { text: string; color?: string }[]): { text: string; color?: string }[][] {
-  const lines: { text: string; color?: string }[][] = [[]]
-  for (const run of runs) {
-    const parts = run.text.split('\n')
-    for (let i = 0; i < parts.length; i++) {
-      if (i > 0) lines.push([])
-      if (parts[i] !== '') {
-        lines[lines.length - 1]!.push(run.color === undefined ? { text: parts[i]! } : { text: parts[i]!, color: run.color })
-      }
-    }
-  }
-  return lines
-}
-
-/** Whole-hunk syntax runs per line, cached per (theme signature + language
- *  + text): one entry survives any amount of card re-rendering, and the
- *  palette change invalidates it (issue #250, P1-2 + P2-8). */
-const syntaxCache = new Map<string, readonly { text: string; color?: string }[][]>()
-const SYNTAX_CACHE_MAX = 40
-
-export function highlightLines(
-  text: string,
-  language: string | undefined,
-  hl: CliHighlight | null,
-  chTheme: Record<string, (text: string) => string> | undefined,
-  themeSig: string,
-): readonly { text: string; color?: string }[][] | undefined {
-  if (hl === null || chTheme === undefined || language === undefined) return undefined
-  if (text === '' || !hl.supportsLanguage(language)) return undefined
-  const key = `${themeSig}${language}${text}`
-  const cached = syntaxCache.get(key)
-  if (cached !== undefined) return cached
-  let lines: readonly { text: string; color?: string }[][]
-  try {
-    lines = splitRunsToLines(parseAnsiRuns(hl.highlight(text, { language, theme: chTheme })))
-  } catch {
-    return undefined
-  }
-  if (syntaxCache.size >= SYNTAX_CACHE_MAX) syntaxCache.clear()
-  syntaxCache.set(key, lines)
-  return lines
-}
-
 /**
  * Merge syntax runs with word-diff change flags over the same string: both
  * partition it, so an offset sweep yields runs carrying a syntax color AND
  * a changed flag. The render layer lets `changed` override the color.
  */
 function mergeRuns(
-  syntax: readonly { text: string; color?: string }[],
+  syntax: readonly SyntaxRun[],
   words: readonly Segment[],
 ): Segment[] {
   const out: Segment[] = []
@@ -374,17 +240,26 @@ function PaneLine({
   kind,
   width,
   tone,
+  toolBackground,
   padLeft = false,
 }: {
   readonly side: { readonly segments: readonly Segment[] } | undefined
   readonly kind: DiffRow['kind']
   readonly width: number
   readonly tone: 'old' | 'new'
+  readonly toolBackground: ToolBackground
   readonly padLeft?: boolean
 }): React.ReactNode {
+  const ordinaryBackground = toolBackground === 'subtle'
+    ? 'toolCardBackgroundDim'
+    : toolBackground === 'strong'
+      ? 'toolCardBackground'
+      : undefined
+  // Additions/removals keep their semantic tint; unchanged and empty panes
+  // inherit the configured ordinary tool-card surface.
   const backgroundColor =
     kind === 'context'
-      ? 'toolCardBackground'
+      ? ordinaryBackground
       : tone === 'old'
         ? 'diffRemovedDimmed'
         : 'diffAddedDimmed'
@@ -422,6 +297,7 @@ export function SplitDiffView({
   width,
   maxRows,
   verbose,
+  toolBackground = 'none',
 }: {
   readonly diffs: readonly ToolFileDiff[]
   /** Content width available to the whole two-pane block (divider included). */
@@ -429,6 +305,7 @@ export function SplitDiffView({
   /** Row budget when not verbose; overflow folds into one hint row. */
   readonly maxRows: number
   readonly verbose: boolean
+  readonly toolBackground?: ToolBackground
 }): React.ReactNode {
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
@@ -442,23 +319,8 @@ export function SplitDiffView({
   const [themeName] = useTheme()
   // Resolved-palette signature: covers dark→light, light→dark, AND the
   // `auto` base flip where the name never changes (issue #250, P1-2).
-  const themeSig = React.useMemo(() => {
-    const theme = getTheme(themeName) as unknown as Record<string, string>
-    return Object.values(SYNTAX_CLASS_TO_TOKEN)
-      .map(key => theme[key] ?? '')
-      .join('|')
-  }, [themeName])
-  const chTheme = React.useMemo(() => {
-    const theme = getTheme(themeName) as unknown as Record<string, string>
-    const out: Record<string, (text: string) => string> = {}
-    for (const [tokenClass, tokenKey] of Object.entries(SYNTAX_CLASS_TO_TOKEN)) {
-      const value = theme[tokenKey]
-      if (value !== undefined) out[tokenClass] = chalkFromToken(value)
-    }
-    return out
-    // themeSig changes exactly when any syntax token's resolved value does.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [themeSig])
+  const syntaxTheme = React.useMemo(() => getTheme(themeName), [themeName])
+  const themeSig = React.useMemo(() => syntaxThemeSignature(syntaxTheme), [syntaxTheme])
 
   // Alignment is text-only and capped BEFORE styling: the highlighter and
   // word-diff work lands only on the visible slice (issue #250, P2-8).
@@ -485,13 +347,13 @@ export function SplitDiffView({
   const fileSyntax = diffs.map(diff => {
     const language = extname(diff.path).replace(/^\./, '') || undefined
     return {
-      old: highlightLines(expandTabs(diff.oldText ?? ''), language, hl, chTheme, themeSig),
-      next: highlightLines(expandTabs(diff.newText), language, hl, chTheme, themeSig),
+      old: highlightLines(expandTabs(diff.oldText ?? ''), language, hl, syntaxTheme, themeSig),
+      next: highlightLines(expandTabs(diff.newText), language, hl, syntaxTheme, themeSig),
     }
   })
 
   return (
-    <Box flexDirection="column" width={paneWidth * 2 + 1} backgroundColor="toolCardBackgroundDim">
+    <Box flexDirection="column" width={paneWidth * 2 + 1}>
       {visible.map((row, index) => {
         if ('separator' in row) {
           return (
@@ -513,11 +375,11 @@ export function SplitDiffView({
           : { segments: newRuns !== undefined ? mergeRuns(newRuns, row.newWords) : row.newWords }
         return (
           <Box key={index} flexDirection="row">
-            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} />
-            <Box width={1} flexShrink={0} backgroundColor="toolCardBackgroundDim">
+            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} toolBackground={toolBackground} />
+            <Box width={1} flexShrink={0}>
               <Text dimColor>│</Text>
             </Box>
-            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} padLeft />
+            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} toolBackground={toolBackground} padLeft />
           </Box>
         )
       })}

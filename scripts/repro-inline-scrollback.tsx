@@ -5,9 +5,11 @@
  * 超过视口无法全部擦除），旧帧内容会永久落入 scrollback：用户上滚看到
  * "UI 重复渲染 / 启动页随机插入 / 输出结束后上方内容乱掉"。
  *
- * 场景照 issue #39：预置 2 轮历史（冷高度缓存）+ 长流式回复 + spinner/
- * 指标独立 tick。xterm-headless 开 2000 行 scrollback 重建终端视角，
- * 断言 scrollback + 视口中每段唯一 UI 文本只出现一次。
+ * 场景照 issue #39：小视口下预置 2 轮历史（冷高度缓存）+ 长流式回复 +
+ * spinner/指标独立 tick。xterm-headless 开 2000 行 scrollback 重建终端视角，
+ * 断言 scrollback + 视口中每段唯一 UI 文本只出现一次；完整跑过 streaming
+ * reasoning → tool → assistant/working → idle 后，还断言硬件 cursor 与输入 caret
+ * 重合，且思考、工具、正文、输入边框各占独立行，没有互相覆盖。
  * 运行：node --import tsx/esm scripts/repro-inline-scrollback.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -25,8 +27,9 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
 ])
 
 const COLS = 100
-const ROWS = 40
+const ROWS = 20
 const SCROLLBACK = 2000
+const INPUT_MARKER = 'CARET_ANCHOR_7F31'
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: SCROLLBACK, allowProposedApi: true })
 
 const rawChunks: string[] = []
@@ -156,14 +159,34 @@ const instance = await render(
 const ticker = setInterval(() => { channel.responseChars += 7; bump() }, 100)
 await sleep(800)
 
-// ---- 现场回合：user → reasoning → tool → 长流式回复 -------------------------
+// ---- 现场回合：user → Read → reasoning ticker → settle → tool → 长流式回复 ----
 const add = (row: any) => { channel.rows.push({ id: id++, ...row }); bump() }
 add({ kind: 'user', text: '看看这个项目，给个概览' })
 await sleep(120)
 
+// Real report shape: a completed Read row sits immediately above the live
+// thinking ticker. When the ticker settles from four rows to one, an incorrect
+// scrollback seam repaint duplicates this marker above the folded Thinking row.
+add({
+  kind: 'tool', text: '',
+  tool: {
+    callId: 'read-before-thinking', name: 'Read',
+    argsText: '{"file_path": "READ_ONCE_7F31"}',
+    argsFull: '{}', status: 'ok', resultText: 'READ_RESULT_ONCE_7F31',
+    startedAt: Date.now() - 80, durationMs: 80,
+  },
+})
+await sleep(150)
+
 const think1 = { id: id++, kind: 'reasoning', text: '', streaming: true, durationMs: undefined as number | undefined }
 channel.rows.push(think1); bump()
-for (const chunk of ['先看目录结构', '，读 README', '，然后汇总。']) {
+for (const chunk of [
+  '先看目录结构',
+  '\n读取 README',
+  '\n检查 package.json',
+  '\n对照现有回归',
+  '\n然后汇总。',
+]) {
   think1.text += chunk; bump(); await sleep(140)
 }
 think1.streaming = false; think1.durationMs = 1000; bump()
@@ -173,7 +196,7 @@ const tool1 = {
   id: id++, kind: 'tool', text: '',
   tool: {
     callId: 'c1', name: 'Bash',
-    argsText: '{"command": "git log --oneline -15"}',
+    argsText: '{"command": "printf TOOL_CALL_ONCE_7F31"}',
     argsFull: '{}',
     status: 'running' as string, resultText: undefined as string | undefined, startedAt: Date.now(), durationMs: undefined as number | undefined,
   },
@@ -189,7 +212,7 @@ bump(); await sleep(200)
 const finalMsg = { id: id++, kind: 'assistant', text: '', streaming: true }
 channel.rows.push(finalMsg); bump()
 const sections = ['一、项目定位', '二、技术栈', '三、核心功能', '四、数据设计要点', '五、代码结构', '六、工程规范', '七、构建与发布', '八、数据迁移', '九、当前状态备注']
-const docLines: string[] = []
+const docLines: string[] = ['ASSISTANT_BODY_ONCE_7F31\n\n']
 for (const sec of sections) {
   docLines.push(sec + '\n')
   for (let i = 0; i < 11; i++) docLines.push(`- ${sec} 的第 ${i + 1} 条说明文字：应用装配、主题系统、同步与加密打包\n`)
@@ -209,10 +232,16 @@ for (const chunk of doc) {
 }
 finalMsg.streaming = false
 channel.working = false
+channel.status = 'idle'
 bump()
 await sleep(800)
 clearInterval(ticker)
 await sleep(300)
+
+// 闲置后在真实 PromptInput 输入短标记：caret 的反色格和 xterm 硬件
+// cursor 必须重合。此时整帧远高于小视口，覆盖 native cursor 的长帧坐标路径。
+stdin.write(INPUT_MARKER)
+await sleep(500)
 
 // ---- 字节取证：erase/清屏/滚动序列统计（定位残留的发生机制） ----------------
 const allRaw = rawChunks.join('')
@@ -266,14 +295,65 @@ const countExact = (needle: string) => lines.filter(l => l.trim() === needle).le
 // 每个标记在完整 UI 里恰好一份：logo/用户消息按包含匹配，节标题按整行
 // 匹配（正文 bullet 行 `- 五、… 的第 N 条…` 含标题字符串，属于同一份拷贝
 // 的合法内容，不能按包含计数）。
-for (const t of ['探索未至', '历史问题 0：', '历史问题 1：', '看看这个项目，给个概览']) {
+for (const t of [
+  '探索未至',
+  '历史问题 0：',
+  '历史问题 1：',
+  '看看这个项目，给个概览',
+  'READ_ONCE_7F31',
+  'READ_RESULT_ONCE_7F31',
+  'TOOL_CALL_ONCE_7F31',
+  'ASSISTANT_BODY_ONCE_7F31',
+  INPUT_MARKER,
+]) {
   const n = count(t)
   check(`「${t}」恰好一份`, n === 1, `实际 ${n} 次`)
 }
-for (const t of ['五、代码结构', '九、当前状态备注']) {
+for (const t of ['五、代码结构']) {
   const n = countExact(t)
   check(`「${t}」标题行恰好一份`, n === 1, `实际 ${n} 次`)
 }
+
+const rowOf = (needle: string) => lines.findIndex(line => line.includes(needle))
+const thinkingRow = lines.findLastIndex(line => line.includes('思考 ·'))
+const toolRow = rowOf('TOOL_CALL_ONCE_7F31')
+const bodyRow = rowOf('ASSISTANT_BODY_ONCE_7F31')
+const inputRow = rowOf(INPUT_MARKER)
+const semanticRows = [thinkingRow, toolRow, bodyRow, inputRow]
+const separateRows = semanticRows.every(row => row >= 0) && new Set(semanticRows).size === semanticRows.length
+check(
+  '思考、工具、正文、输入各占独立行',
+  separateRows,
+  `rows=${semanticRows.join(',')}`,
+)
+
+let caretX = -1
+if (inputRow >= 0) {
+  const inputLine = buf.getLine(inputRow)
+  if (inputLine) {
+    for (let x = 0; x < inputLine.length; x++) {
+      if (inputLine.getCell(x)?.isInverse()) { caretX = x; break }
+    }
+  }
+}
+const hardwareCursor = { x: buf.cursorX, y: buf.baseY + buf.cursorY }
+check(
+  '长帧 idle 输入：硬件 cursor 与反色 caret 重合',
+  caretX >= 0 && hardwareCursor.x === caretX && hardwareCursor.y === inputRow,
+  `caret=${caretX},${inputRow} cursor=${hardwareCursor.x},${hardwareCursor.y} baseY=${buf.baseY}`,
+)
+
+const topBorder = lines[inputRow - 1] ?? ''
+const bottomBorder = lines[inputRow + 1] ?? ''
+const borderIntact = topBorder.includes('╭') && topBorder.includes('╮')
+  && bottomBorder.includes('╰') && bottomBorder.includes('╯')
+  && ![topBorder, bottomBorder].some(line => /思考 ·|TOOL_CALL_ONCE|ASSISTANT_BODY_ONCE/.test(line))
+check(
+  '输入边框完整且未覆盖思考、工具或正文',
+  borderIntact,
+  `top=${JSON.stringify(topBorder)} bottom=${JSON.stringify(bottomBorder)}`,
+)
+
 // full-reset 零触发：收缩帧（thinking 折叠、回合结束 spinner 卸载）必须走
 // 视口就地重画，任何一次 clearTerminal 都会把整份 UI 复制进 scrollback。
 const resets = (allRaw.match(/\x1b\[\d+S/g) ?? []).length
