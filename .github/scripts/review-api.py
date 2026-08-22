@@ -38,7 +38,7 @@ req = urllib.request.Request(
     os.environ['ANTHROPIC_BASE_URL'].rstrip('/') + '/v1/messages',
     data=json.dumps({
         'model': os.environ['ANTHROPIC_MODEL'],
-        'max_tokens': 4096,
+        'max_tokens': 16384,
         'messages': [{'role': 'user', 'content': prompt}],
     }).encode(),
     headers={
