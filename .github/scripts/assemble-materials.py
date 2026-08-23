@@ -30,7 +30,7 @@ for line in diff.splitlines():
 # bot 看不见就保守误报"可能不存在"——把实测存在性作为事实喂给它。
 import re
 referenced = {}
-for m in re.finditer(r'(?:scripts|src|presets|bin|docs|[.\w-]+)/[\w./-]+\.(?:ts|tsx|mjs|js|md|yml|json|mjs\.j', diff):
+for m in re.finditer(r'[\w.-]+(?:/[\w.-]+)+\.(?:tsx|jsx|ts|js|mjs|cjs|md|markdown|ya?ml|json|py)', diff):
     path = m.group(0).rstrip('`"\',')
     if path and path not in files and path not in referenced:
         referenced[path] = os.path.exists(path)
