@@ -75,7 +75,7 @@ jobs:
           if [ -z "$VERDICT" ]; then VERDICT="（回退模式——原始内容，未出结论）"; fi
           # ---- 总览评论 edit-in-place：同 PR 只保留一条 AI 审查总览。
           COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PRN/comments?per_page=100")
-          OLD_ID=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith("## AI 审核")))]] | last | .id // empty')
+          OLD_ID=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith("## AI 审核")))] | last | .id // empty')
           OLD_VERDICT=""
           if [ -n "$OLD_ID" ]; then
             OLD_VERDICT=$(echo "$COMMENTS" | jq -r ".[] | select(.id == $OLD_ID) | .body" | grep -o '^## AI 审核参考：[A-Za-z ]*' | head -1 | sed 's/.*：//')
