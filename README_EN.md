@@ -39,12 +39,20 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Highlights
 
-- **Terminal-native interaction**: streaming Markdown, structured tool cards,
-  command and file completion, `@` file references (complete anywhere; text
+- **Terminal-native interaction**: streaming Markdown, structured tool cards
+  (terminal-card multi-line command headers fold to the first line plus a
+  count via `/settings`; Ctrl+O or a card click expands), command and file completion, `@` file references (complete anywhere; text
   files attach content, directories attach listings, and PNG/JPEG/WebP/GIF are
   sent as durable image blocks), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
+- **Timeline navigation**: a Grok-style turn rail covering **every turn
+  (folded ones included)** — even when the fold window only exposes the last
+  few turns, the full history stays one click away (clicking a folded tick
+  reveals that turn and scrolls to it). When not pinned to the bottom,
+  `Enter`/`End` jump back in one step (no blank flash from long distances)
+  and a clickable new-messages pill stays in view; the right gutter offers
+  timeline / scrollbar / hidden modes.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
 - **Complete session workflow**: `/resume`, `/new`, `/workspace`, `/compact`, `/export`, the
@@ -55,7 +63,12 @@ the interface, and removing it leaves no core modifications behind.
   and registries.
 - **Designed for long sessions**: event-driven projection, differential output,
   message virtualization, replay coalescing, and bounded caches prevent render
-  cost and memory from growing without limit.
+  cost and memory from growing without limit; fingerprint-memoized hot paths
+  render with **zero per-frame allocations** (~200KB of GC churn saved every
+  16ms tick in a 3200-row session), wrapText and markdown tokens reuse global
+  LRU caches across mounts, the main screen paints in frames (fold window
+  300→120 rows), and long-session resume lands straight on content (splash
+  skipped, anchored to the newest message's last row).
 
 ## Preview
 
@@ -162,13 +175,14 @@ terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm /
 ghostty / tmux); macOS's built-in Terminal.app consumes `⌘` shortcuts itself,
 so keep using `Ctrl`.
 
-**Mouse** (`fullscreen: true` fullscreen mode; off by default, enabled by the profile patch layer)
+**Mouse** (fullscreen is the factory default since 0.8.8; set `fullscreen: false` to restore the inline main screen)
 
 | Action | Function |
 |---|---|
 | Drag to select | In-app text selection, **copied on release** (OSC 52 with native `wl-copy`/`xclip`/`xsel` fallback; `load-buffer -w` inside tmux); the selection is cleared after copying and a "Copied N characters" notice pops up |
 | Double / triple click | Select word / line, copied on selection just the same |
 | Scroll wheel | Only with fullscreen mouse tracking: scroll Help while it is open, otherwise scroll messages (±3 lines per notch); default inline mode does not deliver wheel events to the TUI |
+| Click a timeline-rail tick | Jump to that turn — the rail covers every turn (folded ones included); a folded tick reveals its turn first, then scrolls it into place |
 | `Esc` | Cancel an in-progress drag selection (no copy) |
 | Single-click a message line | Expand/collapse that line |
 | Click "load earlier messages" / "ctrl+e show previous N" | Load earlier messages / expand all |
@@ -268,6 +282,16 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - **Layout-level virtualization**: per-frame cost for long sessions drops from
   O(entire session) to O(visible window) — off-screen message lines render as
   height-only placeholders whose subtrees never take part in layout.
+- **Zero-allocation hot paths**: the visibleRows pipeline (slice/filter/margins)
+  is memoized on rows identity, length, and a Uint8Array streaming-bit
+  fingerprint — zero array/Map allocations per scroll tick, while in-place
+  settle writes still rebuild the cache instantly (empty-row filtering never
+  lags); wrapText and markdown tokens flow through global LRU caches that
+  reuse measurements across mounts.
+- **Framed backfill and landing anchor**: opening the main screen mounts the
+  tail window first and backfills history in frames; `/resume` asserts a final
+  state where the newest message's last row is visible and reachable, and
+  long-session restores skip the splash animation to land straight on content.
 - **Context progress bar**: based on the pi-nano-context algorithm (largest-remainder
   segmented coloring + multi-level condensed readouts).
 - **TPS meter**: based on pi-tps-meter — a streaming 1/8-block gauge, historical

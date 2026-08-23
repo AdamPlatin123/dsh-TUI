@@ -67,12 +67,13 @@ const base = {
   durationMs: 12,
 }
 
-function card(key: string, tool: Record<string, unknown>, verbose = false): React.ReactElement {
+function card(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): React.ReactElement {
   return React.createElement(AssistantToolUseMessage, {
     key,
     tool: { ...base, ...tool },
     addMargin: false,
     verbose,
+    foldTerminalCommand,
   })
 }
 
@@ -95,8 +96,8 @@ const app = await render(card('edit', editTool), { stdout, debug: true, exitOnCt
 await sleep(250)
 
 /** Swap the rendered card; key forces a clean remount per scenario. */
-async function show(key: string, tool: Record<string, unknown>, verbose = false): Promise<void> {
-  app.rerender(card(key, tool, verbose))
+async function show(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): Promise<void> {
+  app.rerender(card(key, tool, verbose, foldTerminalCommand))
   await sleep(250)
 }
 
@@ -298,6 +299,48 @@ await show('glob', {
   resultFull: 'src/a.ts\nsrc/b.ts',
 })
 check('Glob paths 逐行列出', rowOf('src/a.ts') >= 0 && rowOf('src/b.ts') >= 0)
+
+// 13. 终端命令折叠（dsh-tui.foldTerminalCommand）：多行脚本标题收起为
+//     首行 + `… +N lines` 提示；提示与正文折叠提示（capLines）同格式。
+const pwshTool = {
+  name: 'powershell',
+  callView: { card: 'terminal', title: '$items = Get-ChildItem -Recurse\n$items | Where-Object { $_.Length -gt 1kb }\n$items | Sort-Object Length\n$items | Select-Object -First 10 Name' },
+  resultView: { card: 'terminal', output: '', exitCode: 0 },
+  resultFull: '',
+}
+await show('fold-on', pwshTool, false, true)
+{
+  const s = screen()
+  check('折叠时标题仅保留命令首行', s.includes('PowerShell($items = Get-ChildItem -Recurse)'))
+  check('折叠时显示 +N 行提示', s.includes('… +3 lines') && s.includes('ctrl+o'))
+  check('折叠时后续脚本行不出现', rowOf('Sort-Object') === -1 && rowOf('Select-Object') === -1)
+}
+
+// 13b. 尾随换行是终止符不是行（sideLines 同规则）：'cd /tmp\nls\n' 计 +1 不 +2。
+await show('fold-trailing', {
+  name: 'bash',
+  callView: { card: 'terminal', title: 'cd /tmp\nls\n' },
+  resultView: { card: 'terminal', output: '', exitCode: 0 },
+  resultFull: '',
+}, false, true)
+check('尾随换行不计入折叠行数', screen().includes('… +1 lines') && screen().includes('Bash(cd /tmp)'))
+
+// 14. Ctrl+O（verbose）在折叠开启时仍展开完整脚本。
+await show('fold-open', pwshTool, true, true)
+check('verbose 展开完整命令', rowOf('Sort-Object') >= 0 && rowOf('Select-Object') >= 0 && !screen().includes('… +3 lines'))
+
+// 15. 默认关闭：多行标题完整渲染（现有行为保持不变）。
+await show('fold-off', pwshTool)
+check('默认关闭时完整渲染多行命令', rowOf('Sort-Object') >= 0 && !screen().includes('… +3 lines'))
+
+// 16. 单行命令：折叠开启时不加提示（与关闭时渲染一致）。
+await show('fold-single', {
+  name: 'bash',
+  callView: { card: 'terminal', title: 'seq 6' },
+  resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
+  resultFull: '1\n2\n3\n4\n5\n6',
+}, false, true)
+check('单行命令折叠开启时不加提示', screen().includes('Bash(seq 6)') && !screen().includes('… +1 lines'))
 
 app.unmount()
 await sleep(100)

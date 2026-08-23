@@ -54,6 +54,17 @@ export interface TimelineTurn {
   top: number
   /** First non-empty prompt line, char-capped (see clipPreview). */
   preview: string
+  /**
+   * True while the row sits BEFORE the fold window (older than the most
+   * recent MAX_RENDERED_ROWS rows): its top is unknown (unmounted since
+   * before the fold; `top` carries −1) and clicking the tick must first
+   * reveal the folded history (Chat: showAll + force-mount + seek) rather
+   * than scrollTo(−1). Rendering a tick for it is still correct — the
+   * turn EXISTS and is navigable, it is just folded away right now
+   * (drawing only window turns read as "the rail covers just 2-3 nodes"
+   * on tool-heavy sessions where 300 rows ≈ a handful of turns).
+   */
+  folded?: boolean
 }
 
 /** The per-commit snapshot MessageList reports and the rail + sticky

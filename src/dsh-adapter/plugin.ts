@@ -27,7 +27,7 @@ import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
@@ -379,6 +379,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     diffLayout: config.diffLayout,
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
+    scrollGutter: config.scrollGutter,
+    foldTerminalCommand: config.foldTerminalCommand,
     statusBar: config.statusBar,
     handle,
   })
@@ -414,6 +416,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+        // No default on purpose (same rule as `fullscreen` below): a schema
+        // default here would come back from scope.get()/watch() and shadow
+        // an explicit cordis.yml `foldTerminalCommand: true` while the
+        // settings user layer is unset — applyDisplay's
+        // `?? config.foldTerminalCommand ?? false` already supplies the
+        // default and keeps cordis.yml decisive.
+        foldTerminalCommand: Schema.boolean(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -455,6 +465,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       fullscreen?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
+      scrollGutter?: ScrollGutterMode
+      foldTerminalCommand?: boolean
       statusBar?: Partial<StatusBarConfig>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -491,6 +503,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const applyDisplay = (value: SettingsValue): void => {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
+      channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
+      channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     const apply = (next: SettingsValue): void => {
@@ -594,6 +608,32 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
             { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
           ],
+        },
+        {
+          path: ['scrollGutter'],
+          label: 'Transcript gutter',
+          descriptions: { zh: '转录边栏' },
+          hint: 'Right gutter of the fullscreen transcript: per-turn timeline ticks, a proportional scrollbar, or nothing.',
+          hintDescriptions: { zh: '全屏转录区右侧边栏：按轮次的时间线节点、比例滚动条，或留空。' },
+          kind: 'select',
+          options: [
+            { value: 'timeline', label: 'Turn timeline', descriptions: { zh: '轮次时间线' } },
+            { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
+            { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
+          ],
+        },
+        {
+          path: ['foldTerminalCommand'],
+          label: 'Fold terminal command',
+          descriptions: { zh: '折叠终端命令' },
+          hint: 'Terminal cards (Bash/PowerShell): collapse a multi-line command header to its first line + count; Ctrl+O or a click expands it.',
+          hintDescriptions: { zh: '终端卡（Bash/PowerShell）：多行命令头部折叠为首行 + 计数；Ctrl+O 或点击卡片展开。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: show the effective resolution (cordis.yml
+            // → off) instead of a blank — same rule as `fullscreen`'s field.
+            return String(typeof value === 'boolean' ? value : config.foldTerminalCommand === true)
+          },
         },
         {
           path: ['statusBar', 'compact'],

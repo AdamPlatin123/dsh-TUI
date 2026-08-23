@@ -19,6 +19,10 @@ const TICK_ACTIVE = '━━'
 const TICK_HOVER = '──'
 const TICK_IDLE = ' ─'
 
+/** Pointer rest time before the hover preview card pops (ms). Sweeps
+ *  never mount a card; only a deliberate pause does. */
+const HOVER_DWELL_MS = 120
+
 /** What the pointer is over. One state so tick/chevron hovers can never
  *  overlap (the rail is 2 cols wide — a row is one target or the other). */
 type Hover =
@@ -61,6 +65,7 @@ export function TimelineRail({
   downId,
   terminalWidth,
   hoverEnabled,
+  onRevealTurn,
 }: {
   handle: ScrollBoxHandle | null
   /** Turns in conversation order (MessageList's measured snapshot). */
@@ -76,13 +81,56 @@ export function TimelineRail({
   /** False while a modal overlay owns the screen — suppress the hover
    *  card (the rail itself stays, but stops narrating). */
   hoverEnabled: boolean
+  /**
+   * Reveal-and-seek for FOLDED turns (older than the recent-rows window):
+   * Chat expands the fold (showAll) and seeks through the force-mount
+   * path — the row's top is unknown until it mounts, so the coordinate
+   * jump below does not apply to it.
+   */
+  onRevealTurn: (rowId: number) => void
 }): React.ReactNode {
   const [, setTick] = React.useState(0)
+  const [hover, setHover] = React.useState<Hover>(null)
+  // Dwell-gated preview card: the card pops only after the pointer RESTS
+  // on a tick for HOVER_DWELL_MS. Sweeping the rail fires enter/leave per
+  // cell — without the gate each crossing mounts an absolute-positioned
+  // card at a new spot (flapping previews, absolute-rect churn, and the
+  // fast-sweep residue users reported). The glyph highlight stays instant
+  // (cheap, no overlay); only the card waits for intent.
+  const [cardIndex, setCardIndex] = React.useState<number | null>(null)
+  const dwellTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearDwell = React.useCallback(() => {
+    if (dwellTimerRef.current !== null) {
+      clearTimeout(dwellTimerRef.current)
+      dwellTimerRef.current = null
+    }
+    setCardIndex(null)
+  }, [])
+  const armDwell = React.useCallback((index: number) => {
+    if (dwellTimerRef.current !== null) clearTimeout(dwellTimerRef.current)
+    dwellTimerRef.current = setTimeout(() => {
+      dwellTimerRef.current = null
+      setCardIndex(index)
+    }, HOVER_DWELL_MS)
+  }, [])
+  React.useEffect(() => () => {
+    if (dwellTimerRef.current !== null) clearTimeout(dwellTimerRef.current)
+  }, [])
   React.useEffect(() => {
     if (!handle) return
-    return handle.subscribe(() => setTick(t => t + 1))
-  }, [handle])
-  const [hover, setHover] = React.useState<Hover>(null)
+    return handle.subscribe(() => {
+      setTick(t => t + 1)
+      // A scroll (wheel over the rail, tick/chevron jump, header click)
+      // slides the tick window under a STATIONARY pointer — without this,
+      // the hover card keeps re-narrating whatever turn now sits under the
+      // pointer cell, flapping previews across turns every frame (reads as
+      // ghosting). OpenCode's modality rule: only a real mouse move may
+      // re-enter hover; Grok likewise clears the hover popup on tick click.
+      // setHover(null) on an already-null hover is a React no-op.
+      setHover(null)
+      clearDwell()
+    })
+  }, [handle, clearDwell])
 
   if (!handle) return null
   const viewport = handle.getViewportHeight()
@@ -115,9 +163,14 @@ export function TimelineRail({
   // prompt exactly at the viewport top; the renderer clamps unreachable
   // tail tops to maxScroll (their turns stay on screen, just short of
   // owning the top row — and ▼ never names them, see timeline-rail.ts).
+  // FOLDDED turns have no measured top (-1): their click (and ▲ naming
+  // one) routes through onRevealTurn instead — expand the fold, then the
+  // existing force-mount seek lands the row once it measures.
   const jumpToIndex = (index: number) => {
     const turn = turns[index]
-    if (turn) handle.scrollTo(turn.top)
+    if (!turn) return
+    if (turn.folded) onRevealTurn(turn.id)
+    else handle.scrollTo(turn.top)
   }
   const jumpToId = (id: number | null) => {
     if (id === null) return
@@ -159,8 +212,14 @@ export function TimelineRail({
         height={1}
         flexShrink={0}
         onClick={() => jumpToIndex(index)}
-        onMouseEnter={() => setHover({ kind: 'tick', index })}
-        onMouseLeave={() => setHover(null)}
+        onMouseEnter={() => {
+          setHover({ kind: 'tick', index })
+          armDwell(index)
+        }}
+        onMouseLeave={() => {
+          setHover(null)
+          clearDwell()
+        }}
       >
         <Text color={color}>{glyph}</Text>
       </Box>,
@@ -168,13 +227,16 @@ export function TimelineRail({
   }
 
   // Hover preview card, anchored left of the rail and vertically centered
-  // on the hovered tick (shrink-to-fit, rounded chrome). Suppressed while
-  // an overlay owns the screen — the rail stops narrating over dialogs.
+  // on the hovered tick (shrink-to-fit, rounded chrome). Dwell-gated: only
+  // cardIndex (armed after HOVER_DWELL_MS of rest) draws — a sweep keeps
+  // hover flashing on glyphs but never mounts the overlay. Suppressed
+  // while an overlay owns the screen — the rail stops narrating over
+  // dialogs.
   let card: React.ReactNode = null
-  if (hoverEnabled && hover?.kind === 'tick') {
-    const turn = turns[hover.index]
+  if (hoverEnabled && cardIndex !== null) {
+    const turn = turns[cardIndex]
     if (turn && turn.preview.length > 0) {
-      const tickRow = geo.tickTop + hover.index - geo.windowStart
+      const tickRow = geo.tickTop + cardIndex - geo.windowStart
       if (tickRow >= geo.tickTop && tickRow < geo.downRow) {
         const budget = Math.min(32, Math.max(16, Math.floor((terminalWidth - RAIL_WIDTH) / 2)))
         const lines = wrapPreviewLines(turn.preview, budget)
