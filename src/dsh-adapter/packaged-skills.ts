@@ -51,10 +51,15 @@ function parseSkillMarkdown(raw: string, fallbackName: string): { name: string; 
 export function registerPackagedSkills(ctx: Context): void {
   const registry = ctx.get('skills') as SkillRegistryLike | undefined
   if (!registry) return
-  // import.meta.url is lib/types/packaged-skills.js — two levels up is the
-  // package root, which is where `files` ships the skills/ directory.
-  const skillsRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills')
-  if (!existsSync(skillsRoot)) return
+  // Two-level candidates, mirroring packaged-presets.ts: from src/ the
+  // package root is two levels up; from the built lib/types/<dir>/ output it
+  // is three up. A single guess breaks after a directory reshuffle (#416).
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const skillsRoot = [
+    join(moduleDir, '..', '..', 'skills'),
+    join(moduleDir, '..', '..', '..', 'skills'),
+  ].find(candidate => existsSync(candidate))
+  if (skillsRoot === undefined) return
   for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     const file = join(skillsRoot, entry.name, 'SKILL.md')
