@@ -92,3 +92,31 @@ json.dump({'title': meta['title'], 'body': meta.get('body') or '', 'diff': diff,
           open('materials.json', 'w', encoding='utf-8'))
 print('materials: diff=%dB(trunc=%s) files=%d callers=%d' % (
     len(diff), diff_truncated, len(files), len(callers)))
+
+# ── v24① CI 结果与失败日志（实证材料，非猜测）─────────────────────────
+# bot 此前每次自白"无法运行测试"——而 CI 红/绿与失败断言是现成权威事实。
+# 归因规则（真回归/flaky/预存）交给 prompt 契约侧。
+checks = gh('pr', 'checks', prn, '--repo', repo)
+ci = {'summary': checks.strip()[:4000], 'failed_log_tail': ''}
+if checks and 'fail' in checks:
+    m = re.search(r'runs/(\d+)', checks)
+    if m:
+        log = subprocess.run(
+            ['gh', 'run', 'view', m.group(1), '--repo', repo, '--log-failed'],
+            capture_output=True, text=True).stdout
+        ci['failed_log_tail'] = '\n'.join(log.splitlines()[-80:])
+# ── v24③ 往轮人工反馈（防重复报已澄清/已修复项）───────────────────────
+# 只取人类评论（排除 bot 与我方转发），最近 6 条、每条截 400 字。
+meta_full = json.loads(gh('pr', 'view', prn, '--repo', repo, '--json', 'comments'))
+prior = []
+for c in reversed(meta_full.get('comments') or []):
+    if len(prior) >= 6:
+        break
+    if c['author']['login'] in ('github-actions', 'AdamPlatin123'):
+        continue
+    prior.append({'author': c['author']['login'], 'body': (c['body'] or '')[:400]})
+materials = json.load(open('materials.json', encoding='utf-8'))
+materials['ci'] = ci
+materials['prior_comments'] = prior
+json.dump(materials, open('materials.json', 'w', encoding='utf-8'), ensure_ascii=False)
+print('materials+: ci_fail=%s prior_comments=%d' % ('fail' if ci['failed_log_tail'] else 'none/pass', len(prior)))
