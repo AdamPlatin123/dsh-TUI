@@ -38,7 +38,11 @@ req = urllib.request.Request(
     os.environ['ANTHROPIC_BASE_URL'].rstrip('/') + '/v1/messages',
     data=json.dumps({
         'model': os.environ['ANTHROPIC_MODEL'],
-        'max_tokens': 16384,
+        # DeepSeek 官方文档（api-docs.deepseek.com/quick_start/pricing）：
+        # 三模型统一 上下文 1M / 输出上限 384K。思考模型的 thinking 计入输出预算，
+        # 小额会被思考吃光（text 0B、stop_reason=max_tokens）。384K = 393216，
+        # 已实测端点接受该边界值。
+        'max_tokens': 393216,
         'messages': [{'role': 'user', 'content': prompt}],
     }).encode(),
     headers={
