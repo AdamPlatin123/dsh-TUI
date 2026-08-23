@@ -104,7 +104,7 @@ jobs:
               gh label create "${L%%:*}" --color "${L##*:}" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
             done
             gh pr edit "$PRN" --repo "$GITHUB_REPOSITORY" --add-label "$LBL" >/dev/null
-            CURRENT=$(gh pr view "$PRN" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.[].name] | join(" ")')
+            CURRENT=$(gh pr view "$PRN" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name] | join(" ")')
             for OTHER in ai/mergeable ai/needs-minor-fix ai/needs-major-fix; do
               if [ "$OTHER" != "$LBL" ] && [[ " $CURRENT " == *" $OTHER "* ]]; then
                 gh pr edit "$PRN" --repo "$GITHUB_REPOSITORY" --remove-label "$OTHER" >/dev/null
