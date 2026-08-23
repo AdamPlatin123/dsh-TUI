@@ -24,6 +24,17 @@ def git_grep(symbol: str) -> str:
 prn = sys.argv[1]
 repo = os.environ['GITHUB_REPOSITORY']
 meta = json.loads(gh('pr', 'view', prn, '--repo', repo, '--json', 'title,body'))
+# fork 复测语境修正：本 PR 若是「[上游#N] …」复测样本，其 body 是我方复测标注
+#（"勿合并"等）而非上游作者原文——bot 会把标注误读为 PR 意图（#489 复测实证）。
+# 解析上游号，改拉上游原 PR 的 title/body 进材料。
+UPSTREAM_REPO = 'ccch1mneyyy/dsh-TUI'  # 仅 fork 复测场景使用
+m = re.match(r'\[上游#(\d+)\]', meta.get('title') or '')
+if m:
+    try:
+        up = json.loads(gh('pr', 'view', m.group(1), '--repo', UPSTREAM_REPO, '--json', 'title,body'))
+        meta = {'title': up.get('title') or meta['title'], 'body': up.get('body') or ''}
+    except Exception:
+        pass  # 上游拉取失败则退回 fork 元数据
 diff = gh('pr', 'diff', prn, '--repo', repo)
 
 # 巨型 diff（锁文件/全量重排）会爆材料与上下文窗口：截断并显式标记，
