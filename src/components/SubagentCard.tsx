@@ -16,9 +16,14 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   const running = subagent.status === 'running' || subagent.status === 'starting'
   const elapsed = subagent.completedAt ? subagent.completedAt - subagent.startedAt : Date.now() - subagent.startedAt
   const total = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
+  // Mouse affordance: clickable cards tint on hover; the keyboard-focused
+  // card keeps its brand-color header (no double highlight).
+  const [hovered, setHovered] = useState(false)
   // Live preview: the newest streamed line rides under the header while the
   // subagent runs, then folds away — the dashboard stays one line per settled
-  // subagent.
+  // subagent. Deliberately NOT revived on hover: an extra line would grow
+  // the card mid-gesture and reshuffle the whole dashboard list (user
+  // feedback: hover must never change layout). The hover tint stays.
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
   const minimal = isMinimalMode()
   const glyph = running ? (minimal ? '·' : '🟡')
@@ -28,9 +33,6 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
     : running ? 'warning' as const
     : subagent.status === 'failed' || subagent.status === 'cancelled' ? 'error' as const
     : 'success' as const
-  // Mouse affordance: clickable cards tint on hover; the keyboard-focused
-  // card keeps its brand-color header (no double highlight).
-  const [hovered, setHovered] = useState(false)
   const hoverTint = onClick !== undefined && hovered && !focused
   return <Box
     flexDirection="column"

@@ -141,13 +141,6 @@ const dict = {
 
   // ── screens/Chat.tsx ────────────────────────────────────────────────
   'skill-unavailable': { zh: '技能 {{name}} 已不可用或未开放用户直调', en: 'Skill {{name}} is gone or not user-invocable' },
-  'skill-audit-prompt': { zh: '请使用 audit 技能对当前项目做一次全面的代码审计，找出安全、正确性与质量问题。', en: 'Use the audit skill to do a thorough code audit of the current project, finding security, correctness and quality issues.' },
-  'skill-bug-prompt': { zh: '请使用 bug 技能协助我记录一份完整的 bug 报告（现象、复现步骤、期望行为）。', en: 'Use the bug skill to help me write a complete bug report (symptoms, reproduction steps, expected behavior).' },
-  'skill-practice-prompt': { zh: '请使用 practice 技能陪我进行一轮编程练习。', en: 'Use the practice skill to run a round of programming practice with me.' },
-  'skill-review-prompt': { zh: '请使用 review 技能对当前项目做一次全面的代码评审。', en: 'Use the review skill to do a thorough code review of the current project.' },
-  'skill-pr-comments-prompt': { zh: '请使用 pr-comments 技能审查当前分支的拉取请求评论并给出改进建议。', en: 'Use the pr-comments skill to review pull request comments on the current branch and suggest improvements.' },
-  'skill-release-notes-prompt': { zh: '请使用 release-notes 技能为当前项目生成发布说明。', en: 'Use the release-notes skill to generate release notes for the current project.' },
-  'skill-vuln-check-prompt': { zh: '请使用 vuln-check 技能对当前项目做一次安全漏洞检查。', en: 'Use the vuln-check skill to run a security vulnerability check on the current project.' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },
   'context-panel-expand': { zh: '展开', en: 'Expand' },
   'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
@@ -368,6 +361,9 @@ const dict = {
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },
+  'input-fold-stats': { zh: '{{lines}} 行 · {{chars}} 字', en: '{{lines}} lines · {{chars}} chars' },
+  'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
+  'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
 
   // ── components/whaleFrames.ts (frame labels) ────────────────────────
   'frame-blink': { zh: '眨眼', en: 'blink' },
@@ -516,6 +512,9 @@ const dict = {
   'statusline-hint-select': { zh: 'esc 返回输入', en: 'esc to return to input' },
   'statusline-hint-working': { zh: 'esc 中断', en: 'esc to interrupt' },
   'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
+  // ── 底栏字段 hover 明细（补充行读出；技术标签 ctx/free/read 等保持不译）──
+  'status-detail-of-window': { zh: '的窗口', en: 'of window' },
+  'status-detail-session-id': { zh: '会话日志目录与此 id 同名', en: 'the session log directory is named after this id' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
@@ -625,8 +624,9 @@ const dict = {
   'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
   'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
   'compact-summary-folded': { zh: '摘要已折叠', en: 'Summary folded' },
-  'new-message': { zh: '{{n}} 条新消息', en: '1 new message' },
-  'new-messages': { zh: '{{n}} 条新消息', en: '{{n}} new messages' },
+  'new-message': { zh: '↓ {{n}} 条新消息', en: '↓ 1 new message' },
+  'new-messages': { zh: '↓ {{n}} 条新消息', en: '↓ {{n}} new messages' },
+  'back-to-bottom': { zh: '↓ 回到底部（Enter/End）', en: '↓ back to bottom (Enter/End)' },
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
   'theme-builtin-base': { zh: '内置 · {{name}} 基底', en: 'Built-in · {{name}} base' },
@@ -793,12 +793,13 @@ const dict = {
   'cmd-desc-skills': { zh: '列出所有可用技能' },
   'cmd-desc-plugins': { zh: '显示插件契约、授权与台账诊断' },
   'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
-  // Built-in skills
+  // Built-in skills（注册名与打包 SKILL.md 对齐；这些键经
+  // localizedDescription 的 cmd-desc-<name> 回退服务于直调命令条目）
   'cmd-desc-audit': { zh: '对当前项目做全面代码审计' },
   'cmd-desc-bug': { zh: '记录一份 bug 报告' },
   'cmd-desc-practice': { zh: '与 dsh-tui 进行编程练习' },
   'cmd-desc-review': { zh: '对当前项目做全面代码评审' },
-  'cmd-desc-pr_comments': { zh: '审查拉取请求评论' },
+  'cmd-desc-pr-comments': { zh: '审查拉取请求评论' },
   'cmd-desc-release-notes': { zh: '生成发布说明' },
   'cmd-desc-vuln-check': { zh: '运行安全漏洞检查' },
   // Misc

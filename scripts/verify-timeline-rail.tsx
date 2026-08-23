@@ -286,6 +286,29 @@ await wheel(false, 20)
   }
 }
 
+// ── 6b. 快速划过 tick：dwell 门下全程无卡（残影修复的回归）──
+{
+  const snap = railSnapshot()
+  let anyCard = false
+  // 8ms 间隔连续扫过全部 tick 行（模拟快速划过）
+  for (const row of snap.ticks) {
+    stdin.write(`\x1b[<35;${COLS};${row + 1}M`)
+    await sleep(8)
+    if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
+  }
+  await sleep(60)
+  if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
+  check('快速划过 tick 全程无预览卡（dwell 门）', !anyCard)
+  // 停留后卡照常出现
+  const row = snap.ticks[2]
+  if (row !== undefined) {
+    stdin.write(`\x1b[<35;${COLS};${row + 1}M`)
+    await sleep(350)
+    check('停留 350ms 后预览卡出现', screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')))
+    await hoverAt(30, 20)
+  }
+}
+
 // ── 7. resize 59 列：rail 隐藏；恢复 100 列：rail 回来 ──
 {
   ;(stdout as any).columns = 59
@@ -307,5 +330,57 @@ await wheel(false, 20)
 }
 
 await inst.unmount()
+
+// ── 8. 工具重会话：折叠窗口吃掉大半轮次，rail 仍覆盖全部轮 ──
+// 每轮 = user + 50 工具行 + assistant（52 行/轮）×12 = 624 行 > 300 →
+// 折叠窗口只剩 ~5 轮。修复前 rail 只画窗口内轮次（5 tick）；修复后
+// 上报全部 12 轮，折叠轮带 folded 标记，点击走 reveal 路径。
+{
+  const heavy: any[] = []
+  let hid = 0
+  for (let turn = 1; turn <= 12; turn++) {
+    heavy.push({ id: ++hid, kind: 'user', text: `问题 ${turn}` })
+    for (let t = 0; t < 50; t++) {
+      heavy.push({
+        id: ++hid, kind: 'tool', text: '',
+        tool: {
+          callId: `t${turn}-${t}`, name: 'Read',
+          argsText: `{"file_path": "/tmp/f${t}.ts"}`, argsFull: '{}',
+          status: 'ok', startedAt: 0, durationMs: 30,
+          resultText: `文件 ${t} 内容行 1\n文件 ${t} 内容行 2`,
+        },
+      })
+    }
+    heavy.push({ id: ++hid, kind: 'assistant', text: `回复 ${turn} 完毕。` })
+  }
+  const heavyChannel: any = { ...channel, rows: heavy, lastUserText: '问题 12' }
+  const inst2 = await render(
+    <AlternateScreen>
+      <Chat channel={heavyChannel} questionStore={new QuestionStore()} fullscreen />
+    </AlternateScreen>,
+    { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(900)
+  const snap = railSnapshot()
+  check('工具重会话：rail 覆盖全部 12 轮', snap.ticks.length === 12,
+    `ticks=${snap.ticks.length}（折叠窗口内仅 ~5 轮）`)
+  check('工具重会话：恰一个 ━━', snap.activeRow !== null, `active=${snap.activeRow}`)
+  // 点击第一个 tick（问题 1，被折叠）→ reveal + 跳转
+  const firstTick = snap.ticks[0]
+  if (firstTick !== undefined) {
+    await clickAt(COLS, firstTick + 1)
+    await sleep(600)
+    const lines = screenLines()
+    check('点击折叠 tick：问题 1 揭示并到顶', lines.slice(0, 6).some(l => l.includes('问题 1')),
+      `top6=${JSON.stringify(lines.slice(0, 4).map(l => l.trimEnd().slice(0, 30)))}`)
+    const snap2 = railSnapshot()
+    // 揭示后 sticky header 占 1 行 → 视口缩 1 → 整个 tick 块平移；按
+    // 轮次索引断言（━�� 在第 0 个 tick 上），不按屏幕行号。
+    check('揭示后 ━━ 移到首 tick（问题 1）', snap2.activeRow !== null && snap2.ticks.indexOf(snap2.activeRow) === 0,
+      `active=${snap2.activeRow} ticks=${JSON.stringify(snap2.ticks)}`)
+  }
+  await inst2.unmount()
+}
+
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

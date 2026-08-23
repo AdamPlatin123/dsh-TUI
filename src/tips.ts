@@ -527,6 +527,12 @@ export const TIPS: readonly Tip[] = [
     en: 'Drag-select copies instantly in fullscreen; Esc cancels',
   },
   {
+    id: 'disp-hover-footer',
+    group: 'display',
+    zh: '悬停底栏字段：ctx 原地变等宽压力条，明细走常驻底行，布局不动',
+    en: 'Hover footer fields: ctx morphs in place into a same-width bar, details on a stable line',
+  },
+  {
     id: 'disp-wheel-sel',
     group: 'display',
     zh: '有文本选区时，滚轮平移选区而非滚动列表',

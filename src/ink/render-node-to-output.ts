@@ -804,7 +804,27 @@ function renderNodeToOutput(
         // within the viewport (equal to the scroll container's
         // paddingTop), and innerHeight already subtracts padding, so
         // including it double-counts padding and inflates maxScroll.
-        const scrollHeight = contentYoga?.getComputedHeight() ?? 0
+        let scrollHeight = contentYoga?.getComputedHeight() ?? 0
+        // Defensive extent floor: the wrapper's Yoga height can land ONE LINE
+        // short of its children's laid-out extent (the engine's flex-basis
+        // measure cache and the child's final subtree layout can disagree by
+        // a row — measured on resume of a long session: wrapper 286 while the
+        // last row's bottom sat at 287, stable across forced re-layouts). A
+        // short scrollHeight clamps maxScroll below the real bottom, so the
+        // sticky pin parks the viewport a line up and the tail line culls
+        // against the viewport edge — permanently invisible AND unreachable
+        // (no scroll position ever shows it; the user loses the newest
+        // message). The children's real extent is the authoritative floor.
+        // O(direct children) — the windowed list keeps this tiny, and the
+        // painter walks the same nodes right below.
+        if (content !== undefined) {
+          for (const child of content.childNodes) {
+            const childYoga = (child as DOMElement).yogaNode
+            if (childYoga === undefined) continue
+            const bottom = childYoga.getComputedTop() + childYoga.getComputedHeight()
+            if (bottom > scrollHeight) scrollHeight = bottom
+          }
+        }
         // Capture previous scroll bounds BEFORE overwriting — the at-bottom
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight

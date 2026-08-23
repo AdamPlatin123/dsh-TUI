@@ -20,14 +20,14 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
-import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
@@ -379,6 +379,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     diffLayout: config.diffLayout,
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
+    scrollGutter: config.scrollGutter,
     statusBar: config.statusBar,
     handle,
   })
@@ -414,6 +415,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -455,6 +457,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       fullscreen?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
+      scrollGutter?: ScrollGutterMode
       statusBar?: Partial<StatusBarConfig>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -491,6 +494,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const applyDisplay = (value: SettingsValue): void => {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
+      channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     const apply = (next: SettingsValue): void => {
@@ -593,6 +597,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'none', label: 'None', descriptions: { zh: '无' } },
             { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
             { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
+          ],
+        },
+        {
+          path: ['scrollGutter'],
+          label: 'Transcript gutter',
+          descriptions: { zh: '转录边栏' },
+          hint: 'Right gutter of the fullscreen transcript: per-turn timeline ticks, a proportional scrollbar, or nothing.',
+          hintDescriptions: { zh: '全屏转录区右侧边栏：按轮次的时间线节点、比例滚动条，或留空。' },
+          kind: 'select',
+          options: [
+            { value: 'timeline', label: 'Turn timeline', descriptions: { zh: '轮次时间线' } },
+            { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
+            { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
         },
         {
@@ -1045,9 +1062,13 @@ async function resolveAgent(
 ): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string; route?: ModelRoute }> {
   // Resume override (issue #67): cordis.yml overrides the target session's
   // recorded route only when it pins BOTH halves; undefined halves let the
-  // session's own request/header records win (issue #30).
+  // session's own request/header records win (issue #30). The recorded route
+  // is ALSO fed back into agentOptions (not just the status line): a resume
+  // whose cordis.yml pins only `provider` would otherwise leave
+  // agentOptions.model undefined, which breaks the `{{model}}` persona
+  // variable for the resumed agent's own assembly and for every subagent it
+  // spawns (dsh-subagent inherits `parent.options.model`).
   const resumeRoute = explicitModelRoute(configuredRoute)
-  const resumeOptions = { provider: resumeRoute?.provider, model: resumeRoute?.model }
   if (requestedSessionId !== undefined) {
     const resumeId = SessionId(requestedSessionId)
     const existing = ctx.agents.get(resumeId)
@@ -1064,6 +1085,11 @@ async function resolveAgent(
       // caller's current preference.
       const persisted = await resolvePersistedPreset(ctx, resumeId)
       const composed = await composePreset(ctx, persisted)
+      const recorded = await resolvePersistedRoute(ctx, resumeId)
+      const resumeOptions = {
+        provider: resumeRoute?.provider ?? recorded?.provider,
+        model: resumeRoute?.model ?? recorded?.model,
+      }
       const resumed = await ctx.agents.resume({
         resumeSessionId: resumeId,
         agentOptions: resumeOptions,
