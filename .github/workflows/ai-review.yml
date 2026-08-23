@@ -1,9 +1,15 @@
-# AI 预审（v17 定稿）：DeepSeek anthropic 端点 + claude CLI + 结构化提取渲染。
-# 组件均已单独验证：claude 出 JSON / 提取器剥 ANSI / 渲染 / 回退 / 评论发布。
+# AI 预审（v23）：DeepSeek anthropic 端点 + tool_choice 强制结构化输出 + 调用方视野。
+# v21 起单轮 HTTP（无 CLI 辅助调用）；v23 变更：
+#   - tool_choice 强制 submit_review 工具 → 结构化输出由 API 层保证（提取器保留回退）
+#   - 组材料新增被改导出的调用方 grep 上下文；diff 超 400KB 截断防爆炸
+#   - HTTP 重试 2 次；无 tool_use 且 text 空 → 步骤红（不再发空评论）；max_tokens 384K→128K
+#   - 评论 edit-in-place（同 PR 只留一条总览）+ 结果变差/首次才发短通知
+#   - verdict 落 label（ai/mergeable · ai/needs-minor-fix · ai/needs-major-fix）
+#   - 触发补 reopened；concurrency 取消同 PR 过时审查
 name: ai-review
 on:
   pull_request:
-    types: [opened, ready_for_review, synchronize]
+    types: [opened, ready_for_review, synchronize, reopened]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -13,6 +19,10 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+# 同一 PR 的连续推送只审最新（排队中的过时审查自动取消）。
+concurrency:
+  group: ai-review-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   review:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
@@ -21,28 +31,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}", submodules: recursive, fetch-depth: 0 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm install -g @anthropic-ai/claude-code@2.1.233
       - name: Prepare
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          mkdir -p ~/.claude
-          printf '{"hasCompletedOnboarding":true,"theme":"dark"}' > ~/.claude.json
           gh pr diff "${{ github.event.inputs.pr_number || github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > .pr-review.diff || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}" > .pr-review.diff
+          # 检出后的 HEAD 即 PR head：渲染尾注用它标识"审查的是哪个 commit"。
+          git rev-parse --short=7 HEAD > .pr-head-sha
           { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py
           test -s extract-review.py
-        env: { GH_TOKEN: "${{ github.token }}" }
       - name: Assemble materials
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
           PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
           { git show origin/main:.github/scripts/assemble-materials.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/assemble-materials.py"; } > assemble-materials.py
           python3 assemble-materials.py "$PRN"
           { git show origin/main:.github/scripts/review-api.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/review-api.py"; } > review-api.py
           { git show origin/main:.github/scripts/extract-review.py 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/extract-review.py"; } > extract-review.py
           test -s review-api.py -a -s extract-review.py -a -s materials.json
-      - name: Review（单轮 HTTP，无 CLI 辅助调用）
+      - name: Review（单轮 HTTP，tool_choice 强制结构化）
         env:
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -50,10 +56,10 @@ jobs:
         run: |
           python3 review-api.py materials.json
           echo "raw=$(wc -c < raw.out)B"
-          test -s raw.out
       - name: Render and post
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
+          export PR_HEAD_SHA="$(cat .pr-head-sha)"
           if python3 extract-review.py; then
             echo "结构化提取成功"
           else
@@ -62,7 +68,49 @@ jobs:
             cat raw.out >> review.md
             printf '\n```\n' >> review.md
           fi
-          gh pr comment "${{ github.event.inputs.pr_number || github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file review.md
+          PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
+          # GitHub 评论上限 65536：防御性截断（正常结论远小于此）。
+          head -c 60000 review.md > review.md.tmp && mv review.md.tmp review.md
+          VERDICT=$(grep -o 'verdict=[^_]*' review.md | head -1 | cut -d= -f2)
+          if [ -z "$VERDICT" ]; then VERDICT="（回退模式——原始内容，未出结论）"; fi
+          # ---- 总览评论 edit-in-place：同 PR 只保留一条 AI 审查总览。
+          COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PRN/comments?per_page=100")
+          OLD_ID=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith("## AI 审核")))]] | last | .id // empty')
+          OLD_VERDICT=""
+          if [ -n "$OLD_ID" ]; then
+            OLD_VERDICT=$(echo "$COMMENTS" | jq -r ".[] | select(.id == $OLD_ID) | .body" | grep -o '^## AI 审核参考：[A-Za-z ]*' | head -1 | sed 's/.*：//')
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$OLD_ID" -F body=@review.md
+            echo "总览评论 #$OLD_ID 已更新（旧结论：${OLD_VERDICT:-未知}）"
+          else
+            gh pr comment "$PRN" --repo "$GITHUB_REPOSITORY" --body-file review.md
+            echo "首发总览评论"
+          fi
+          # ---- 短通知：仅首次、或结论变差时提醒作者（edit 不触发 GitHub 通知，此为通知通道）。
+          rank() { case "$1" in Mergeable) echo 0;; "Need Minor Fix") echo 1;; "Need Major Fix") echo 2;; *) echo -1;; esac; }
+          if [ -z "$OLD_ID" ] || [ "$(rank "$VERDICT")" -gt "$(rank "$OLD_VERDICT")" ]; then
+            NOTE="📌 AI 审查更新：$VERDICT"
+            [ -n "$OLD_VERDICT" ] && [ "$(rank "$VERDICT")" -gt "$(rank "$OLD_VERDICT")" ] && NOTE="$NOTE（较上次 $OLD_VERDICT 变差）"
+            gh pr comment "$PRN" --repo "$GITHUB_REPOSITORY" --body "$NOTE——详见上方总览评论"
+          fi
+          # ---- verdict 落 label：PR 列表页一眼可见结论；另两档同步移除。
+          case "$VERDICT" in
+            "Mergeable")        LBL=ai/mergeable;        COL=0E8A16 ;;
+            "Need Minor Fix")   LBL=ai/needs-minor-fix;  COL=FBCA04 ;;
+            "Need Major Fix")   LBL=ai/needs-major-fix;  COL=D93F0B ;;
+          esac
+          if [ -n "${LBL:-}" ]; then
+            for L in "ai/mergeable:0E8A16" "ai/needs-minor-fix:FBCA04" "ai/needs-major-fix:D93F0B"; do
+              # 幂等建标签：已存在时 create 报错属预期，静默通过。
+              gh label create "${L%%:*}" --color "${L##*:}" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+            done
+            gh pr edit "$PRN" --repo "$GITHUB_REPOSITORY" --add-label "$LBL" >/dev/null
+            CURRENT=$(gh pr view "$PRN" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.[].name] | join(" ")')
+            for OTHER in ai/mergeable ai/needs-minor-fix ai/needs-major-fix; do
+              if [ "$OTHER" != "$LBL" ] && [[ " $CURRENT " == *" $OTHER "* ]]; then
+                gh pr edit "$PRN" --repo "$GITHUB_REPOSITORY" --remove-label "$OTHER" >/dev/null
+              fi
+            done
+          fi
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -70,6 +118,7 @@ jobs:
           name: review-debug
           path: |
             raw.out
-            review.err
+            review.out.json
+            materials.json
             review.md
           if-no-files-found: ignore
