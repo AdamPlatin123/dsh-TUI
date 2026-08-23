@@ -380,6 +380,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     scrollGutter: config.scrollGutter,
+    foldTerminalCommand: config.foldTerminalCommand,
     statusBar: config.statusBar,
     handle,
   })
@@ -416,6 +417,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+        // Terminal-card header folding: keep the current full-title rendering
+        // unless the user opts in.
+        foldTerminalCommand: Schema.boolean().default(false),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -458,6 +462,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
+      foldTerminalCommand?: boolean
       statusBar?: Partial<StatusBarConfig>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -495,6 +500,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
+      channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     const apply = (next: SettingsValue): void => {
@@ -611,6 +617,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
             { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
+        },
+        {
+          path: ['foldTerminalCommand'],
+          label: 'Fold terminal command',
+          descriptions: { zh: '折叠终端命令' },
+          hint: 'Terminal cards (Bash/PowerShell): collapse a multi-line command header to its first line + count; Ctrl+O or a click expands it.',
+          hintDescriptions: { zh: '终端卡（Bash/PowerShell）：多行命令头部折叠为首行 + 计数；Ctrl+O 或点击卡片展开。' },
+          kind: 'boolean',
         },
         {
           path: ['statusBar', 'compact'],
