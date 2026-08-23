@@ -25,6 +25,16 @@ for line in diff.splitlines():
             files[path] = open(path, encoding='utf-8', errors='replace').read()[:20000]
         except OSError:
             pass
-json.dump({'title': meta['title'], 'body': meta.get('body') or '', 'diff': diff, 'files': files},
+# diff 中引用、但不在 diff 涉及文件里的仓库路径：在 PR head 检出中实测存在性。
+# 根因修复（上游 #435 误判）：被引用文件（如 CI 引用的脚本）不在 diff 中时，
+# bot 看不见就保守误报"可能不存在"——把实测存在性作为事实喂给它。
+import re
+referenced = {}
+for m in re.finditer(r'(?:scripts|src|presets|bin|docs|[.\w-]+)/[\w./-]+\.(?:ts|tsx|mjs|js|md|yml|json|mjs\.j', diff):
+    path = m.group(0).rstrip('`"\',')
+    if path and path not in files and path not in referenced:
+        referenced[path] = os.path.exists(path)
+json.dump({'title': meta['title'], 'body': meta.get('body') or '', 'diff': diff,
+           'files': files, 'referenced': referenced},
           open('materials.json', 'w', encoding='utf-8'))
 print('materials: diff=%dB files=%d' % (len(diff), len(files)))
