@@ -55,18 +55,27 @@ if not obj or obj.get('verdict') not in VERDICTS:
 
 lines = ['## AI 审核参考：%s' % obj['verdict'], '', '### ✅ 验证过做对的部分']
 lines += ['- %s' % c for c in (obj.get('correct') or ['（无）'])]
-lines += ['', '### ⚠️ 发现清单']
 issues = obj.get('issues') or []
-for it in issues:
+verified = [it for it in issues if it.get('confidence') == 'verified']
+unverified = [it for it in issues if it.get('confidence') != 'verified']
+lines += ['', '### 🔴 实证问题（verified——diff/源码/CI 日志中核实）']
+for it in verified:
     lines.append('- **%s:%s** — %s' % (it.get('file'), it.get('line'), it.get('problem', '')))
     if it.get('fix'):
         lines.append('  建议：%s' % it['fix'])
-if not issues:
+if not verified:
+    lines.append('-（无）')
+lines += ['', '### ❓ 未验证疑点（unverified——供人工复核，不构成 Major 依据）']
+for it in unverified:
+    lines.append('- **%s:%s** — %s' % (it.get('file'), it.get('line'), it.get('problem', '')))
+    if it.get('fix'):
+        lines.append('  建议：%s' % it['fix'])
+if not unverified:
     lines.append('-（无）')
 # 尾注带 head sha 与机器可读 verdict：workflow 用 verdict=N 标记解析上次结论，
 # 决定 edit-in-place 与是否需要变差通知。
 sha = os.environ.get('PR_HEAD_SHA', '')
 stamp = ('审查于 head %s · ' % sha) if sha else ''
 lines += ['', '**理由**：%s' % (obj.get('reason', '') or '',), '',
-          '_%s由 ai-review v23 生成（DeepSeek · tool_use 结构化 · 只读审查）· verdict=%s_' % (stamp, obj['verdict'])]
+          '_%s由 ai-review v24 生成（DeepSeek · tool_use 结构化 · 只读审查）· verdict=%s_' % (stamp, obj['verdict'])]
 open('review.md', 'w', encoding='utf-8').write('\n'.join(lines))

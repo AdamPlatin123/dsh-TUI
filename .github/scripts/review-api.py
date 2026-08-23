@@ -24,6 +24,13 @@ ref_section = '\n'.join(
 callers = materials.get('callers') or {}
 callers_section = '\n\n'.join(
     '### 调用方: %s\n```\n%s\n```' % (s, ctx) for s, ctx in callers.items()) or '（无——grep 未命中或 diff 未改导出）'
+ci = materials.get('ci') or {}
+ci_section = ci.get('summary') or '（无 CI 记录）'
+if ci.get('failed_log_tail'):
+    ci_section += '\n\n### 失败日志尾部（权威事实）\n```\n%s\n```' % ci['failed_log_tail']
+prior = materials.get('prior_comments') or []
+prior_section = '\n\n'.join(
+    '**%s**: %s' % (p['author'], p['body']) for p in prior) or '（无）'
 
 prompt = f"""你是资深 PR 审查员。审查以下 PR（材料：标题、描述、权威 diff、涉及文件全文、引用路径存在性表、被改导出的调用方上下文）。
 对照文件全文核实 diff 中的注释/文案/常量引用是否与源码一致；跑不了测试就如实说明。
@@ -49,6 +56,16 @@ prompt = f"""你是资深 PR 审查员。审查以下 PR（材料：标题、描
 ## 被改导出的调用方上下文（git grep 实证，排除 diff 涉及文件自身）
 {callers_section}
 
+## CI 结果与失败日志（本仓库真实跑出的权威事实）
+{ci_section}
+
+CI 归因三分法：失败断言若落在 diff 改动域且与 diff 逻辑相关 → 真回归（计入 Major 依据）；
+与已知 flaky 脚本特征相符或与 diff 无关 → flaky/预存（只记录不算档位）。CI 全绿不证明
+新行为有覆盖——覆盖缺口仍按未验证处理。
+
+## 往轮人工反馈（PR 作者/维护者在本 PR 已说过的话）
+{prior_section}
+
 ## 认知边界契约（必须遵守）
 1. 你的源码视野 = 涉及文件全文 + 引用存在性表 + 调用方上下文，三者之外你没有事实依据。
 2. 禁止对视野外的文件下"不存在/缺失"类结论。被引用路径若表中标注"存在"，即视为存在，
@@ -56,7 +73,11 @@ prompt = f"""你是资深 PR 审查员。审查以下 PR（材料：标题、描
    中被误报缺失）。
 3. 调用方上下文是判断间接影响（改了导出后调用处是否仍成立）的事实依据；
    grep 未命中不表示无调用方（动态调用 grep 不到），只表示无静态命中。
-4. 无法核实的点在 issues 中标注"（未验证）"，让人类决定是否追查——宁可标注，不可臆断。
+4. 无法核实的点必须在 issues 中标 confidence=unverified，让人类决定是否追查——宁可标注，不可臆断。
+5. 档位校准：Need Major Fix 必须有至少一个 confidence=verified 的实证问题作依据
+   （含 CI 归因为真回归）；全部问题都是 unverified 时档位最高 Need Minor Fix。
+6. 往轮反馈中作者已明确"已修复/已处理/误判澄清"的项不得重复报告，除非你从 diff/CI 中
+   拿到了与澄清矛盾的新证据（此时引用该澄清说明矛盾点）。
 """
 
 SCHEMA = {
@@ -76,8 +97,10 @@ SCHEMA = {
                         'line': {'type': 'integer'},
                         'problem': {'type': 'string'},
                         'fix': {'type': 'string'},
+                        'confidence': {'type': 'string', 'enum': ['verified', 'unverified'],
+                                       'description': 'verified=有 diff/源码/CI 日志实证；unverified=推理或视野受限'},
                     },
-                    'required': ['file', 'line', 'problem'],
+                    'required': ['file', 'line', 'problem', 'confidence'],
                 },
             },
             'reason': {'type': 'string'},
