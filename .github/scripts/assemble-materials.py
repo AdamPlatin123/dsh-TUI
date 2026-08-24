@@ -35,7 +35,10 @@ if m:
         meta = {'title': up.get('title') or meta['title'], 'body': up.get('body') or ''}
     except Exception:
         pass  # 上游拉取失败则退回 fork 元数据
-diff = gh('pr', 'diff', prn, '--repo', repo)
+# diff 语境修正（#489 作者纠错）：fork main 领先于上游 PR 的 base 时，fork 上的
+# pr diff 会混入 base 差异（把 main 新增内容算成 PR 改动、体积虚增、伪超范围）。
+# 复测场景必须用上游 PR 的权威 diff（其 base 即作者声明的 base）。
+diff = gh('pr', 'diff', m.group(1) if m else prn, '--repo', UPSTREAM_REPO if m else repo)
 
 # 巨型 diff（锁文件/全量重排）会爆材料与上下文窗口：截断并显式标记，
 # 模型看到标记即知视野受限，不会误以为看全了。
