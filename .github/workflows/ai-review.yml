@@ -27,7 +27,7 @@ jobs:
   review:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}", submodules: recursive, fetch-depth: 0 }
@@ -70,7 +70,7 @@ jobs:
           fi
           PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
           # GitHub 评论上限 65536：防御性截断（正常结论远小于此）。
-          VERDICT=$(grep -o 'verdict=[^_]*' review.md | head -1 | cut -d= -f2)
+          VERDICT=$(grep -o 'verdict=[^_]*' review.md | tail -1 | cut -d= -f2)
           if [ "$(wc -c < review.md)" -gt 60000 ]; then
             { head -c 60000 review.md; echo; tail -1 review.md; } > review.md.tmp && mv review.md.tmp review.md
           fi

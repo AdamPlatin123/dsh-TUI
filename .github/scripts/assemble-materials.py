@@ -117,13 +117,23 @@ print('materials: diff=%dB(trunc=%s) files=%d callers=%d' % (
 # 归因规则（真回归/flaky/预存）交给 prompt 契约侧。
 checks = gh('pr', 'checks', prn, '--repo', repo)
 ci = {'summary': checks.strip()[:4000], 'failed_log_tail': ''}
-if checks and 'fail' in checks:
-    m = re.search(r'runs/(\d+)', checks)
-    if m:
-        log = subprocess.run(
-            ['gh', 'run', 'view', m.group(1), '--repo', repo, '--log-failed'],
-            capture_output=True, text=True).stdout
-        ci['failed_log_tail'] = '\n'.join(log.splitlines()[-80:])
+# 自审实证修复：checks 表格仅在事件触发的 run 关联时含 runs/ URL，dispatch 场景
+# 恒空——改按 PR head sha 拉失败 run（不依赖 checks 关联）。
+import subprocess as sp
+head_sha = sp.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+runs = sp.run(['gh', 'run', 'list', '--repo', repo, '--head-sha', head_sha,
+               '--json', 'databaseId,conclusion', '--limit', '10'],
+              capture_output=True, text=True).stdout
+try:
+    for r in json.loads(runs or '[]'):
+        if r.get('conclusion') == 'failure':
+            log = sp.run(['gh', 'run', 'view', str(r['databaseId']), '--repo', repo, '--log-failed'],
+                         capture_output=True, text=True).stdout
+            if log:
+                ci['failed_log_tail'] = '\n'.join(log.splitlines()[-80:])
+                break
+except Exception:
+    pass
 # ── v24③ 往轮人工反馈（防重复报已澄清/已修复项）───────────────────────
 # 只取人类评论（排除 bot 与我方转发），最近 6 条、每条截 400 字。
 meta_full = json.loads(gh('pr', 'view', prn, '--repo', repo, '--json', 'comments'))
