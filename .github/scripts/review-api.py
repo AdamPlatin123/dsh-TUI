@@ -136,7 +136,7 @@ req = urllib.request.Request(
 data = None
 for attempt in range(3):
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             data = json.load(resp)
         break
     except Exception as e:
