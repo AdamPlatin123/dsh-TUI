@@ -29,7 +29,7 @@ jobs:
   review:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}", submodules: recursive, fetch-depth: 0 }
@@ -77,7 +77,7 @@ jobs:
           # 先取 verdict 再截断（自审实证修复）：verdict footer 在末行，先截断会把它
           # 切掉导致 label/变差通知失效。仅在真正超限时截断并保留末行（无条件追加
           # 会让正常大小的评论尾注重复——自审实证）。
-          VERDICT=$(grep -o 'verdict=[^_]*' review.md | head -1 | cut -d= -f2)
+          VERDICT=$(grep -o 'verdict=[^_]*' review.md | tail -1 | cut -d= -f2)
           if [ "$(wc -c < review.md)" -gt 60000 ]; then
             { head -c 60000 review.md; echo; tail -1 review.md; } > review.md.tmp && mv review.md.tmp review.md
           fi
