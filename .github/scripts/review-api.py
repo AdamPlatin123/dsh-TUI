@@ -5,7 +5,7 @@
 materials.json: {"title": str, "body": str, "diff": str, "diff_truncated": bool,
                  "files": {"path": "content"}, "referenced": {"path": exists_bool},
                  "callers": {"symbol": "grep 上下文"}}
-失败语义：HTTP 重试 2 次后仍失败、或响应无 tool_use 且 text 为空 → 非零退出
+失败语义：HTTP+无效提交合计最多 4 次尝试后仍失败、或最终响应无 tool_use 且 text 为空 → 非零退出
 （让 workflow 步骤红掉，而不是走回退发一条空评论）。
 """
 import json
