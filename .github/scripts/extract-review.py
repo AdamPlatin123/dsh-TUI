@@ -24,7 +24,8 @@ if not obj:
     # 输出可能混入 ANSI 转义与 CRLF：JSON 严格模式拒绝字符串内控制字符，
     # 解析前剥离（本地复现用 GitHub 评论（已剥离）成功、CI 原始输出失败的差异即在此）。
     raw = re.sub(r'\x1b\[[0-9;?]*[ -/]*[@-~]', '', raw).replace('\r\n', '\n').replace('\r', '\n')
-    start = raw.find('{"verdict"')
+    m = re.search(r'\{\s*"verdict"', raw)
+    start = m.start() if m else -1
     if start >= 0:
         depth, instr, esc = 0, False, False
         for i, ch in enumerate(raw[start:], start):

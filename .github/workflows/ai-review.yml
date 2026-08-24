@@ -39,14 +39,34 @@ jobs:
           # 检出后的 HEAD 即 PR head：渲染尾注用它标识"审查的是哪个 commit"。
           git rev-parse --short=7 HEAD > .pr-head-sha
           # 脚本获取：工作树（PR 检出自带）优先，origin/main 与 raw URL 兜底（输出落盘）。
-          get_script() { test -s ".github/scripts/$1" && cp ".github/scripts/$1" "$1" || { git show "origin/main:.github/scripts/$1" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/$1"; } > "$1"; }
+          TRUST_HEAD="${{ github.event.pull_request.head.ref }}"
+          # 信任链（安全修复）：审查脚本一律从可信源 origin/main 取——被审 PR 自带的
+          # .github/scripts/* 不得在含 GH_TOKEN/DEEPSEEK_API_KEY 的环境执行。
+          # 唯一例外：部署分支（ci/ai-review-bot）自审——其工作树脚本即待部署内容。
+          get_script() {
+            if [ "$TRUST_HEAD" = "ci/ai-review-bot" ] && [ -s ".github/scripts/$1" ]; then
+              cp ".github/scripts/$1" "$1"
+            else
+              { git show "origin/main:.github/scripts/$1" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/$1"; } > "$1"
+            fi
+          }
           get_script extract-review.py
           test -s extract-review.py
       - name: Assemble materials
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
-          get_script() { test -s ".github/scripts/$1" && cp ".github/scripts/$1" "$1" || { git show "origin/main:.github/scripts/$1" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/$1"; } > "$1"; }
+          TRUST_HEAD="${{ github.event.pull_request.head.ref }}"
+          # 信任链（安全修复）：审查脚本一律从可信源 origin/main 取——被审 PR 自带的
+          # .github/scripts/* 不得在含 GH_TOKEN/DEEPSEEK_API_KEY 的环境执行。
+          # 唯一例外：部署分支（ci/ai-review-bot）自审——其工作树脚本即待部署内容。
+          get_script() {
+            if [ "$TRUST_HEAD" = "ci/ai-review-bot" ] && [ -s ".github/scripts/$1" ]; then
+              cp ".github/scripts/$1" "$1"
+            else
+              { git show "origin/main:.github/scripts/$1" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/scripts/$1"; } > "$1"
+            fi
+          }
           get_script assemble-materials.py
           python3 assemble-materials.py "$PRN"
           get_script review-api.py
