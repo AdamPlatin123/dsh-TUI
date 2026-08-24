@@ -139,18 +139,32 @@ req = urllib.request.Request(
     })
 
 data = None
-for attempt in range(3):
+for attempt in range(4):
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
             data = json.load(resp)
-        break
     except Exception as e:
-        if attempt == 2:
+        if attempt == 3:
             sys.stderr.write('HTTP 失败（重试 %d 次后）：%s\n' % (attempt, e))
             sys.exit(3)
-        wait = (5, 15)[attempt]
+        wait = (5, 15, 30)[attempt]
         sys.stderr.write('HTTP 失败（第 %d 次）：%s——%ds 后重试\n' % (attempt + 1, e, wait))
         time.sleep(wait)
+        continue
+    # 应用层校验（实证防御）：模型偶发在长思考后提交空 tool_use 输入（required
+    # 全缺、review.out.json={}）——HTTP 成功不等于提交有效，无效则重发一次请求。
+    ti = next((b.get('input') for b in data.get('content', [])
+               if b.get('type') == 'tool_use' and b.get('name') == 'submit_review'), None)
+    if ti and ti.get('verdict') in ('Mergeable', 'Need Minor Fix', 'Need Major Fix'):
+        break
+    if attempt < 3:
+        sys.stderr.write('提交无效（verdict 缺失），30s 后重发请求\n')
+        time.sleep(30)
+        # 重建请求体（Request 对象不可复用）
+        req = urllib.request.Request(req.full_url, data=req.data, headers=dict(req.headers))
+    else:
+        data = data  # 保留最后一次响应走后续兜底路径
+        break
 
 tool_input = None
 for b in data.get('content', []):
