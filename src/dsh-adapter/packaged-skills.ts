@@ -24,6 +24,17 @@ interface SkillRegistryLike {
   }): () => void
 }
 
+/** Resolve package-root resources from both src/ and compiled lib/ layouts. */
+function findPackageRoot(modulePath: string): string | undefined {
+  let current = dirname(modulePath)
+  while (true) {
+    if (existsSync(join(current, 'package.json'))) return current
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
+}
+
 /**
  * Parse a SKILL.md into name/description/content. Dependency-free: the
  * packaged files use single-line scalar frontmatter fields only.
@@ -51,9 +62,9 @@ function parseSkillMarkdown(raw: string, fallbackName: string): { name: string; 
 export function registerPackagedSkills(ctx: Context): void {
   const registry = ctx.get('skills') as SkillRegistryLike | undefined
   if (!registry) return
-  // import.meta.url is lib/types/packaged-skills.js — two levels up is the
-  // package root, which is where `files` ships the skills/ directory.
-  const skillsRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills')
+  const packageRoot = findPackageRoot(fileURLToPath(import.meta.url))
+  if (packageRoot === undefined) return
+  const skillsRoot = join(packageRoot, 'skills')
   if (!existsSync(skillsRoot)) return
   for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue

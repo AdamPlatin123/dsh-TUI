@@ -39,12 +39,20 @@ function makeStreams() {
 
 const submitted = []
 const steered = []
+const commands = []
 const channel = {
   mode: { id: 'default', plan: false },
   modeIndex: 0,
   cycleMode() {},
-  commandList: [],
-  commandCompletions: () => [],
+  commandList: [
+    { name: 'skills', description: 'List available skills' },
+    { name: 'model', description: 'Show the active model' },
+  ],
+  commandCompletions(input) {
+    if (input !== '/skills' && input !== '/model') return []
+    const name = input.slice(1)
+    return [{ name, description: name, commandLine: input, replacement: `${input} ` }]
+  },
   notifications: [],
   pending: [],
   working: false,
@@ -63,7 +71,7 @@ const instance = await render(
     channel,
     helpOpen: false,
     onToggleHelp() {},
-    onRunCommand: () => false,
+    onRunCommand(name) { commands.push(name); return true },
     selectionActive: false,
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
@@ -108,6 +116,49 @@ check(
   'batched Windows input while streaming preserves npm before steer',
   steered.length === 1 && steered[0] === 'npm',
   JSON.stringify(steered),
+)
+
+// A command and Enter can arrive as win32-input-mode records in one stdin
+// read. React has not repainted the completion overlay yet, so PromptInput
+// must use the synchronous value mirror to keep safe live commands local.
+const win32Record = (virtualKey, scanCode, codePoint) =>
+  `\x1b[${virtualKey};${scanCode};${codePoint};1;0;1_`
+const batchedCommand = (letters) => [
+  win32Record(191, 53, 47),
+  ...letters.map(([virtualKey, scanCode, codePoint]) =>
+    win32Record(virtualKey, scanCode, codePoint)),
+  win32Record(13, 28, 13),
+].join('')
+
+stdin.write(batchedCommand([
+  [83, 31, 115],
+  [75, 37, 107],
+  [73, 23, 105],
+  [76, 38, 108],
+  [76, 38, 108],
+  [83, 31, 115],
+]))
+await new Promise(resolve => setTimeout(resolve, 300))
+
+check(
+  'batched /skills while streaming executes locally before the overlay repaints',
+  commands.length === 1 && commands[0] === 'skills' && steered.length === 1,
+  `commands=${JSON.stringify(commands)} steered=${JSON.stringify(steered)}`,
+)
+
+stdin.write(batchedCommand([
+  [77, 50, 109],
+  [79, 24, 111],
+  [68, 32, 100],
+  [69, 18, 101],
+  [76, 38, 108],
+]))
+await new Promise(resolve => setTimeout(resolve, 300))
+
+check(
+  'batched idle-only commands keep the existing steer behavior while streaming',
+  commands.length === 1 && steered.length === 2 && steered[1] === '/model',
+  `commands=${JSON.stringify(commands)} steered=${JSON.stringify(steered)}`,
 )
 
 // Terminals that cannot report modified Enter keys still expose Ctrl+J as a
