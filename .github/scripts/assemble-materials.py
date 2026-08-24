@@ -133,7 +133,7 @@ prior = []
 for c in reversed(meta_full.get('comments') or []):
     if len(prior) >= 6:
         break
-    if c['author']['login'] in ('github-actions', 'AdamPlatin123'):
+    if c['author']['login'].startswith('github-actions') or c['author']['login'] == 'AdamPlatin123':
         continue
     prior.append({'author': c['author']['login'], 'body': (c['body'] or '')[:400]})
 materials = json.load(open('materials.json', encoding='utf-8'))

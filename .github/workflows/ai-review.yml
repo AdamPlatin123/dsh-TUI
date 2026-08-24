@@ -36,7 +36,6 @@ jobs:
       - name: Prepare
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          gh pr diff "${{ github.event.inputs.pr_number || github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" > .pr-review.diff || git diff "${{ github.event.pull_request.base.sha }}".."${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || github.event.pull_request.head.sha }}" > .pr-review.diff
           # 检出后的 HEAD 即 PR head：渲染尾注用它标识"审查的是哪个 commit"。
           git rev-parse --short=7 HEAD > .pr-head-sha
           # 脚本获取：工作树（PR 检出自带）优先，origin/main 与 raw URL 兜底（输出落盘）。
@@ -62,6 +61,7 @@ jobs:
           python3 review-api.py materials.json
           echo "raw=$(wc -c < raw.out)B"
       - name: Render and post
+        if: always()
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           export PR_HEAD_SHA="$(cat .pr-head-sha)"
@@ -70,7 +70,7 @@ jobs:
           else
             echo "::warning::结构化提取失败，走原始内容回退"
             printf '## AI 审核参考（⚠️ 输出格式异常，以下为原始内容）\n\n```\n' > review.md
-            cat raw.out >> review.md
+            cat raw.out >> review.md 2>/dev/null || echo '(无输出)' >> review.md
             printf '\n```\n' >> review.md
           fi
           PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"

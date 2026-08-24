@@ -157,8 +157,12 @@ open('raw.out', 'w', encoding='utf-8').write(text)
 if tool_input is not None:
     json.dump(tool_input, open('review.out.json', 'w', encoding='utf-8'), ensure_ascii=False)
     sys.stderr.write('stop_reason=%s tool_use=ok text=%dB\n' % (data.get('stop_reason'), len(text)))
+elif text:
+    # 自审实证修复：text 非空时是合法审查内容——落 raw.out 让 extract 的平衡扫描
+    # 兜底渲染，不得 exit(2)（会跳过 Render 步骤把内容丢弃，双路兜底名不副实）。
+    sys.stderr.write('stop_reason=%s tool_use=缺失 text=%dB——走 raw 兜底渲染\n' % (data.get('stop_reason'), len(text)))
 else:
-    sys.stderr.write('stop_reason=%s tool_use=缺失 text=%dB——' % (data.get('stop_reason'), len(text))
+    sys.stderr.write('stop_reason=%s tool_use=缺失 text=0B——' % (data.get('stop_reason'),)
                      + ('max_tokens 被思考吃光；上调 max_tokens 或换非思考模型\n'
-                        if data.get('stop_reason') == 'max_tokens' else '模型未按 tool_choice 提交\n'))
+                        if data.get('stop_reason') == 'max_tokens' else '模型未提交任何内容\n'))
     sys.exit(2)
