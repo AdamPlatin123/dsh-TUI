@@ -70,8 +70,8 @@ jobs:
           fi
           PRN="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
           # GitHub 评论上限 65536：防御性截断（正常结论远小于此）。
-          head -c 60000 review.md > review.md.tmp && mv review.md.tmp review.md
           VERDICT=$(grep -o 'verdict=[^_]*' review.md | head -1 | cut -d= -f2)
+          { head -c 60000 review.md; echo; tail -1 review.md; } > review.md.tmp && mv review.md.tmp review.md
           if [ -z "$VERDICT" ]; then VERDICT="（回退模式——原始内容，未出结论）"; fi
           # ---- 总览评论 edit-in-place：同 PR 只保留一条 AI 审查总览。
           COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PRN/comments?per_page=100")

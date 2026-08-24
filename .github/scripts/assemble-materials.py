@@ -59,9 +59,14 @@ for line in diff.splitlines():
 # diff 中引用、但不在 diff 涉及文件里的仓库路径：在 PR head 检出中实测存在性。
 # 根因修复（上游 #435 误判）：被引用文件（如 CI 引用的脚本）不在 diff 中时，
 # bot 看不见就保守误报"可能不存在"——把实测存在性作为事实喂给它。
+# 白名单化（自审实证修复）：裸正则会把 diff 头 a//b/ 前缀、注释示例路径、
+# URL 路径段当成"仓库引用"并测得全 False——污染存在性表为假"不存在"。
+TOP_DIRS = ('src/', 'scripts/', 'docs/', 'presets/', 'bin/', '.github/', 'vendor/', 'skills/')
 referenced = {}
 for m in re.finditer(r'[\w.-]+(?:/[\w.-]+)+\.(?:tsx|jsx|ts|js|mjs|cjs|md|markdown|ya?ml|json|py)', diff):
-    path = m.group(0).rstrip('`"\',')
+    path = re.sub(r'^[ab]/', '', m.group(0).rstrip('`"\','))
+    if '://' in m.group(0) or not path.startswith(TOP_DIRS):
+        continue
     if path and path not in files and path not in referenced:
         referenced[path] = os.path.exists(path)
 
