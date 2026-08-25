@@ -165,4 +165,45 @@ check('narrow terminal hides the maid art too (WHALE_MIN_COLUMNS shared)', () =>
   assert.ok(maidNarrow.plain.includes('maid-model-probe'), 'header details missing')
 })
 
+// SGR residue guard (the WT report): renderSpriteRows run-length-encodes
+// styles, and SGR is stateful — a single-sided cell written as a bare fg()
+// inherits the previous cell's bg() under its transparent half, painting
+// stale colors through the hair lines (25 ghost cells on Windows Terminal's
+// pure-black default background before the fix). Walk a state machine over
+// the emitted bytes and assert every half-block paints exactly the colors
+// the sprite grid asks for.
+{
+  const { WHALE_MAID_FRAMES, MAID_PALETTE } = await import('../src/components/whaleMaidFrames.ts')
+  const { renderSpriteRows } = await import('../src/components/Whale.tsx')
+  const frame = WHALE_MAID_FRAMES[0]
+  const rows = renderSpriteRows(frame, MAID_PALETTE)
+  const ghosts = []
+  rows.forEach((ansiRow, tr) => {
+    let fgCur = null
+    let bgCur = null
+    let col = 0
+    for (const token of ansiRow.match(/\x1b\[[0-9;]*m|[^\x1b]/g) ?? []) {
+      if (token.charCodeAt(0) === 27) {
+        if (token === '\x1b[0m') { fgCur = null; bgCur = null }
+        else {
+          const parts = token.slice(2, -1).split(';').map(Number)
+          if (parts[0] === 38 && parts[1] === 2) fgCur = parts.slice(2)
+          if (parts[0] === 48 && parts[1] === 2) bgCur = parts.slice(2)
+        }
+      } else if (token === '▀' || token === '▄' || token === ' ') {
+        const up = MAID_PALETTE[frame.rows[tr * 2]?.[col]] ?? null
+        const lo = MAID_PALETTE[frame.rows[tr * 2 + 1]?.[col]] ?? null
+        const painted = token === '▀' ? [fgCur, bgCur] : token === '▄' ? [bgCur, fgCur] : [null, null]
+        for (const [want, got] of [[up, painted[0]], [lo, painted[1]]]) {
+          if (String(want) !== String(got)) ghosts.push(`row${tr} col${col} ${token} want=${want} got=${got}`)
+        }
+        col++
+      }
+    }
+  })
+  check('no SGR residue: every half-block paints exactly the sprite colors', () => {
+    assert.deepEqual(ghosts, [], `ghost cells:\n${ghosts.slice(0, 5).join('\n')}`)
+  })
+}
+
 console.log(`\nAll ${checks} maid-toggle checks passed.`)

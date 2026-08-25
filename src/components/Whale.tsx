@@ -49,10 +49,14 @@ export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb 
         seq = fg(up) + bg(lo)
         ch = '▀'
       } else if (up !== undefined) {
-        seq = fg(up)
+        // RESET first: SGR is stateful — a bare fg() here would keep the
+        // previous cell's bg() alive under the ▀, painting the "transparent"
+        // lower half with a stale color (the WT residue the maid sprite's
+        // thin hair lines exposed; whale's solid body almost never hits it).
+        seq = RESET + fg(up)
         ch = '▀'
       } else if (lo !== undefined) {
-        seq = fg(lo)
+        seq = RESET + fg(lo)
         ch = '▄'
       } else {
         seq = ''
