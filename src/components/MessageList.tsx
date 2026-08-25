@@ -1403,6 +1403,7 @@ export function LogoHeader({
   cwd,
   whale = true,
   skipIntro = false,
+  maid = false,
 }: {
   model: string
   effort?: string | undefined
@@ -1411,6 +1412,7 @@ export function LogoHeader({
   /** Jump straight to the settled header (long-session resume: the ~3.4s
    *  opening animation competes with transcript mount batches). */
   skipIntro?: boolean
+  maid?: boolean
 }): React.ReactNode {
   // Minimal mode drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
@@ -1418,6 +1420,7 @@ export function LogoHeader({
   return (
     <Box flexDirection="column" marginBottom={1}>
       <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} skipIntro={skipIntro} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} maid={maid} />
     </Box>
   )
 }

@@ -263,6 +263,9 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 鲸鱼娘彩蛋开关回归：foldMaidActive 折叠（command/run last-wins）、
+// bind 恢复、persona 段替换不越界、whale 路径零回归。
+    ["verify-maid-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-maid-toggle.mjs']],
 // /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
