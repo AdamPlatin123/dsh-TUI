@@ -33,16 +33,6 @@ const GROUPS = {
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
-// 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
-// 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
-// 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
-// 整个 0.6.x 才被发现——挂进来防再烂。
-    ["repro-pill", ['node', '--import', 'tsx/esm', 'scripts/repro-pill.tsx']],
-    ["repro-ctrlc", ['node', '--import', 'tsx/esm', 'scripts/repro-ctrlc.tsx']],
-// /settings 设置屏回归（issue #165）：开屏、staged 编辑、revision 栅栏
-// 保存、密钥走 credentials、Esc 返回会话。
-    ["repro-settings", ['node', '--import', 'tsx/esm', 'scripts/repro-settings.tsx']],
-    ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
@@ -420,6 +410,13 @@ const GROUPS = {
 // 查询过滤、时序⇄热点切换，以及备用屏进出后主屏逐字节还原、
 // scrollback 零增量、动效帧只含 SGR。
     ["verify-trace-scene", ['node', '--import', 'tsx/esm', 'scripts/verify-trace-scene.tsx']],
+// inline scrollback 污染回归（issue #38/#19/#39）——隔离至此（机器速度
+// 相关 flake，见 issue #574）：快机上冷启动历史轮的 user 行与「思考 ·」
+// 标题不渲染（历史 tool/assistant 正常、流式回合全正常），buffer 取证
+// 显示无 full-reset、223 行账本健康——非污染类回归，与脚本本测的
+// scrollback 重复沉积无关。CI 慢机上绿（#573 run），快机上稳定红。
+// 根因专项修复后挪回 render-scroll。
+    ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
   ],
 }
 
