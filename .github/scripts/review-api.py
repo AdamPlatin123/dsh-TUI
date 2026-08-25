@@ -21,6 +21,9 @@ files_section = '\n\n'.join(
 ref = materials.get('referenced') or {}
 ref_section = '\n'.join(
     '- %s: %s' % (p, '存在' if e else '不存在') for p, e in ref.items()) or '（无）'
+constructors = materials.get('constructors') or {}
+constructors_section = '\n\n'.join(
+    '### 字段构造点: %s\n```\n%s\n```' % (f, ctx) for f, ctx in constructors.items()) or '（无——diff 未消费外部字段或 grep 未命中）'
 callers = materials.get('callers') or {}
 callers_section = '\n\n'.join(
     '### 调用方: %s\n```\n%s\n```' % (s, ctx) for s, ctx in callers.items()) or '（无——grep 未命中或 diff 未改导出）'
@@ -56,6 +59,9 @@ prompt = f"""你是资深 PR 审查员。审查以下 PR（材料：标题、描
 ## 被改导出的调用方上下文（git grep 实证，排除 diff 涉及文件自身）
 {callers_section}
 
+## diff 消费字段的构造点（git grep 实证——数据流上游一跳，契约第 8/10 条的依据）
+{constructors_section}
+
 ## CI 结果与失败日志（本仓库真实跑出的权威事实）
 {ci_section}
 
@@ -83,6 +89,17 @@ CI 归因三分法：失败断言若落在 diff 改动域且与 diff 逻辑相�
    转义，剥离字符集因此不含反斜杠）；求值后仍无把握的，改用提问式表述
    （"请核对 X 是否…"）而非陈述式断言——语言语义知识错误是实证审查中最隐蔽的
    误报源（历史案例：把单引号串里的转义序列误读为字面反斜杠）。
+8. 形态变换审查（比较类代码必查）：diff 中的相等/前缀/包含判断（===、startsWith、
+   includes）作用于路径、ID、名称类字符串时，必须核对两侧的构造管道（上方"字段
+   构造点"即证据）是否存在形态变换（resolve 绝对化/去尾斜杠/win32 反斜杠与大小写/
+   trim）。两侧构造方不同且形态可能漂移时，严格比较即缺陷——标 verified 并引用
+   构造点行号。无法确认两侧形态时标 unverified。（#551 教训：displayCwd 经
+   resolve() 规范化、cwd 保留原形，=== 在尾斜杠/win32 下静默失效。）
+9. 平台盲区声明：diff 涉及 process.platform 分支且 PR 无对应平台测试的，该分支下
+   的所有行为结论一律标 unverified（Linux CI 无法执行 win32 分支——纸面推演不算实证）。
+10. 测试形态真实性：评估 PR 新增/改动的断言时，核对其构造的输入形态是否与上方"字段
+    构造点"的实际构造语义一致（构造了 displayCwd === cwd 的假想形态而真实管道经
+    resolve() 规范化 = 断言对真实回归免疫——此类要指出，不算有效覆盖）。
 """
 
 SCHEMA = {

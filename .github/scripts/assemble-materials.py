@@ -107,9 +107,43 @@ for sym in symbols:
         callers[sym] = text
         budget -= len(text)
 
+# ── v25A 字段构造方追溯（数据流下游一跳）─────────────────────────────
+# 盲区实证（#551 回顾预审）：diff 消费 obj.field 时构造方可能在别的文件里
+# 做形态变换（displayCwd 经 channel.ts 的 resolve() 规范化），严格 === 比较
+# 在形态不一致时静默失效。提取 diff 中消费的属性读取，grep 其赋值/构造点。
+FIELD_RE = re.compile(r'[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]+)+')
+ASSIGN_RE = re.compile(r'[.\[]\s*[a-zA-Z_][\w]*\s*[.\]]?\s*=\s*|^\s*[a-zA-Z_][\w]*\s*:')
+consumed_fields = set()
+for line in diff.splitlines():
+    if not line.startswith('+') or line.startswith('+++'):
+        continue
+    for m in FIELD_RE.finditer(line[1:]):
+        parts = m.group(0).split('.')
+        if len(parts) == 2 and parts[1] not in ('length', 'prototype', 'type', 'name', 'id', 'current', 'default'):
+            consumed_fields.add(parts[1])
+constructors = {}
+fbudget = 20_000
+for field in sorted(consumed_fields)[:12]:
+    if fbudget <= 0:
+        break
+    hits = []
+    raw = subprocess.run(['git', 'grep', '-n', '--no-color',
+                          '-E', re.escape(field) + r'[[:space:]]*=|^\s*' + re.escape(field) + r'[[:space:]]*:'],
+                         capture_output=True, text=True).stdout
+    for gl in raw.splitlines():
+        if any(f in gl for f in files):  # 构造点在 diff 涉及文件里（视野内）跳过
+            continue
+        hits.append(gl.strip()[:200])
+        if len(hits) >= 6:
+            break
+    if hits:
+        block = '\n'.join(hits)
+        constructors[field] = block[:fbudget]
+        fbudget -= len(block)
+
 json.dump({'title': meta['title'], 'body': meta.get('body') or '', 'diff': diff,
            'diff_truncated': diff_truncated, 'files': files, 'referenced': referenced,
-           'callers': callers},
+           'callers': callers, 'constructors': constructors},
           open('materials.json', 'w', encoding='utf-8'))
 print('materials: diff=%dB(trunc=%s) files=%d callers=%d' % (
     len(diff), diff_truncated, len(files), len(callers)))
