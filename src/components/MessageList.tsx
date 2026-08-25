@@ -1405,8 +1405,7 @@ export function LogoHeader({
   if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} skipIntro={skipIntro} />
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} maid={maid} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} skipIntro={skipIntro} maid={maid} />
     </Box>
   )
 }
