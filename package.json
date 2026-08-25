@@ -270,5 +270,10 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp"
+    ]
   }
 }
