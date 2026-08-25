@@ -130,12 +130,13 @@ for field in sorted(consumed_fields)[:12]:
     raw = subprocess.run(['git', 'grep', '-n', '--no-color',
                           '-E', re.escape(field) + r'[[:space:]]*=|^\s*' + re.escape(field) + r'[[:space:]]*:'],
                          capture_output=True, text=True).stdout
-    for gl in raw.splitlines():
-        if any(f in gl for f in files):  # 构造点在 diff 涉及文件里（视野内）跳过
-            continue
-        hits.append(gl.strip()[:200])
-        if len(hits) >= 6:
-            break
+    # 优先 src/ 的构造点（真实管道），scripts/ 的测试/repro 假数据殿后——
+    # #551 盲测实证：字母序让 repro-*.tsx 的假 displayCwd 淹没 channel.ts 的真构造。
+    src_first = sorted((l for l in raw.splitlines()
+                        if not any(f in l for f in files) and l.startswith('src/')), key=str)
+    other = sorted((l for l in raw.splitlines()
+                    if not any(f in l for f in files) and not l.startswith('src/')), key=str)
+    hits = [l.strip()[:200] for l in (src_first[:4] + other[:2])]
     if hits:
         block = '\n'.join(hits)
         constructors[field] = block[:fbudget]
