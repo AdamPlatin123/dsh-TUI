@@ -14,6 +14,7 @@ const [
   { QuestionStore },
   { LOCAL_COMMANDS },
   { setLang },
+  { settle },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -23,6 +24,7 @@ const [
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
   import('../src/i18n.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 class FakeStdout extends Writable {
@@ -108,6 +110,9 @@ function makeChannel(status: unknown) {
       return status
     },
     listModels: () => Promise.resolve([]),
+    // No dsh-auth-style plugin in this harness: /login renders exactly its
+    // pre-plugin lines (the OAuth account section stays absent).
+    oauthProviderStatuses: async () => undefined,
     commandCompletions(input: string) {
       const prefix = input.replace(/^\//u, '').trim().toLowerCase()
       return this.commandList
@@ -149,9 +154,10 @@ async function runLogin(status: unknown) {
       patchConsole: false,
     },
   )
+  // 启动等待保留固定 delay：假 stdout 丢弃全部帧，没有可轮询的观察点。
   await delay(500)
   stdin.write('/login\r')
-  await delay(700)
+  await settle(() => channel.localCalls.length === 1)
   await instance.unmount()
   assert.equal(channel.localCalls.length, 1, '/login must produce one local report')
   assert.deepEqual(channel.credentialRefs, ['DEEPSEEK_API_KEY'], '/login must query the credentials service')
