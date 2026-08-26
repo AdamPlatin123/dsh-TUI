@@ -157,11 +157,11 @@ check('maid render stays 13 rows tall (no layout growth)', () => {
   assert.ok(maidHeader.plain.includes('dsh-TUI'), 'text logo missing')
 })
 {
-  const { WHALE_FRAMES } = await import('../src/components/whaleFrames.ts')
-  const { renderSpriteRows } = await import('../src/components/Whale.ts')
+  const { WHALE_FRAMES } = await import('../src/components/whaleFrames.js')
+  const { renderSpriteRows } = await import('../src/components/Whale.js')
   // Whale palette mirrors Whale.tsx's private PALETTE (D/B/L/W — not exported).
   const WHALE_PALETTE = { D: [20, 38, 96], B: [78, 111, 255], L: [190, 225, 255], W: [255, 255, 255] }
-  const { WHALE_MAID_FRAMES, MAID_PALETTE } = await import('../src/components/whaleMaidFrames.ts')
+  const { WHALE_MAID_FRAMES, MAID_PALETTE } = await import('../src/components/whaleMaidFrames.js')
   const whaleRows = renderSpriteRows(WHALE_FRAMES[0], WHALE_PALETTE).length
   const maidRows = renderSpriteRows(WHALE_MAID_FRAMES[0], MAID_PALETTE).length
   check('maid sprite renders exactly as many rows as whale (no layout growth)', () => {
@@ -184,7 +184,7 @@ check('narrow terminal hides the maid art too (WHALE_MIN_COLUMNS shared)', () =>
 // the emitted bytes and assert every half-block paints exactly the colors
 // the sprite grid asks for.
 {
-  const { WHALE_MAID_FRAMES, MAID_PALETTE } = await import('../src/components/whaleMaidFrames.ts')
+  const { WHALE_MAID_FRAMES, MAID_PALETTE } = await import('../src/components/whaleMaidFrames.js')
   const { renderSpriteRows } = await import('../src/components/Whale.tsx')
   const frame = WHALE_MAID_FRAMES[0]
   const rows = renderSpriteRows(frame, MAID_PALETTE)
