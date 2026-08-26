@@ -154,10 +154,21 @@ check('maid=true renders the whale girl (maid palette present)', () => {
   assert.ok(maidHeader.plain.includes('maid-model-probe'), 'header details missing')
 })
 check('maid render stays 13 rows tall (no layout growth)', () => {
-  const rows = new Set()
-  for (const write of maidHeader.raw.split('\n')) rows.add(write)
   assert.ok(maidHeader.plain.includes('dsh-TUI'), 'text logo missing')
 })
+{
+  const { WHALE_FRAMES } = await import('../src/components/whaleFrames.ts')
+  const { renderSpriteRows } = await import('../src/components/Whale.ts')
+  // Whale palette mirrors Whale.tsx's private PALETTE (D/B/L/W — not exported).
+  const WHALE_PALETTE = { D: [20, 38, 96], B: [78, 111, 255], L: [190, 225, 255], W: [255, 255, 255] }
+  const { WHALE_MAID_FRAMES, MAID_PALETTE } = await import('../src/components/whaleMaidFrames.ts')
+  const whaleRows = renderSpriteRows(WHALE_FRAMES[0], WHALE_PALETTE).length
+  const maidRows = renderSpriteRows(WHALE_MAID_FRAMES[0], MAID_PALETTE).length
+  check('maid sprite renders exactly as many rows as whale (no layout growth)', () => {
+    assert.equal(maidRows, whaleRows, `maid ${maidRows} rows vs whale ${whaleRows}`)
+    assert.equal(whaleRows, 13, `whale baseline drifted: ${whaleRows}`)
+  })
+}
 
 const maidNarrow = await renderHeader({ columns: 63, maid: true })
 check('narrow terminal hides the maid art too (WHALE_MIN_COLUMNS shared)', () => {

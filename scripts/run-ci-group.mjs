@@ -33,6 +33,15 @@ const GROUPS = {
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
+// 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
+// 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
+// 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
+// 整个 0.6.x 才被发现——挂进来防再烂。
+    ["repro-pill", ['node', '--import', 'tsx/esm', 'scripts/repro-pill.tsx']],
+    ["repro-ctrlc", ['node', '--import', 'tsx/esm', 'scripts/repro-ctrlc.tsx']],
+// /settings 设置屏回归（issue #165）：开屏、staged 编辑、revision 栅栏
+// 保存、密钥走 credentials、Esc 返回会话。
+    ["repro-settings", ['node', '--import', 'tsx/esm', 'scripts/repro-settings.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
