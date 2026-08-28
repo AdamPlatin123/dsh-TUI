@@ -13,6 +13,7 @@ import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
 import { isMinimalMode } from '../minimalMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
+import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
@@ -459,15 +460,18 @@ export function MessageList({
   const paintedOnceRef = React.useRef<Set<number>>(new Set())
   const paintedBaseRef = React.useRef<number | undefined>(undefined)
   /** Window-expansion hold: after the window WIDENS (new rows mounted),
-   *  refuse to tighten for a short hold so the mounted rows actually reach
-   *  the terminal. React commits within one ink frame coalesce — a render
-   *  that mounts rows followed by the measure-tick re-render that drops
-   *  them paints only the DROPPED layout, and never-mounted rows have no
-   *  scrollback copy (preset history at boot vanished — CI
-   *  repro-inline-scrollback). After the hold, tightening is visually
-   *  free: those rows sit in scrollback and the diff skips them. */
+   *  refuse to tighten until a frame containing that layout has actually
+   *  been FLUSHED to the terminal (flush-tick based, issue #574). React
+   *  commits and terminal writes are decoupled — the throttled deferred
+   *  leading edge lets a later commit supersede the wide one inside the
+   *  same task, so a wall-clock hold (the old 120ms timer) expires during
+   *  long cold-cache layout work (~190ms on the repro) and the measure-tick
+   *  re-render still drops the rows before a single byte of them was
+   *  written; never-mounted rows have no scrollback copy and preset history
+   *  vanishes. Once flushed, tightening is visually free: those rows sit in
+   *  scrollback and the diff skips them. */
   const lastStartRef = React.useRef<number>(-1)
-  const holdUntilRef = React.useRef<number>(0)
+  const holdFlushTickRef = React.useRef<number>(-1)
   /** True when frame-budgeted history painting still has batches left
    *  (main-screen open): the layout effect schedules the next slice. */
   const paintPendingRef = React.useRef(false)
@@ -745,15 +749,20 @@ export function MessageList({
       }
     }
     // Expansion hold — AFTER the extension so it tracks the FINAL window:
-    // never tighten within the hold window after a widen. React commits
-    // inside one ink frame coalesce; a mount followed by the measure-tick
-    // re-render that drops the row paints only the DROPPED layout, and the
-    // row's painted-once mark (set at the first commit) is a lie.
-    if (lastStartRef.current >= 0 && start > lastStartRef.current && performance.now() < holdUntilRef.current) {
+    // never tighten past a widen until a frame with that layout has been
+    // flushed (getTerminalFlushTick advanced since the widen). A mount
+    // followed by the measure-tick re-render that drops the row paints only
+    // the DROPPED layout, and the row's painted-once mark (set at the first
+    // commit) is a lie; holding until the flush makes the mark real.
+    if (
+      lastStartRef.current >= 0 &&
+      start > lastStartRef.current &&
+      getTerminalFlushTick() === holdFlushTickRef.current
+    ) {
       start = lastStartRef.current
     }
     if (lastStartRef.current < 0 || start < lastStartRef.current) {
-      holdUntilRef.current = performance.now() + 120
+      holdFlushTickRef.current = getTerminalFlushTick()
     }
     lastStartRef.current = start
   }
