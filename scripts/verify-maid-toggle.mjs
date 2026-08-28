@@ -126,6 +126,11 @@ check('fold: bare /maid toggles on', () => assert.equal(makeChannel([maidRun('')
 check('fold: second bare /maid toggles back off', () => assert.equal(makeChannel([maidRun(''), maidRun('')]).maidActive, false))
 check('fold: `/maid off` deactivates from active', () => assert.equal(makeChannel([maidRun(''), maidRun(' off ')]).maidActive, false))
 check('fold: `/maid off` from inactive stays off', () => assert.equal(makeChannel([maidRun('off')]).maidActive, false))
+// `on` is force-enable, not a flip: a future external plugin adding an
+// `on` subcommand must not bounce an already-active session back to whale.
+check('fold: `/maid on` from inactive activates', () => assert.equal(makeChannel([maidRun('on')]).maidActive, true))
+check('fold: `/maid on` while active stays active (force, not flip)', () =>
+  assert.equal(makeChannel([maidRun(''), maidRun(' on ')]).maidActive, true))
 check('fold: args-bearing /maid (e.g. `/maid hello`) still toggles', () =>
   assert.equal(makeChannel([maidRun(''), maidRun('hello')]).maidActive, false))
 check('fold: other commands never touch the fold', () =>
@@ -153,7 +158,10 @@ check('maid=true renders the whale girl (maid palette present)', () => {
   assert.ok(maidHeader.raw.includes(MAID_PINK), 'maid palette marker missing')
   assert.ok(maidHeader.plain.includes('maid-model-probe'), 'header details missing')
 })
-check('maid render stays 13 rows tall (no layout growth)', () => {
+// Row-count parity lives in the sprite-rows check below (maid rows ==
+// whale rows, whale baseline 13); this one pins the text logo next to the
+// sprite — the layout element the row-count check cannot see.
+check('maid render keeps the text logo beside the art', () => {
   assert.ok(maidHeader.plain.includes('dsh-TUI'), 'text logo missing')
 })
 {

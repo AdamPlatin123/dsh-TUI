@@ -2408,16 +2408,19 @@ export function createChannel(
     return active
   }
   /** Maid persona easter egg: `command/run` for the `maid` command folds
-   *  with toggle semantics (`off` deactivates, any other form flips), so a
-   *  resumed session restores its mascot — the same last-wins shape as the
-   *  mode folds above, plus the flip. */
+   *  with toggle semantics (`off` deactivates, `on` force-activates, any
+   *  other form flips), so a resumed session restores its mascot — the same
+   *  last-wins shape as the mode folds above, plus the flip. `on` is a
+   *  force, not a flip: a future external plugin subcommand spelled `on`
+   *  must not bounce an already-active session back to the whale. */
   const foldMaidActive = (events: readonly SessionEvent[]): boolean => {
     let active = false
     for (const event of events) {
       if ((event as { type: string }).type === 'command/run') {
         const data = event.data as unknown as { name?: string; args?: string }
         if (data?.name === 'maid') {
-          active = typeof data.args === 'string' && data.args.trim() === 'off' ? false : !active
+          const arg = typeof data.args === 'string' ? data.args.trim() : ''
+          active = arg === 'off' ? false : arg === 'on' ? true : !active
         }
       }
     }
