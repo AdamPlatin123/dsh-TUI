@@ -171,6 +171,13 @@ jobs:
 
       - run: pnpm verify:alpha-source
 
+      # alpha 线完整验证补全：这两条此前无任何 lane 执行。dsh-auth 的
+      # provider 回归（pnpm build 链内的 build:dsh-auth 已装好其依赖与
+      # 产物）；minimal-preset-tools 断言 code↔ptc 桥接，import lib/
+      # 产物——上面的 pnpm build 已完成编译。
+      - run: pnpm --dir dsh-auth verify
+      - run: pnpm verify:minimal-preset-tools
+
   # 渲染 · 滚动 · resize · 子代理 · picker——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
   render-scroll:
