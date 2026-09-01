@@ -7,14 +7,29 @@ import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
 import { getLang, subscribeLang, t } from '../../i18n.js'
 
 const thumbnailTier = makeDecodeTier(384, 24)
+// One modal at a time: current + previous suffices for instant reopen.
+const fullTier = makeDecodeTier(1024, 2)
+
+/** Full-resolution (bounded) decode for the modal preview overlay. */
+export const loadTranscriptImageFull = fullTier.load
+
+/** Display label for one transcript image: sanitized name, or the generic
+ *  localized fallback. Shared by thumbnails and the preview overlay. */
+export function transcriptImageLabel(image: TranscriptImage): string {
+  const name = cleanRenderText(image.name ?? '', 80)
+  return name || t('transcript-image')
+}
 
 /** Bounded image gallery shared by user, assistant, and tool-result rows. */
 export function TranscriptImages({
   images,
   indent = 2,
+  onPreview,
 }: {
   readonly images: readonly TranscriptImage[]
   readonly indent?: number
+  /** Present = thumbnails are clickable and open the shared preview overlay. */
+  readonly onPreview?: (image: TranscriptImage) => void
 }): React.ReactNode {
   const { columns } = useTerminalSize()
   const graphicsAvailable = useTerminalImages(images.length > 0)
@@ -38,6 +53,7 @@ export function TranscriptImages({
             width={width}
             height={height}
             graphicsAvailable={graphicsAvailable}
+            onPreview={onPreview}
           />
         )
       })}
@@ -50,11 +66,13 @@ function TranscriptImagePreview({
   width,
   height,
   graphicsAvailable,
+  onPreview,
 }: {
   readonly image: TranscriptImage
   readonly width: number
   readonly height: number
   readonly graphicsAvailable: boolean
+  readonly onPreview?: (image: TranscriptImage) => void
 }): React.ReactNode {
   const [state, setState] = React.useState<
     | { readonly kind: 'loading' }
@@ -74,7 +92,7 @@ function TranscriptImagePreview({
     return () => { live = false; controller.abort() }
   }, [image, graphicsAvailable])
 
-  const label = cleanRenderText(image.name ?? '', 80) || t('transcript-image')
+  const label = transcriptImageLabel(image)
   const fallback = !graphicsAvailable
     ? t('transcript-image-ready', { name: label })
     : state.kind === 'failed'
@@ -82,7 +100,7 @@ function TranscriptImagePreview({
       : state.kind === 'loading'
         ? t('transcript-image-loading', { name: label })
         : t('transcript-image-ready', { name: label })
-  return (
+  const preview = (
     <Image
       source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
       width={width}
@@ -93,6 +111,19 @@ function TranscriptImagePreview({
         <Text dimColor wrap="truncate">[{fallback}]</Text>
       </Box>
     </Image>
+  )
+  if (onPreview === undefined) return preview
+  return (
+    <Box
+      onClick={event => {
+        // A thumbnail click opens the preview; it must not also toggle the
+        // row expansion or start a transcript selection underneath.
+        event.stopImmediatePropagation()
+        onPreview(image)
+      }}
+    >
+      {preview}
+    </Box>
   )
 }
 
@@ -117,7 +148,8 @@ function previewSize(
   return [width, height]
 }
 
-/** @internal Focused regression scripts clear the process-local LRU. */
+/** @internal Focused regression scripts clear the process-local LRUs. */
 export function clearTranscriptImageCacheForTests(): void {
   thumbnailTier.clear()
+  fullTier.clear()
 }
