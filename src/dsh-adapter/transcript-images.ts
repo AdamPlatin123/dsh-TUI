@@ -9,7 +9,7 @@ export interface TranscriptImage {
   readonly width: number
   readonly height: number
   readonly name?: string
-  read(): Promise<Uint8Array>
+  read(signal?: AbortSignal): Promise<Uint8Array>
 }
 
 interface AttachmentReader {
@@ -45,12 +45,12 @@ export function transcriptImagesOf(
         width: attachment.width,
         height: attachment.height,
         ...(attachment.name === undefined ? {} : { name: attachment.name }),
-        async read() {
+        async read(signal) {
           const reader = resolveAttachments() as AttachmentReader | undefined
           if (typeof reader?.readImage !== 'function') {
             throw new Error('image attachments are unavailable in this profile')
           }
-          const stored = await reader.readImage(attachment)
+          const stored = await reader.readImage(attachment, signal)
           if (!(stored?.data instanceof Uint8Array)) {
             throw new Error('attachment store returned invalid image data')
           }

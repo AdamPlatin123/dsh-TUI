@@ -22,6 +22,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TimelineSnapshot } from '../src/ink/timeline-rail.js'
 import { settled } from './lib/term-test.mjs'
 import { kittyGraphics } from '../src/ink/terminal-querier.js'
+import { makeDecodeTier } from '../src/components/messages/transcriptImageDecode.js'
 
 const { Terminal: XTerm } = xterm
 const [
@@ -55,6 +56,61 @@ const png = new Uint8Array(await sharp({
   },
 }).png().toBuffer())
 
+// Shared consumers keep one read alive; only the last cancellation aborts it.
+{
+  const tier = makeDecodeTier(384, 2)
+  let reads = 0
+  let readSignal: AbortSignal | undefined
+  let finishRead: ((data: Uint8Array) => void) | undefined
+  const shared: TranscriptImage = {
+    id: 'shared-cancel', width: 16, height: 8,
+    read(signal) {
+      reads++
+      readSignal = signal
+      return new Promise((resolve, reject) => {
+        finishRead = resolve
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    },
+  }
+  const first = new AbortController()
+  const second = new AbortController()
+  const a = tier.load(shared, first.signal)
+  const b = tier.load(shared, second.signal)
+  const result = Promise.allSettled([a, b])
+  assert.equal(await settled(() => reads === 1), true)
+  first.abort()
+  assert.equal(readSignal?.aborted, false, 'one remaining consumer retains shared work')
+  finishRead!(png)
+  const outcomes = await result
+  assert.equal(outcomes[0]!.status, 'rejected')
+  assert.equal(outcomes[1]!.status, 'fulfilled')
+  assert.equal(reads, 1)
+  tier.clear()
+}
+{
+  const tier = makeDecodeTier(384, 2)
+  let reads = 0
+  let aborted = 0
+  const controllers = Array.from({ length: 8 }, () => new AbortController())
+  const pending = controllers.map((controller, index) => tier.load({
+    id: `queued-cancel-${index}`, width: 16, height: 8,
+    read(signal) {
+      reads++
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => { aborted++; reject(signal.reason) }, { once: true })
+      })
+    },
+  }, controller.signal))
+  const result = Promise.allSettled(pending)
+  assert.equal(await settled(() => reads === 2), true, 'at most two reads/native decodes start')
+  controllers.forEach(controller => controller.abort())
+  assert.ok((await result).every(outcome => outcome.status === 'rejected'))
+  assert.equal(aborted, 2, 'last consumers abort both active reads')
+  assert.equal(reads, 2, 'cancelled queued consumers never begin I/O')
+  tier.clear()
+}
+
 const attachment = {
   attachmentId: `sha256:${'a'.repeat(64)}`,
   mediaType: 'image/png',
@@ -69,7 +125,7 @@ const nestedAttachment = {
   name: 'nested.png',
 } as const
 
-let reader: { readImage(ref: unknown): Promise<{ data: Uint8Array }> } | undefined
+let reader: { readImage(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> } | undefined
 const blocks = [
   { type: 'text', text: '' },
   { type: 'image', attachment },
@@ -92,15 +148,19 @@ assert.deepEqual(
 )
 await assert.rejects(projected[0]!.read(), /unavailable/u)
 let readCount = 0
+let forwardedSignal: AbortSignal | undefined
 reader = {
-  async readImage(ref) {
+  async readImage(ref, signal) {
     assert.equal(ref, attachment, 'reader receives the exact durable reference')
+    forwardedSignal = signal
     readCount += 1
     return { data: png }
   },
 }
-assert.deepEqual(await projected[0]!.read(), png)
+const facadeController = new AbortController()
+assert.deepEqual(await projected[0]!.read(facadeController.signal), png)
 assert.equal(readCount, 1, 'the facade resolves a late-mounted attachment store')
+assert.equal(forwardedSignal, facadeController.signal, 'facade forwards cancellation unchanged')
 
 const malformed = transcriptImagesOf([
   { type: 'image', attachment: { ...attachment, width: 0 } },
@@ -508,6 +568,27 @@ await withTerminal(
       `adding a durable tool image invalidates and remeasures an offscreen cached row (mounts=${targetMounts}, unmounts=${targetUnmounts}, before=${mountsBeforeImage})`,
     )
   },
+)
+
+clearTranscriptImageCacheForTests()
+let mountedReadSignal: AbortSignal | undefined
+await withTerminal(
+  <TranscriptImages images={[{
+    id: 'unmount-cancel', width: 16, height: 8,
+    read(signal) {
+      mountedReadSignal = signal
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    },
+  }]} indent={0} />,
+  async (_screen, rerender) => {
+    assert.equal(await settled(() => mountedReadSignal !== undefined), true)
+    rerender(<Text>removed</Text>)
+    assert.equal(await settled(() => mountedReadSignal?.aborted === true), true,
+      'unmount aborts the pending attachment read')
+  },
+  true,
 )
 
 clearTranscriptImageCacheForTests()
