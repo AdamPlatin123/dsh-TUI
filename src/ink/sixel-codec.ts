@@ -1,7 +1,9 @@
 import { applyPaletteSync, buildPaletteSync, utils } from 'image-q'
 import { FINALIZER, fromRGBA8888, introducer, PALETTE_ANSI_256, sixelEncode } from 'sixel'
 import { loadSharp } from '../dsh-adapter/sharp.js'
-import { isTerminalImageSource, TERMINAL_IMAGE_MAX_EDGE, SIXEL_MAX_ENCODED_BYTES, SIXEL_CACHE_BYTES, SIXEL_CACHE_ENTRIES } from './terminal-image.js'
+import { isTerminalImageSource, TERMINAL_IMAGE_MAX_EDGE, TERMINAL_IMAGE_MAX_BYTES,
+  TERMINAL_IMAGE_PREVIEW_MAX_EDGE, TERMINAL_IMAGE_PREVIEW_MAX_BYTES,
+  SIXEL_MAX_ENCODED_BYTES, SIXEL_CACHE_BYTES, SIXEL_CACHE_ENTRIES } from './terminal-image.js'
 import type { TerminalImageSource } from './terminal-image.js'
 
 export interface SixelCrop {
@@ -16,6 +18,7 @@ export interface SixelEncodeRequest {
   readonly width: number
   readonly height: number
   readonly background: string
+  readonly presentation?: 'preview' | 'transcript'
   readonly crop?: SixelCrop
 }
 
@@ -49,26 +52,47 @@ export async function encodeSixel(request: SixelEncodeRequest): Promise<SixelRas
   return encodeRegion(await prepareSixel(request), request.crop)
 }
 
-async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel> {
-  const { source, width, height, background } = request
-  if (!isTerminalImageSource(source) ||
-      !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
-      width < 1 || height < 1 || width > TERMINAL_IMAGE_MAX_EDGE ||
-      height > TERMINAL_IMAGE_MAX_EDGE || background.length > 64) {
+function validateRasterBounds(request: Omit<SixelEncodeRequest, 'source'>): void {
+  const { width, height, background } = request
+  const maxEdge = request.presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_EDGE : TERMINAL_IMAGE_MAX_EDGE
+  const maxBytes = request.presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+      width < 1 || height < 1 || width > maxEdge || height > maxEdge ||
+      width * height * 4 > maxBytes || background.length > 64) {
     throw new Error('Invalid Sixel raster bounds')
   }
+}
+
+async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel> {
+  const { source, width, height, background } = request
+  validateRasterBounds(request)
+  if (!isTerminalImageSource(source, request.presentation)) throw new Error('Invalid Sixel source')
   const sharp = await loadSharp()
   if (sharp === undefined) throw new Error('Image decoder unavailable')
   const fill = resolveBackground(background)
-  const rgba = await sharp(source.data, {
+  const highResolution = width > TERMINAL_IMAGE_MAX_EDGE || height > TERMINAL_IMAGE_MAX_EDGE
+  const pipeline = sharp(source.data, {
     raw: { width: source.width, height: source.height, channels: 4 },
   })
     .flatten({ background: fill })
-    .resize({ width, height, fit: 'contain', background: fill })
+    .resize({ width, height, fit: highResolution ? 'fill' : 'contain', background: fill })
     .toColourspace('srgb')
     .ensureAlpha()
-    .raw()
-    .toBuffer()
+  if (highResolution) {
+    // The manager already fits the source aspect. Native palette conversion
+    // avoids allocating millions of JS Point objects for large previews.
+    const indexed = await pipeline.png({ palette: true, colours: 256, dither: 0, effort: 1, compressionLevel: 1 }).toBuffer()
+    const data = await sharp(indexed).ensureAlpha().raw().toBuffer()
+    if (data.byteLength !== width * height * 4) throw new Error('Invalid quantized raster size')
+    const palette = new Set<number>()
+    for (let index = 0; index < data.length; index += 4) {
+      palette.add((data[index]! << 16) | (data[index + 1]! << 8) | data[index + 2]!)
+    }
+    if (palette.size > 256) throw new Error('Native palette budget exceeded')
+    const colors = [...palette].map(color => [color >>> 16, (color >>> 8) & 255, color & 255] as [number, number, number])
+    return { width, height, data, colors }
+  }
+  const rgba = await pipeline.raw().toBuffer()
   const points = utils.PointContainer.fromUint8Array(rgba, width, height)
   const palette = buildPaletteSync([points], {
     paletteQuantization: 'wuquant', colors: 256,
@@ -113,6 +137,7 @@ export class SixelEncoderCache {
   private bytes = 0
 
   async render({ assetKey, request }: SixelWorkerRequest): Promise<SixelWorkerResponse> {
+    validateRasterBounds(request)
     let image = this.images.get(assetKey)
     const quantized = image === undefined
     if (!image) {

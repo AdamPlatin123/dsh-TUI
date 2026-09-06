@@ -40,7 +40,7 @@ export default function Image({
   children,
 }: ImageProps): React.ReactNode {
   const [columns, rows] = normalizeSize(width, height)
-  const image = isTerminalImageSource(source) ? source : undefined
+  const image = isTerminalImageSource(source, presentation) ? source : undefined
   const alternative = cleanAlternative(alt)
 
   return (

@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Image, Text, useTerminalImages, useTerminalSize } from '../../ui.js'
 import type { TerminalImageSource } from '../../ink/terminal-image.js'
+import { TERMINAL_IMAGE_PREVIEW_MAX_EDGE, TERMINAL_IMAGE_PREVIEW_MAX_BYTES } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
 import { makeDecodeTier } from './transcriptImageDecode.js'
 import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
@@ -8,7 +9,7 @@ import { getLang, subscribeLang, t } from '../../i18n.js'
 
 const thumbnailTier = makeDecodeTier(384, 24)
 // One modal at a time: current + previous suffices for instant reopen.
-const fullTier = makeDecodeTier(1024, 2)
+const fullTier = makeDecodeTier(TERMINAL_IMAGE_PREVIEW_MAX_EDGE, 2, TERMINAL_IMAGE_PREVIEW_MAX_BYTES / 4)
 
 /** Full-resolution (bounded) decode for the modal preview overlay. */
 export const loadTranscriptImageFull = fullTier.load

@@ -80,6 +80,14 @@ the interface, and removing it leaves no core modifications behind.
   tmux/screen still disable graphics. Missing image dependencies or an encoding
   failure preserve the text fallback. The override does not enable inline Sixel.
   Light-theme panels and image previews use white surfaces with neutral preview borders.
+  Large previews target about 95% of the transcript area, with up to a 2048-pixel edge
+  and a bounded total pixel budget; thumbnail sizing is unchanged.
+  Fit, actual pixels (100%), and 200%/400%/800% zoom are available, with drag,
+  wheel, or arrow-button panning. Actual pixels requires reported terminal cell metrics.
+  The bottom Open original link launches the system image viewer with the unchanged
+  attachment bytes, including images restored from history.
+  In a modal, Left/Right or the bottom ‹/› controls switch images with an index
+  indicator, without wrapping at the ends. Each new image starts in Fit mode.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with
   `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
@@ -251,6 +259,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen; inside `/resume`, pin/unpin the selected session |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (in-editor `Mod+A` still moves to line start); `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
+| `←` / `→` (image modal) | Previous / next image; caret peeks retain prompt editing |
 | `Ctrl+U` / `Ctrl+K` | Delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` | Delete the previous word |
 

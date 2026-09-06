@@ -373,6 +373,8 @@ const DOUBLE_CLICK_MS = 500
  */
 export interface PromptController {
   hasText(): boolean
+  /** Current capability-backed draft images in token order, without reads. */
+  previewImages?(): readonly { image: TranscriptImage; title: string }[]
   clear(): void
   /**
    * Append `text` at the end of the input (external injection channel; see
@@ -713,6 +715,10 @@ export function PromptInput({
     }
     controllerRef.current = {
       hasText: () => value.length > 0,
+      previewImages: () => composerImageRefsForText(valueRef.current, draftImagesRef.current).flatMap(ref => {
+        const image = channel.stagedImage(ref.stageId)
+        return image === undefined ? [] : [{ image, title: ref.token.slice(1, -1) }]
+      }),
       clear: () => {
         if (valueRef.current !== '') inputEditSequenceRef.current += 1
         valueRef.current = ''
