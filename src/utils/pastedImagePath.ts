@@ -174,10 +174,12 @@ export async function stageClipboardFilePaths<T>(
   readonly parts: readonly StagedClipboardFilePart<T>[]
   readonly staged: readonly T[]
   readonly failure: string
+  readonly failureCode?: 'image-limit'
 }> {
   const parts: StagedClipboardFilePart<T>[] = []
   const staged: T[] = []
   let failure = ''
+  let failureCode: 'image-limit' | undefined
   for (const path of paths) {
     if (imagePathMediaType(path) === undefined) {
       parts.push({ kind: 'text', value: formatPath(path) })
@@ -185,6 +187,7 @@ export async function stageClipboardFilePaths<T>(
     }
     if (staged.length >= maxStaged) {
       failure = 'image count exceeds this profile\'s per-message limit'
+      failureCode = 'image-limit'
       parts.push({ kind: 'text', value: formatPath(path) })
       continue
     }
@@ -194,8 +197,9 @@ export async function stageClipboardFilePaths<T>(
       staged.push(value)
     } catch (error: unknown) {
       failure = error instanceof Error ? error.message : String(error)
+      failureCode = undefined
       parts.push({ kind: 'text', value: formatPath(path) })
     }
   }
-  return { parts, staged, failure }
+  return { parts, staged, failure, ...(failureCode ? { failureCode } : {}) }
 }

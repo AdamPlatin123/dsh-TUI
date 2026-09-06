@@ -1747,7 +1747,7 @@ export function PromptInput({
               try {
                 insertedStaged = await enqueueImageWork(async () => {
                   const maxImages = channel.stagedImageLimits?.()?.maxImagesPerMessage ?? 0
-                  const { parts, staged, failure } = await stageClipboardFilePaths(
+                  const { parts, staged, failure, failureCode } = await stageClipboardFilePaths(
                     content.paths,
                     path => stageImagePath(path, lease),
                     filePath => formatClipboardInsert({ kind: 'files', paths: [filePath] }),
@@ -1766,7 +1766,8 @@ export function PromptInput({
                       return token
                     })
                     if (failure !== '') {
-                      channel.notify(t('input-image-paste-failed', { err: failure }), { color: 'warning', timeoutMs: 5000 })
+                      const message = failureCode === 'image-limit' ? t('input-image-paste-limit') : failure
+                      channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
                     }
                     if (boundTokens.length === 0) return false
                     // All bindings and their visible labels enter together;

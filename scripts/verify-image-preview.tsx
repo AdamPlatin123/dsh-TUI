@@ -153,7 +153,7 @@ function check(name: string, ok: boolean, detail = ''): void {
     sequence === 2
       && JSON.stringify(capped.parts.map(part => part.value))
         === JSON.stringify(['[Image #1]', '[Image #2]', '@/tmp/c.png'])
-      && capped.failure?.includes('limit') === true,
+      && capped.failureCode === 'image-limit',
     JSON.stringify(capped))
 }
 

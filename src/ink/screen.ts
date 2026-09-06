@@ -169,9 +169,10 @@ function parseSgrColor(code: string): { plane: 'fg' | 'bg'; rgb: Rgb } | null {
 }
 
 function sgrColor(plane: 'fg' | 'bg', rgb: Rgb): AnsiCode {
+  const clamp = (value: number): number => Number.isFinite(value) ? Math.max(0, Math.min(255, Math.round(value))) : 0
   return {
     type: 'ansi',
-    code: `\x1b[${plane === 'fg' ? 38 : 48};2;${rgb.r};${rgb.g};${rgb.b}m`,
+    code: `\x1b[${plane === 'fg' ? 38 : 48};2;${clamp(rgb.r)};${clamp(rgb.g)};${clamp(rgb.b)}m`,
     endCode: plane === 'fg' ? '\x1b[39m' : '\x1b[49m',
   }
 }

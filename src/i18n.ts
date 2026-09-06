@@ -584,6 +584,7 @@ const dict = {
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
   'input-image-pasted': { zh: '已粘贴图片 {{token}}', en: 'Pasted image {{token}}' },
   'input-image-paste-failed': { zh: '粘贴图片失败：{{err}}', en: 'Could not paste image: {{err}}' },
+  'input-image-paste-limit': { zh: '图片数量超过当前配置的单条消息上限', en: 'Image count exceeds the per-message limit for this profile' },
   'input-image-format-unsupported': { zh: '剪贴板图片格式不受支持；请使用 PNG、JPEG、WebP 或 GIF', en: 'Clipboard image format is unsupported; use PNG, JPEG, WebP, or GIF' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },

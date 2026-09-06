@@ -65,6 +65,15 @@ for (const order of [[200, 100], [100, 200]]) {
     shaded.every((id, i) => styles.withDim(source(order[i]!)) === id))
 }
 
+for (const code of ['\x1b[38;5;999m', '\x1b[38;2;300;400;500m', `\x1b[48;2;${'9'.repeat(400)};300;500m`]) {
+  const styles = new StylePool()
+  styles.setShadeTarget({ r: 255, g: 255, b: 255 })
+  const shaded = styles.withDim(styles.intern([{ type: 'ansi', code, endCode: '\x1b[0m' }]))
+  const rgb = styles.get(shaded).map(style => /^\x1b\[(?:38|48);2;(\d+);(\d+);(\d+)m$/u.exec(style.code)).find(Boolean)
+  check('pool: malformed source colors still produce bounded truecolor SGR',
+    !!rgb && rgb.slice(1).every(value => Number(value) >= 0 && Number(value) <= 255))
+}
+
 const COLS = 40
 const ROWS = 12
 
