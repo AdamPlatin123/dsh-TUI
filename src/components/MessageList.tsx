@@ -1601,7 +1601,7 @@ export function LogoHeader({
   effort,
   cwd,
   whale = true,
-  whaleIdle = false,
+  whaleIdle = true,
   working = false,
   skipIntro = false,
 }: {

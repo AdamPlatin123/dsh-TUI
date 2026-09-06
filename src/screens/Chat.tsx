@@ -937,6 +937,27 @@ export function Chat({
     cb => (handle ? handle.subscribe(cb) : () => {}),
     () => (handle ? handle.isSticky() : true),
   )
+  // Whale idle gate: the settled header scrolls away with the transcript,
+  // and the idle planner is worth nothing the moment its art leaves the
+  // viewport — pause it there (timers cleared, the resting pose's cached
+  // rows stay painted so scroll geometry never shifts) and re-arm a fresh
+  // cycle when the user scrolls back to the top. Same uSES rationale as
+  // isSticky above: the renderer's sticky re-pin doesn't fire scroll
+  // subscribers, only the every-render snapshot check picks it up.
+  const WHALE_ART_CUTOFF_ROWS = 16 // marginTop + the 13-row whale art
+  const whaleArtVisible = React.useSyncExternalStore(
+    cb => (handle ? handle.subscribe(cb) : () => {}),
+    () => {
+      if (!handle) return true
+      // A transcript that fits the viewport always shows the header.
+      if (handle.getScrollHeight() <= handle.getViewportHeight()) return true
+      // Visible while the art block intersects the viewport. A sticky bottom
+      // pin with an overflow smaller than the art's height still leaves the
+      // art on screen — visibility, not pin state, decides whether the idle
+      // planner earns its keep.
+      return handle.getScrollTop() < WHALE_ART_CUTOFF_ROWS
+    },
+  )
   const subscribeTooltipInvalidation = React.useCallback(
     (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
     [handle],
@@ -3674,7 +3695,7 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
-          whaleIdle={channel.whaleIdle}
+          whaleIdle={channel.whaleIdle && whaleArtVisible}
           working={channel.working}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the
