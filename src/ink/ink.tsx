@@ -47,6 +47,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCRE
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
+import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
@@ -82,6 +83,7 @@ export type Options = {
   stderr: NodeJS.WriteStream;
   exitOnCtrlC: boolean;
   patchConsole: boolean;
+  terminalImages?: boolean;
   waitUntilExit?: () => Promise<void>;
   onFrame?: (event: FrameEvent) => void;
 };
@@ -91,6 +93,22 @@ export default class Ink {
   private readonly kittyGraphicsManager = new KittyGraphicsManager();
   private kittyGraphicsSupported = false;
   private kittyGraphicsProbeStarted = false;
+  private terminalImageRequests = 0;
+  private readonly terminalImageListeners = new Set<() => void>();
+  private readonly terminalImages = {
+    subscribe: (listener: () => void): (() => void) => {
+      this.terminalImageListeners.add(listener);
+      return () => { this.terminalImageListeners.delete(listener); };
+    },
+    getSnapshot: (): boolean => this.altScreenActive && this.kittyGraphicsSupported &&
+      !this.isPaused && !this.terminalQueriesSuspended && !this.isUnmounted,
+    request: (): (() => void) => {
+      if (this.isUnmounted) return noop;
+      this.terminalImageRequests += 1;
+      this.maybeProbeKittyGraphics([]);
+      return () => { this.terminalImageRequests -= 1; };
+    },
+  };
   private terminalCellMetricsInFlight = false;
   private terminalCellMetricsRefreshPending = false;
   private terminalQueryResumeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1155,9 +1173,11 @@ export default class Ink {
     reconciler.flushSyncFromReconciler();
     this.renderNow();
     this.isPaused = true;
+    this.notifyTerminalImagesChange();
   }
   resume(): void {
     this.isPaused = false;
+    this.notifyTerminalImagesChange();
     this.renderNow();
     if (
       this.terminalCellMetricsRefreshPending &&
@@ -1274,6 +1294,7 @@ export default class Ink {
       if (deleteImages !== '') this.options.stdout.write(deleteImages);
     }
     this.altScreenActive = active;
+    this.notifyTerminalImagesChange();
     this.altScreenMouseTracking = active && mouseTracking;
     // Entering has no old alt-screen drag to notify, but the main-screen
     // hover/click geometry still needs to be cleared after the gate flips.
@@ -1395,6 +1416,7 @@ export default class Ink {
    */
   detachForShutdown(): void {
     this.isUnmounted = true;
+    this.terminalImageListeners.clear();
     // Cancel any pending throttled render so it doesn't fire between
     // cleanupTerminalModes() and process.exit() and write to main screen.
     this.scheduleRender.cancel?.();
@@ -1689,13 +1711,23 @@ export default class Ink {
     }
   };
 
-  /** Probe Kitty graphics only after a real image reaches a fullscreen frame. */
+  private notifyTerminalImagesChange(): void {
+    // AlternateScreen changes modes in an insertion effect. Notify React
+    // after that commit, when scheduling a subscriber update is safe.
+    queueMicrotask(() => {
+      for (const listener of this.terminalImageListeners) listener();
+    });
+  }
+
+  /** Probe on image demand, before lazy consumers need to decode a source. */
   private maybeProbeKittyGraphics(
     placements: readonly TerminalImagePlacement[],
   ): void {
     if (
-      placements.length === 0 ||
+      (placements.length === 0 && this.terminalImageRequests === 0) ||
+      this.isUnmounted ||
       this.kittyGraphicsProbeStarted ||
+      this.options.terminalImages === false ||
       !this.altScreenActive ||
       this.isPaused ||
       this.terminalQueriesSuspended ||
@@ -1725,6 +1757,7 @@ export default class Ink {
         }
         if (reply === undefined || !reply.status.startsWith('OK')) return;
         this.kittyGraphicsSupported = true;
+        this.notifyTerminalImagesChange();
         if (
           columns === this.terminalColumns &&
           rows === this.terminalRows
@@ -1830,6 +1863,7 @@ export default class Ink {
       this.terminalQueryResumeTimer = null;
       if (this.isUnmounted) return;
       this.app?.querier.resume();
+      this.notifyTerminalImagesChange();
       this.app?.scheduleXtversionProbe();
       if (
         this.terminalCellMetricsRefreshPending &&
@@ -2027,6 +2061,15 @@ export default class Ink {
    * frame; the effect fires before any mouse input so the fallback is
    * unobservable in practice.
    */
+  /**
+   * The colour a backdrop shade (`<Box backdrop="dim">`) fades explicit
+   * colours toward — the terminal background from OSC 11, or black/white
+   * by theme lightness when unknown. See StylePool.setShadeTarget.
+   */
+  setShadeTarget(rgb: { r: number; g: number; b: number } | null): void {
+    this.stylePool.setShadeTarget(rgb);
+  }
+
   setSelectionBgColor(color: string): void {
     // Wrap a NUL marker, then split on it to extract the open/close SGR.
     // colorize returns the input unchanged if the color string is bad —
@@ -2478,7 +2521,9 @@ export default class Ink {
     this.currentNode = node;
     const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
-          {node}
+          <TerminalImagesContext.Provider value={this.terminalImages}>
+            {node}
+          </TerminalImagesContext.Provider>
         </TerminalWriteProvider>
       </App>;
 
@@ -2570,6 +2615,8 @@ export default class Ink {
     /* eslint-enable custom-rules/no-sync-fs */
 
     this.isUnmounted = true;
+
+    this.terminalImageListeners.clear();
 
     // Cancel any pending throttled renders to prevent accessing freed Yoga nodes
     this.scheduleRender.cancel?.();
