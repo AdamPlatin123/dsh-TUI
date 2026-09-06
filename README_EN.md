@@ -62,7 +62,9 @@ the interface, and removing it leaves no core modifications behind.
   delete whole attachments, and `u` restores both text and attachment bindings;
   undo stays within the current draft.
   Terminal image previews default to on. Disable them in `/settings → Terminal image previews`
-  or set `terminalImages: false`, then use `/restart` to apply. Disabled previews keep text
+  or set `terminalImages: false`, then use `/restart` to apply. A saved `/settings` choice takes
+  precedence over Cordis configuration; if it was saved as enabled, turn it off in `/settings`
+  before restarting. Disabled previews keep text
   metadata and skip preview decoding; sending images to the model is unaffected.
   `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
