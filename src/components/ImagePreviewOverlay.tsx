@@ -247,18 +247,19 @@ export function ImagePreviewOverlay({
         onClick={swallow}
       >
         {/* Top border drawn by hand so the title can sit centered inside it. */}
-        <Text color="suggestion" wrap="truncate">{titleRow}</Text>
+        <Text color="text" wrap="truncate">{titleRow}</Text>
         <Box
           flexDirection="column"
           flexGrow={1}
           borderStyle="round"
-          borderColor="suggestion"
+          borderColor="inactive"
           borderTop={false}
           paddingX={2}
         >
           <Box flexGrow={1} alignItems="center" justifyContent="center">
             {graphicsFit ? (
               <Image
+                presentation="preview"
                 source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
                 width={imageWidth}
                 height={imageHeight}
@@ -329,7 +330,7 @@ function borderTitleRow(title: string, cardColumns: number): string {
 }
 
 /** Aspect-preserving cell box for the preview, assuming the conventional
- *  1:2 cell (the host primitive letterboxes with real cell metrics, so the
+ *  1:2 cell (the host primitive fits pixels using real cell metrics, so the
  *  content never distorts — this only sizes the reserved rectangle). */
 function fitPreviewCells(
   image: TranscriptImage,

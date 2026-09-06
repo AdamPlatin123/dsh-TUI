@@ -106,6 +106,7 @@ function TranscriptImagePreview({
         : t('transcript-image-ready', { name: label })
   const preview = (
     <Image
+      presentation="transcript"
       source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
       width={width}
       height={height}
