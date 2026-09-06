@@ -30,6 +30,8 @@ import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
 import { KittyGraphicsManager } from './kitty-graphics.js';
+import { SixelGraphicsManager } from './sixel-graphics.js';
+import { selectTerminalImageProtocol } from './terminal-image-protocol.js';
 import { nodeCache } from './node-cache.js';
 import { optimize } from './optimizer.js';
 import Output from './output.js';
@@ -91,6 +93,12 @@ export default class Ink {
   private readonly log: LogUpdate;
   private readonly terminal: Terminal;
   private readonly kittyGraphicsManager = new KittyGraphicsManager();
+  private readonly sixelGraphicsManager = new SixelGraphicsManager(() => {
+    if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended || !this.altScreenActive) return;
+    dom.markTreeDirty(this.rootNode);
+    this.scheduleRender();
+  });
+  private sixelGraphicsSupported = false;
   private kittyGraphicsSupported = false;
   private kittyGraphicsProbeStarted = false;
   private terminalImageRequests = 0;
@@ -100,7 +108,7 @@ export default class Ink {
       this.terminalImageListeners.add(listener);
       return () => { this.terminalImageListeners.delete(listener); };
     },
-    getSnapshot: (): boolean => this.altScreenActive && this.kittyGraphicsSupported &&
+    getSnapshot: (): boolean => this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported) &&
       !this.isPaused && !this.terminalQueriesSuspended && !this.isUnmounted,
     request: (): (() => void) => {
       if (this.isUnmounted) return noop;
@@ -493,7 +501,7 @@ export default class Ink {
     // Replies cannot be routed while the child owns stdin. Release every
     // query hold before cooked mode is restored; an interrupted first Kitty
     // probe may be attempted again after the handoff.
-    if (!this.kittyGraphicsSupported) this.kittyGraphicsProbeStarted = false;
+    if (!this.kittyGraphicsSupported && !this.sixelGraphicsSupported) this.kittyGraphicsProbeStarted = false;
     this.suspendStdin();
     // Kitty placements are independent of the terminal cell grid: clearing
     // the screen for an external editor does not remove them. Delete every
@@ -501,7 +509,7 @@ export default class Ink {
     // negative-z preview can remain visible through the editor's default-
     // background cells. deleteAll() also forgets the ids so the restore pass
     // uploads fresh data after resetFramesForAltScreen().
-    const deleteImages = this.kittyGraphicsManager.deleteAll();
+    const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.clear();
     this.options.stdout.write(
     deleteImages +
     // Disable extended key reporting first — editors that don't speak
@@ -701,6 +709,8 @@ export default class Ink {
     const renderStart = performance.now();
     const terminalWidth = this.terminalColumns;
     const terminalRows = this.terminalRows;
+    const sixelActive = this.altScreenActive && this.sixelGraphicsSupported;
+    this.sixelGraphicsManager.beginFrame(terminalWidth, terminalRows);
     const frame = this.renderer({
       frontFrame: this.frontFrame,
       backFrame: this.backFrame,
@@ -708,7 +718,8 @@ export default class Ink {
       terminalWidth,
       terminalRows,
       altScreen: this.altScreenActive,
-      terminalImages: this.altScreenActive && this.kittyGraphicsSupported,
+      terminalImages: this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported),
+      imageReady: sixelActive ? this.sixelGraphicsManager.prepare : undefined,
       prevFrameContaminated: this.prevFrameContaminated
     });
     const rendererMs = performance.now() - renderStart;
@@ -927,9 +938,13 @@ export default class Ink {
     // The CSI H write is deferred until after the diff is computed so we
     // can skip it for empty diffs (no writes → physical cursor unused).
     let prevFrame = this.frontFrame;
+    const sixelFrame = sixelActive
+      ? this.sixelGraphicsManager.reconcile(frame.screen, prevFrame.screen, frame.images)
+      : { erase: '', baseline: prevFrame.screen };
+    if (sixelFrame.baseline !== prevFrame.screen) prevFrame = { ...prevFrame, screen: sixelFrame.baseline };
     if (this.altScreenActive) {
       prevFrame = {
-        ...this.frontFrame,
+        ...prevFrame,
         cursor: ALT_SCREEN_ANCHOR_CURSOR
       };
     }
@@ -941,7 +956,7 @@ export default class Ink {
     // doesn't implement DEC 2026, so SYNC_OUTPUT_SUPPORTED is false).
     // JediTerm is separately excluded in isDecstbmSafe(): its DECSTBM
     // implementation deviates from xterm and garbles scrolling content.
-    isDecstbmSafe());
+    isDecstbmSafe() && !(sixelActive && (this.sixelGraphicsManager.hasImage || sixelFrame.erase !== '')));
     const diffMs = performance.now() - tDiff;
     // Swap buffers
     this.backFrame = this.frontFrame;
@@ -973,14 +988,15 @@ export default class Ink {
     const tOptimize = performance.now();
     if (flickers.length > 0 || this.needsEraseBeforePaint) {
       this.kittyGraphicsManager.invalidateAll();
+      this.sixelGraphicsManager.invalidateAll();
     }
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
     const graphicsOutput =
       this.altScreenActive && this.kittyGraphicsSupported
         ? this.kittyGraphicsManager.reconcile(frame.images ?? [])
-        : '';
-    const hasDiff = optimized.length > 0 || graphicsOutput !== '';
+        : sixelActive ? this.sixelGraphicsManager.paint(optimized) : '';
+    const hasDiff = optimized.length > 0 || graphicsOutput !== '' || sixelFrame.erase !== '';
     if (this.altScreenActive && hasDiff) {
       // Prepend CSI H to anchor the physical cursor to (0,0) so
       // log-update's relative moves compute from a known spot (self-healing
@@ -1007,6 +1023,7 @@ export default class Ink {
       } else {
         optimized.unshift(CURSOR_HOME_PATCH);
       }
+      if (sixelFrame.erase !== '') optimized.unshift({ type: 'stdout', content: sixelFrame.erase });
       if (graphicsOutput !== '') {
         optimized.push({ type: 'stdout', content: graphicsOutput });
       }
@@ -1290,7 +1307,7 @@ export default class Ink {
     // flipping altScreenActive first would silently drop the cleanup event.
     if (!active) {
       resetOldPointerContext();
-      const deleteImages = this.kittyGraphicsManager.deleteAll();
+      const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.clear();
       if (deleteImages !== '') this.options.stdout.write(deleteImages);
     }
     this.altScreenActive = active;
@@ -1431,7 +1448,7 @@ export default class Ink {
     // Delete Kitty placements before terminal mode cleanup. This write uses
     // the renderer's own ordered stream, matching the rest of this shutdown
     // path and leaving unmount's synchronous cleanup safely idempotent.
-    const deleteImages = this.kittyGraphicsManager.deleteAll();
+    const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.dispose();
     if (deleteImages !== '' && this.options.stdout.isTTY) {
       this.options.stdout.write(deleteImages);
     }
@@ -1736,6 +1753,7 @@ export default class Ink {
       process.env.STY !== undefined ||
       isEnvTruthy(process.env.CLAUDE_CODE_ACCESSIBILITY) ||
       isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
+      || process.env.DSH_TUI_IMAGE_PROTOCOL === 'none'
     ) {
       return;
     }
@@ -1749,14 +1767,23 @@ export default class Ink {
       querier.send(kittyGraphics(queryId)),
       querier.send(terminalCellSizePixels()),
       querier.send(terminalWindowSizePixels()),
-      querier.flush(),
+      querier.flush({ attributes: true }),
     ])
-      .then(([reply, cellPixels, windowPixels]) => {
+      .then(async ([reply, cellPixels, windowPixels, attributes]) => {
         if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
           return;
         }
-        if (reply === undefined || !reply.status.startsWith('OK')) return;
-        this.kittyGraphicsSupported = true;
+        const protocol = selectTerminalImageProtocol(reply?.status, attributes?.params, process.env.DSH_TUI_IMAGE_PROTOCOL);
+        if (protocol === 'none') return;
+        if (protocol === 'sixel') {
+          const [mode] = await Promise.all([querier.send(decrqm(80)), querier.flush()]);
+          if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
+          // A permanently set display mode cannot place a preview at CUP.
+          if (mode?.status === 3) return;
+          this.sixelGraphicsManager.setDisplayMode(mode?.status === 1);
+        }
+        this.kittyGraphicsSupported = protocol === 'kitty';
+        this.sixelGraphicsSupported = protocol === 'sixel';
         this.notifyTerminalImagesChange();
         if (
           columns === this.terminalColumns &&
@@ -1765,6 +1792,9 @@ export default class Ink {
           this.kittyGraphicsManager.setCellSize(
             resolveTerminalCellSize(cellPixels, windowPixels, columns, rows) ??
               DEFAULT_TERMINAL_CELL_SIZE,
+          );
+          this.sixelGraphicsManager.setCellSize(
+            resolveTerminalCellSize(cellPixels, windowPixels, columns, rows) ?? DEFAULT_TERMINAL_CELL_SIZE,
           );
         } else {
           // The capability result is still valid, but its geometry snapshot
@@ -1787,7 +1817,7 @@ export default class Ink {
   /** Refresh image pixel geometry after a resize, coalescing resize bursts. */
   private refreshTerminalCellMetrics(): void {
     if (
-      !this.kittyGraphicsSupported ||
+      (!this.kittyGraphicsSupported && !this.sixelGraphicsSupported) ||
       this.isUnmounted ||
       !this.options.stdout.isTTY
     ) {
@@ -1834,7 +1864,9 @@ export default class Ink {
         );
         if (cellSize === undefined) return;
         const changed = this.kittyGraphicsManager.setCellSize(cellSize);
-        if (changed && this.altScreenActive) {
+        const sixelChanged = this.sixelGraphicsManager.setCellSize(cellSize);
+        if ((changed || sixelChanged) && this.altScreenActive) {
+          dom.markTreeDirty(this.rootNode);
           this.scheduleRender();
         }
       })
@@ -1871,7 +1903,7 @@ export default class Ink {
       ) {
         this.terminalCellMetricsRefreshPending = false;
         this.refreshTerminalCellMetrics();
-      } else if (!this.kittyGraphicsSupported) {
+      } else if (!this.kittyGraphicsSupported && !this.sixelGraphicsSupported) {
         this.scheduleRender();
       }
     }, TERMINAL_REPLY_QUARANTINE_MS);
@@ -1932,6 +1964,7 @@ export default class Ink {
     this.backFrame = blank();
     this.log.reset();
     this.kittyGraphicsManager.invalidateAll();
+    this.sixelGraphicsManager.invalidateAll();
     // Defense-in-depth: alt-screen skips the cursor preamble anyway (CSI H
     // resets), but a stale displayCursor would be misleading if we later
     // exit to main-screen without an intervening render.
@@ -2557,6 +2590,7 @@ export default class Ink {
     // only render last frame of non-static output
     const diff = this.log.renderPreviousOutput_DEPRECATED(this.frontFrame);
     const lastFrame = serializeDiff(this.terminal, optimize(diff));
+    const sixelCleanup = this.sixelGraphicsManager.dispose();
 
     // Clean up terminal modes synchronously before process exit.
     // React's componentWillUnmount won't run in time when process.exit() is called,
@@ -2581,7 +2615,7 @@ export default class Ink {
       if (lastFrame !== '') {
         writeSync(stdoutFd, lastFrame);
       }
-      const deleteImages = this.kittyGraphicsManager.deleteAll();
+      const deleteImages = this.kittyGraphicsManager.deleteAll() + sixelCleanup;
       if (deleteImages !== '') {
         writeSync(stdoutFd, deleteImages);
       }

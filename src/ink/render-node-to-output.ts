@@ -647,7 +647,7 @@ function renderNodeToOutput(
     const imageAdmitted =
       imageSource === undefined
         ? false
-        : output.image(node, x, y, width, height, imageSource)
+        : output.image(node, x, y, width, height, imageSource, node.style.backgroundColor ?? inheritedBackgroundColor)
 
     // Absolute-positioned overlays anchored above their parent
     // (bottom='100%') compute negative screen y when their content is
@@ -891,12 +891,7 @@ function renderNodeToOutput(
         Math.floor(y),
         Array(imageHeight).fill(imageLine).join('\n'),
       )
-      output.noSelect({
-        x: Math.floor(x),
-        y: Math.floor(y),
-        width: imageWidth,
-        height: imageHeight,
-      })
+      output.imageBacking(node)
       for (const child of node.childNodes) {
         if (child.nodeName !== '#text') dropSubtreeCache(child as DOMElement)
       }

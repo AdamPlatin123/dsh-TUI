@@ -259,6 +259,7 @@ export function ImagePreviewOverlay({
           <Box flexGrow={1} alignItems="center" justifyContent="center">
             {graphicsFit ? (
               <Image
+                presentation="preview"
                 source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
                 width={imageWidth}
                 height={imageHeight}
