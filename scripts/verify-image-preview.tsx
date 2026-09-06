@@ -627,10 +627,12 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   const bottom = lines.findIndex(line => line.includes('╰'))
   const left = top === -1 ? -1 : lines[top]!.indexOf('╭')
   const right = top === -1 ? -1 : lines[top]!.lastIndexOf('╮')
-  check('overlay: a large image keeps the card within 70% width and 80% height of its region',
+  check('overlay: a large image uses a larger 95% viewport budget without filling the whole region',
     top !== -1 && bottom !== -1 && left !== -1 && right !== -1
-      && (right - left + 1) <= Math.floor(COLS * 0.7)
-      && (bottom - top + 1) <= Math.floor(ROWS * 0.8),
+      && (right - left + 1) <= Math.floor(COLS * 0.95)
+      && (bottom - top + 1) <= Math.floor(ROWS * 0.95)
+      && (right - left + 1) > Math.floor(COLS * 0.7)
+      && (bottom - top + 1) > Math.floor(ROWS * 0.8),
     JSON.stringify({ top, bottom, left, right, COLS, ROWS }))
   await app.unmount()
   terminal.dispose()
@@ -652,12 +654,12 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   const screen = screenOf(terminal, ROWS)
-  await settled(() => screen.text().includes('Path: '))
+  await settled(() => screen.text().includes('Open original: '))
   const lines = screen.text().split('\n')
   const top = lines.find(line => line.includes('╭'))
   check('overlay: a small image never squeezes the title — the card widens to fit it',
     top !== undefined && top.includes(`Image #3 — PNG · 16×8 · 2.0 KB · ${longName} ─`), top ?? '')
-  const pathIndex = lines.findIndex(line => line.includes('Path: '))
+  const pathIndex = lines.findIndex(line => line.includes('Open original: '))
   const pathLine = lines[pathIndex] ?? ''
   const bottom = lines.findIndex(line => line.includes('╰'))
   const imageIndex = lines.findIndex(line => line.includes(`[Image · `))
@@ -665,7 +667,7 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     pathIndex !== -1 && imageIndex !== -1 && imageIndex < pathIndex && pathIndex === bottom - 1,
     JSON.stringify({ pathIndex, imageIndex, bottom }))
   check('overlay: a long path keeps its head and tail and elides the middle',
-    pathLine.includes('Path: /var/folders/zz/') && pathLine.includes('…')
+    pathLine.includes('Open original: /var/folders/zz/') && pathLine.includes('…')
       && pathLine.includes('12.34.56.png') && !pathLine.includes('dsh-tui-paste'),
     pathLine)
   await app.unmount()
@@ -770,8 +772,8 @@ function makeChannel() {
     rows: [
       // Plain transcript text for the backdrop checks: faint while the
       // preview is open, plain again once it closes.
-      { id: 0, kind: 'user', text: 'LPROBE backdrop probe text', images: [] },
-      { id: 1, kind: 'user', text: '', images: [fakeImage('sha256:sent', 'sent.png')] },
+      { id: 0, kind: 'user', text: '§ backdrop probe text', images: [] },
+      { id: 1, kind: 'user', text: '', images: [{ ...fakeImage('sha256:sent', 'sent.png'), width: 20, height: 16 }] },
     ] as ChatRow[],
     status: 'idle' as const,
     sessionTitle: 'probe',
@@ -814,6 +816,53 @@ function makeChannel() {
     listSessions: () => [],
     setResumeTarget: () => {},
   }
+}
+
+// Draft gallery navigation must not turn token navigation into draft edits.
+{
+  const draftGallery = new Map([
+    ['gallery-1', fakeImage('sha256:draft-gallery-1', 'draft-first.png')],
+    ['gallery-2', fakeImage('sha256:draft-gallery-2', 'draft-second.png')],
+  ])
+  let stagedCount = 0
+  const channel = { ...makeChannel(),
+    stageComposerImage: async () => ({ stageId: `gallery-${++stagedCount}` }),
+    hasStagedImage: (id: string) => draftGallery.has(id),
+    stagedImage: (id: string) => draftGallery.get(id),
+  }
+  const imagePath = `${process.env.HOME}/draft-gallery.png`
+  writeFileSync(imagePath, png)
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const app = await render(<AlternateScreen>
+    <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} fullscreen />
+  </AlternateScreen>, { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false })
+  const screen = screenOf(terminal, ROWS)
+  try {
+    await settled(() => screen.text().includes('model-00'))
+    for (const number of [1, 2]) {
+      stdin.write(`\x1b[200~${imagePath}\x1b[201~`)
+      check(`draft gallery: staged token ${number} is live`, await settled(() => screen.text().includes(`[Image #${number}]`)))
+    }
+    const clickText = (value: string): void => {
+      const point = screen.find(value)
+      assert.ok(point, `${value}: ${screen.text()}`)
+      stdin.write(`\x1b[<0;${point.col + 1};${point.row + 1}M\x1b[<0;${point.col + 1};${point.row + 1}m`)
+    }
+    clickText('[Image #1]')
+    check('draft gallery: caret peek shows both capability-backed tokens', await settled(() => screen.text().includes('1/2')), screen.text())
+    clickText('›')
+    check('draft gallery: next mouse control opens the second image modal',
+      await settled(() => screen.text().includes('2/2') && screen.text().includes('draft-second.png')), screen.text())
+    stdin.write('\x1b[D')
+    check('draft gallery: modal arrows change images, not the prompt caret', await settled(() => screen.text().includes('1/2')))
+    stdin.write('\x1b')
+    check('draft gallery: Esc closes the modal without reopening the original peek',
+      await settled(() => !screen.text().includes(' — PNG · ') && screen.text().includes('[Image #1]') && screen.text().includes('[Image #2]')), screen.text())
+    check('draft gallery: disabled graphics never read attachment bytes',
+      [...draftGallery.values()].every(image => (readCounts.get(image.id) ?? 0) === 0))
+  } finally { stdout.isTTY = false; await app.unmount(); terminal.dispose() }
 }
 
 // Inline frames grow into scrollback. Center the preview in the visible
@@ -900,7 +949,7 @@ for (const columns of [32, 80]) {
     (terminal.buffer.active.getLine(row)?.getCell(col)?.isDim() ?? 0) !== 0
   const OVERLAY_HINT = ' — PNG · '
   check('chat: transcript text is plain before any preview opens',
-    (() => { const probe = screen.find('LPROBE'); return probe !== null && !dimAt(probe.col, probe.row) })(),
+    (() => { const probe = screen.find('§'); return probe !== null && !dimAt(probe.col, probe.row) })(),
     screen.text())
 
   // Transcript thumbnail (text fallback body) → the shared overlay.
@@ -926,9 +975,10 @@ for (const columns of [32, 80]) {
       JSON.stringify({ hint, promptGlyph }))
     // The backdrop shades the conversation behind the card (terminal faint);
     // the card's title row and the prompt row are untouched.
-    const probe = screen.find('LPROBE')
+    // The near-square fixture leaves transcript text outside the card.
+    const probe = screen.find('§')
     check('chat: transcript text outside the card is faint while the preview is open',
-      probe !== null && dimAt(probe.col, probe.row) && dimAt(probe.col + 5, probe.row),
+      probe !== null && dimAt(probe.col, probe.row),
       JSON.stringify({ probe }))
     check('chat: the card title row is not faint',
       hint !== null && !dimAt(hint.col + 3, hint.row) && !dimAt(hint.col - 4, hint.row),
@@ -960,7 +1010,7 @@ for (const columns of [32, 80]) {
       && screen.find('Image · sent.png') !== null), screen.text())
   check('chat: closing the preview lifts the shade from the transcript',
     await settled(() => {
-      const probe = screen.find('LPROBE')
+      const probe = screen.find('§ backdrop probe text')
       return probe !== null && !dimAt(probe.col, probe.row) && !dimAt(probe.col + 5, probe.row)
     }), screen.text())
 
@@ -991,6 +1041,41 @@ for (const columns of [32, 80]) {
   check('chat: opening and reopening a graphics-disabled preview never reads pixels',
     readsAfterFirstOpen === 0 && (readCounts.get('sha256:sent') ?? 0) === 0,
     `reads=${readCounts.get('sha256:sent')}`)
+
+  const originalRows = channel.rows
+  channel.rows = [...originalRows, { id: 2, kind: 'assistant', text: '',
+    images: [{ ...fakeImage('sha256:gallery-next', 'next.png'), width: 20, height: 16 }] } as ChatRow]
+  channel.version++
+  app.rerender(chatTree())
+  await settled(() => screen.find('Image · next.png') !== null)
+  const galleryLast = screen.find('Image · next.png')!
+  click(galleryLast.col, galleryLast.row)
+  check('gallery: opening a transcript image snapshots images across messages',
+    await settled(() => screen.text().includes('2/2')), screen.text())
+  stdin.write('\x1b[D')
+  check('gallery: left arrow selects the previous message image', await settled(() => screen.text().includes('1/2')))
+  stdin.write('\x1b[C')
+  check('gallery: right arrow selects the next image without editing the prompt',
+    await settled(() => screen.text().includes('2/2') && screen.text().includes('— PNG · 20×16 · next.png')), screen.text())
+  stdin.write('\x1b[C')
+  await sleep(80)
+  check('gallery: right at the end does not wrap', screen.text().includes('2/2'))
+  const previousImage = screen.find('‹')!
+  click(previousImage.col, previousImage.row)
+  check('gallery: previous mouse control returns to the first image',
+    await settled(() => screen.text().includes('1/2') && screen.text().includes('— PNG · 20×16 · sent.png')), screen.text())
+  const nextImage = screen.find('›')!
+  click(nextImage.col, nextImage.row)
+  check('gallery: next mouse control advances', await settled(() => screen.text().includes('2/2')))
+  stdin.write('\x1b[D')
+  check('gallery: left arrow returns to the first image', await settled(() => screen.text().includes('1/2')))
+  check('gallery: metadata-only navigation never reads neighboring attachments',
+    (readCounts.get('sha256:gallery-next') ?? 0) === 0)
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes(OVERLAY_HINT))
+  channel.rows = originalRows
+  channel.version++
+  app.rerender(chatTree())
 
   // A raw history/rewind-looking token has no capability. Leave it in the
   // draft, then paste a real image: the allocator must skip #1 and bind #2.
@@ -1025,7 +1110,7 @@ for (const columns of [32, 80]) {
     screen.text())
   const editorToken = screen.find('[Image #2]')!
   click(editorToken.col + 2, editorToken.row)
-  // The card is a bounded layer (≤70% × 80% of the screen here), so editor
+  // The card is a bounded layer (about 90% of the available region), so editor
   // chrome outside it stays visible; what matters is that the card paints
   // above the editor and its image box is present.
   check('chat: preview is the top modal above the expanded editor',

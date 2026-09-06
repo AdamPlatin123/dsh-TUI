@@ -102,6 +102,7 @@ export default class Ink {
   private kittyGraphicsSupported = false;
   private kittyGraphicsProbeStarted = false;
   private terminalImageRequests = 0;
+  private measuredImageCellSize: ReturnType<typeof resolveTerminalCellSize>;
   private readonly terminalImageListeners = new Set<() => void>();
   private readonly terminalImages = {
     subscribe: (listener: () => void): (() => void) => {
@@ -110,6 +111,7 @@ export default class Ink {
     },
     getSnapshot: (): boolean => this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported) &&
       !this.isPaused && !this.terminalQueriesSuspended && !this.isUnmounted,
+    getCellSize: () => this.measuredImageCellSize,
     request: (): (() => void) => {
       if (this.isUnmounted) return noop;
       this.terminalImageRequests += 1;
@@ -1789,12 +1791,13 @@ export default class Ink {
           columns === this.terminalColumns &&
           rows === this.terminalRows
         ) {
+          this.measuredImageCellSize = resolveTerminalCellSize(cellPixels, windowPixels, columns, rows);
           this.kittyGraphicsManager.setCellSize(
-            resolveTerminalCellSize(cellPixels, windowPixels, columns, rows) ??
+            this.measuredImageCellSize ??
               DEFAULT_TERMINAL_CELL_SIZE,
           );
           this.sixelGraphicsManager.setCellSize(
-            resolveTerminalCellSize(cellPixels, windowPixels, columns, rows) ?? DEFAULT_TERMINAL_CELL_SIZE,
+            this.measuredImageCellSize ?? DEFAULT_TERMINAL_CELL_SIZE,
           );
         } else {
           // The capability result is still valid, but its geometry snapshot
@@ -1863,6 +1866,10 @@ export default class Ink {
           rows,
         );
         if (cellSize === undefined) return;
+        if (this.measuredImageCellSize?.width !== cellSize.width || this.measuredImageCellSize?.height !== cellSize.height) {
+          this.measuredImageCellSize = cellSize;
+          this.notifyTerminalImagesChange();
+        }
         const changed = this.kittyGraphicsManager.setCellSize(cellSize);
         const sixelChanged = this.sixelGraphicsManager.setCellSize(cellSize);
         if ((changed || sixelChanged) && this.altScreenActive) {

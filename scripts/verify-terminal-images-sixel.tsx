@@ -13,10 +13,11 @@ import { AlternateScreen, Box, Image, Text, render } from '../lib/types/ui.js'
 import { ImagePreviewOverlay } from '../lib/types/components/ImagePreviewOverlay.js'
 import { ThemeProvider } from '../lib/types/components/design-system/ThemeProvider.js'
 import { getTheme } from '../lib/types/theme.js'
+import { clearTranscriptImageCacheForTests, loadTranscriptImageFull } from '../lib/types/components/messages/TranscriptImages.js'
 import { loadSharp } from '../lib/types/dsh-adapter/sharp.js'
 import instances from '../lib/types/ink/instances.js'
 import { createNode, type DOMElement } from '../lib/types/ink/dom.js'
-import { encodeSixel } from '../lib/types/ink/sixel-codec.js'
+import { encodeSixel, SixelEncoderCache } from '../lib/types/ink/sixel-codec.js'
 import { SixelGraphicsManager } from '../lib/types/ink/sixel-graphics.js'
 import { selectTerminalImageProtocol } from '../lib/types/ink/terminal-image-protocol.js'
 import { CharPool, HyperlinkPool, StylePool, createScreen, setCellAt } from '../lib/types/ink/screen.js'
@@ -52,6 +53,12 @@ assert.equal(source.data[15], 0, 'encoding must not mutate the shared RGBA')
 for (const [width, height] of [[0, 1], [1025, 1], [1, Infinity], [1.5, 2]]) {
   await assert.rejects(encodeSixel({ source, width, height, background: '#000000' }))
 }
+await assert.rejects(encodeSixel({ source, width: 2048, height: 2048, background: '#ffffff', presentation: 'preview' }),
+  'large-preview edge permission must not allow a 16 MiB square raster')
+const boundsCache = new SixelEncoderCache()
+await boundsCache.render({ assetKey: 'large-bounds', request: { source, width: 1200, height: 2, background: '#ffffff', presentation: 'preview' } })
+await assert.rejects(boundsCache.render({ assetKey: 'large-bounds', request: { width: 1200, height: 2, background: '#ffffff' } }),
+  'cache hits must not bypass the ordinary source presentation budget')
 await assert.rejects(encodeSixel({ source: { ...source, data: new Uint8Array(1) }, width: 2, height: 2, background: '#000000' }))
 const tail = decodeRaster((await encodeSixel({ source, width: 13, height: 7, background: '#123456' })).data)
 assert.equal(tail.width, 13)
@@ -338,6 +345,55 @@ try {
   overlayApp.unmount()
   chalk.level = previousChalkLevel
 }
+
+// A real modal must pass the larger source through both admission layers and
+// the compiled worker, not merely draw a larger empty frame around 1024 pixels.
+clearTranscriptImageCacheForTests()
+const largePng = await sharp({ create: {
+  width: 2400, height: 1200, channels: 4, background: { r: 0, g: 255, b: 0, alpha: 1 },
+} }).png().toBuffer()
+const largeImage = { id: 'large-preview', width: 2400, height: 1200, name: 'large.png', read: async () => largePng }
+const largeInput = new Input()
+const largeOutput = new Output(largeInput, '\x1b[?61;4;28c')
+largeOutput.columns = 240
+largeOutput.rows = 100
+const largeTree = (show: boolean) => <AlternateScreen><Box width={240} height={99} flexDirection="column">
+  <Box width={240} height={96} flexShrink={0}><Text>CONVERSATION</Text>
+    {show ? <ImagePreviewOverlay image={largeImage} onClose={() => {}} region={{ columns: 240, rows: 96 }} /> : null}
+  </Box><Text>PROMPT</Text>
+</Box></AlternateScreen>
+const largeApp = await render(largeTree(true), { stdin: largeInput, stdout: largeOutput, stderr, exitOnCtrlC: false, patchConsole: false })
+try {
+  await until(() => largeOutput.data.includes('\x1bP0;1;q'), 'large preview is encoded by the compiled worker')
+  const sequence = /\x1bP0;1;q[\s\S]*?\x1b\\/u.exec(largeOutput.data)?.[0]
+  assert.ok(sequence)
+  const image = decodeRaster(sequence)
+  assert.ok(image.width > 1024 && image.width <= 2048, 'preview contains more than 1024 real image pixels')
+  assert.ok(image.width * image.height * 4 <= 8 * 1024 * 1024, 'large output remains within the pixel budget')
+  assert.ok(image.data32.every(pixel => pixel === 0xff00ff00), 'large native quantization introduces no border pixels')
+  const host = instances.get(largeOutput) as unknown as { frontFrame: { images?: TerminalImagePlacement[] } }
+  assert.ok(host.frontFrame.images?.some(placement => placement.source.width > 1024), 'large decode reaches the host image primitive')
+  const terminal = new Terminal({ cols: 240, rows: 100, allowProposedApi: true })
+  try {
+    await new Promise<void>(resolve => terminal.write(largeOutput.data, resolve))
+    assert.ok(terminal.buffer.active.getLine(96)?.translateToString(true).includes('PROMPT'), 'large modal does not cover the input row')
+  } finally { terminal.dispose() }
+  const start = largeOutput.data.length
+  largeApp.rerender(largeTree(false))
+  await until(() => /\x1b\[\d+X/u.test(largeOutput.data.slice(start)), 'closing the large modal erases its pixels')
+} finally {
+  largeOutput.isTTY = false
+  largeApp.unmount()
+  clearTranscriptImageCacheForTests()
+}
+const squarePng = await sharp({ create: {
+  width: 2400, height: 2400, channels: 4, background: { r: 0, g: 255, b: 0, alpha: 1 },
+} }).png().toBuffer()
+const squareDecode = await loadTranscriptImageFull({ id: 'large-square', width: 1, height: 1, read: async () => squarePng })
+assert.ok(squareDecode.width > 1024 && squareDecode.height > 1024, 'larger square previews retain extra detail')
+assert.ok(squareDecode.data.byteLength <= 8 * 1024 * 1024, 'decode uses actual metadata to cap total pixels')
+clearTranscriptImageCacheForTests()
+
 for (const [name, env, caps] of [
   ['unsupported', {}, '\x1b[?61c'],
   ['disabled', { DSH_TUI_DISABLE_TERMINAL_IMAGES: '1' }, '\x1b[?61;4c'],

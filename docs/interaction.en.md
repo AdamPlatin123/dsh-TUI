@@ -18,6 +18,7 @@
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (or click the `⛶` affordance at the end of the input row): line numbers + current-line highlight + live line/char stats, `Enter` inserts a newline, `Ctrl+Enter` or the Send button sends, `Esc` or the Collapse button keeps the draft and returns; wheel-scrolls freely, click/drag/double-click selection work as in the inline prompt; remappable via `/settings` |
 | `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token) → **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
+| `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
 | `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit; clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output |
@@ -165,8 +166,8 @@ leaves and returns; a click on the token always shows it. Look-alike text typed
 by hand or restored from history without an attachment capability stays ordinary
 text. In fullscreen, clicking a staged
 `[Image #N]` token or a transcript thumbnail opens one shared preview centered
-over the transcript area; the image takes at most about 70% of its width and 80% of its
-height, and the surrounding conversation, the prompt, status rows and sticky header stay visible
+over the transcript area; the card targets about 95% of its width and height while
+preserving the image aspect ratio. The prompt, status rows and sticky header stay visible
 (Esc or a click outside the card closes it; narrow terminals get a
 metadata-only card). While the preview is open, the conversation outside the
 card fades: explicit foreground and background colours (pixel art, tool cards,
@@ -178,8 +179,12 @@ touched, and closing restores everything. The card's title sits centered in its 
 wide as the title, so a small image never squeezes the file name, and a title
 wider than the transcript area shortens the file name in its middle first.
 Images staged from a file or the clipboard in this session show their source
-path on the card's bottom row (`Path: …`, head and tail kept, middle elided);
-images restored from the session log have none. A stale `[Image #N]` placeholder (evicted past 128
+path on the card's bottom row (`Open original: …`, head and tail kept, middle elided);
+historical images use their file name. This link opens the unchanged attachment bytes
+in the system image viewer, independent of deleted or modified source paths. Only an
+explicit click exports a file to a private `dsh-tui-original-*` system temporary
+directory; it survives TUI exit for the external viewer and can later be removed
+with system temporary-file cleanup. A stale `[Image #N]` placeholder (evicted past 128
 staged images or cleared by a session switch) warns on click, on submit, and when
 it appears as a slash-command argument.
 After submission, user images are re-projected from durable session events into
@@ -197,6 +202,28 @@ Opening a full preview withdraws background thumbnails; closing it restores them
 from cache. Unrelated text updates do not retransmit unchanged images. Decode and
 transport concurrency, queues and byte budgets are bounded, with text fallback
 on overflow or failure.
+
+Large previews allow a 2048-pixel edge with at most 2,097,152 pixels (8 MiB RGBA),
+so square previews are smaller than 2048 by 2048. Thumbnails still decode at 384;
+ordinary plugin images remain at 1024 / 4 MiB, frames at 16 MiB, and Sixel output at 4 MiB.
+Fit returns to the whole image. 100% displays original pixels; +/- selects 100%,
+200%, 400%, or 800%, shown in the title. Drag, wheel, or arrow buttons pan the image.
+Keyboard ownership and Escape remain unchanged. Actual pixels requires measured
+terminal cell dimensions. Cropping precedes nearest-neighbor zoom; budget limits
+reduce the viewport instead of scaling original pixels. Pan bursts coalesce and
+stale results are discarded. Each inspection retains one encoded original (up to
+64 MiB), with a 64-megapixel input limit and no full-size JS RGBA cache. Some formats
+still require scanning the original file. Sixel retains its 256-color quantization:
+100% describes spatial pixels, not lossless color. Open original preserves colors
+and animation in the system viewer.
+
+Modal previews use Left/Right or the bottom ‹/› controls for previous/next image,
+with a current/total counter and no end-to-start wrapping. Transcript galleries
+follow conversation message order and never prefetch unvisited images. Draft
+galleries follow capability-backed token order; clicking gallery navigation promotes
+the caret peek to a modal without editing the draft. A plain caret peek still
+leaves arrows with the input. Each image starts in Fit, stale image jobs cancel,
+and session changes or blocking dialogs close the modal.
 
 ## Interface language
 

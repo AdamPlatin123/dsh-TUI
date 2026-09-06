@@ -24,6 +24,7 @@ const env = { ...process.env }
 
 const GROUPS = {
   'render-scroll': [
+    ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
     ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
     ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版

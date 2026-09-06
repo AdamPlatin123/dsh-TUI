@@ -803,11 +803,16 @@ export function Chat({
   /** Shared open path for the modal image preview: composer `[Image #N]`
    *  tokens and transcript thumbnails both land here. */
   const openImagePreview = React.useCallback((image: TranscriptImage, title?: string): void => {
+    // Snapshot only metadata/facades on an explicit open, not on every streamed
+    // token. Unvisited attachments stay lazy and duplicate image occurrences stay distinct.
+    const gallery: { image: TranscriptImage; title?: string }[] = channel.rows.flatMap(row => (row.images ?? []).map(image => ({ image })))
+    let index = gallery.findIndex(entry => entry.image === image)
+    if (index < 0) { index = gallery.length; gallery.push({ image, title }) }
     dispatchOverlay({
       type: 'open',
-      overlay: { kind: 'image-preview', image, ...(title === undefined ? {} : { title }) },
+      overlay: { kind: 'image-preview', image, gallery, index, ...(title === undefined ? {} : { title }) },
     })
-  }, [])
+  }, [channel])
   // Agent-binding generation is monotonic across every agent replacement
   // and bumps before the replacement emit, closing the ABA hole where a
   // resumed session reuses the same id. Partial test/embed channels fall
@@ -970,6 +975,22 @@ export function Chat({
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
   const promptControllerRef = React.useRef<PromptController | null>(null)
+  const previewGallery = activePreview === null ? [] : activePreview.peek
+    ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
+    : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []
+  const previewIndex = activePreview?.peek
+    ? previewGallery.findIndex(entry => entry.image === activePreview.image && entry.title === activePreview.title)
+    : overlay.kind === 'image-preview' ? overlay.index ?? 0 : -1
+  const stepPreview = (delta: 1 | -1): void => {
+    if (!activePreview?.peek) { dispatchOverlay({ type: 'image-step', delta }); return }
+    const index = previewIndex + delta
+    const entry = previewGallery[index]
+    if (!entry) return
+    // A gallery click promotes the caret peek to a modal without moving or
+    // editing the draft. Suppress the original peek so Esc really closes it.
+    setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
+    dispatchOverlay({ type: 'open', overlay: { kind: 'image-preview', ...entry, gallery: previewGallery, index } })
+  }
   // Publish the external-injection controller (dsh.nvim etc.) every render so
   // the adapter-owned socket can append to the prompt and submit. `submit`
   // mirrors an Enter press: `channel.submit` routes through the DSH inbox
@@ -2640,10 +2661,12 @@ export function Chat({
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
     if (overlay.kind === 'image-preview') {
-      // Modal like every picker: Esc/Ctrl+C/Enter close, everything else is
-      // swallowed (the prompt is inert via promptSelectionActive anyway).
+      // Modal gallery owns plain left/right. Caret peeks below still leave
+      // navigation with PromptInput. Esc/Ctrl+C/Enter keep their close semantics.
       if (key.escape || (key.ctrl && input === 'c') || plainReturn) {
         dispatchOverlay({ type: 'close' })
+      } else if (!key.ctrl && !key.meta && !key.shift && (key.leftArrow || key.rightArrow)) {
+        dispatchOverlay({ type: 'image-step', delta: key.leftArrow ? -1 : 1 })
       }
       event.stopImmediatePropagation()
       return
@@ -3604,6 +3627,10 @@ export function Chat({
       <ImagePreviewOverlay
         image={activePreview.image}
         title={activePreview.title}
+        navigation={previewGallery.length > 1 && previewIndex >= 0 ? {
+          index: previewIndex, total: previewGallery.length,
+          onPrevious: () => stepPreview(-1), onNext: () => stepPreview(1),
+        } : undefined}
         onClose={activePreview.peek
           ? () => setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
           : () => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}

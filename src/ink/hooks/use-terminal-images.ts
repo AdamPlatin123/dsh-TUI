@@ -1,9 +1,19 @@
 import { createContext, useContext, useEffect, useSyncExternalStore } from 'react'
+import type { TerminalCellSize } from '../terminal-image.js'
 
 interface TerminalImages {
   subscribe(listener: () => void): () => void
   getSnapshot(): boolean
+  getCellSize?(): TerminalCellSize | undefined
   request(): () => void
+}
+
+const noCellSize = (): undefined => undefined
+
+/** Only measured pixels qualify for an original-pixel (100%) image view. */
+export function useTerminalImageCellSize(): TerminalCellSize | undefined {
+  const images = useContext(TerminalImagesContext)
+  return useSyncExternalStore(images.subscribe, images.getCellSize ?? noCellSize)
 }
 
 export const TerminalImagesContext = createContext<TerminalImages>({

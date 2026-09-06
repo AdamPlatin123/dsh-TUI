@@ -2,7 +2,8 @@ import { Worker } from 'node:worker_threads'
 import type { DOMElement } from './dom.js'
 import type { SixelEncodeRequest, SixelRaster, SixelWorkerRequest, SixelWorkerResponse } from './sixel-codec.js'
 import {
-  DEFAULT_TERMINAL_CELL_SIZE, normalizeTerminalCellSize, TERMINAL_IMAGE_MAX_EDGE,
+  DEFAULT_TERMINAL_CELL_SIZE, normalizeTerminalCellSize, TERMINAL_IMAGE_MAX_EDGE, TERMINAL_IMAGE_MAX_BYTES,
+  TERMINAL_IMAGE_PREVIEW_MAX_EDGE, TERMINAL_IMAGE_PREVIEW_MAX_BYTES,
   SIXEL_MAX_ENCODED_BYTES, SIXEL_THUMBNAIL_FRAME_BYTES, SIXEL_CACHE_BYTES, SIXEL_CACHE_ENTRIES,
   type TerminalCellSize, type TerminalImagePlacement,
 } from './terminal-image.js'
@@ -96,15 +97,22 @@ export class SixelGraphicsManager {
     if (id === undefined) { id = this.nextId++; this.ids.set(placement.source.data, id) }
     const pixelWidth = placement.columns * this.cell.width
     const pixelHeight = placement.rows * this.cell.height
+    const maxEdge = placement.presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_EDGE : TERMINAL_IMAGE_MAX_EDGE
+    const maxPixels = (placement.presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES) / 4
     // Fit the pixels, not the cell box: encoded letterboxing becomes opaque
     // black bars when the terminal background itself is transparent.
     const scale = Math.min(
       pixelWidth / placement.source.width,
       pixelHeight / placement.source.height,
-      TERMINAL_IMAGE_MAX_EDGE / Math.max(placement.source.width, placement.source.height),
+      maxEdge / Math.max(placement.source.width, placement.source.height),
+      Math.sqrt(maxPixels / (placement.source.width * placement.source.height)),
     )
-    const width = Math.max(1, Math.round(placement.source.width * scale))
-    const height = Math.max(1, Math.round(placement.source.height * scale))
+    let width = Math.max(1, Math.round(placement.source.width * scale))
+    let height = Math.max(1, Math.round(placement.source.height * scale))
+    if (width * height > maxPixels) {
+      if (width >= height) width = Math.floor(maxPixels / height)
+      else height = Math.floor(maxPixels / width)
+    }
     const canvasColumns = Math.ceil(width / this.cell.width)
     const canvasRows = Math.ceil(height / this.cell.height)
     const originX = placement.x + Math.floor((placement.columns - canvasColumns) / 2)
@@ -127,7 +135,7 @@ export class SixelGraphicsManager {
     return {
       assetKey, key, placement, ready: false,
       rect: { x, y, columns: Math.ceil(cropWidth / this.cell.width), rows: Math.ceil(cropHeight / this.cell.height) },
-      request: { source: placement.source, width, height, background,
+      request: { source: placement.source, width, height, background, presentation: placement.presentation,
         crop: { left, top, width: cropWidth, height: cropHeight } },
     }
   }

@@ -1,19 +1,21 @@
 import React from 'react'
-import { Box, Image, Text, useTerminalImages, useTerminalSize } from '../ui.js'
+import { Box, Image, Text, useTerminalImages, useTerminalSize, useTerminalImageCellSize } from '../ui.js'
 import measureElement from '../ink/measure-element.js'
 import useApp from '../ink/hooks/use-app.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { DOMElement } from '../ink/dom.js'
-import type { TerminalImageSource } from '../ink/terminal-image.js'
+import { DEFAULT_TERMINAL_CELL_SIZE } from '../ink/terminal-image.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import {
-  loadTranscriptImageFull,
-  transcriptImageLabel,
-} from './messages/TranscriptImages.js'
+import { transcriptImageLabel } from './messages/TranscriptImages.js'
 import { formatBytes } from '../sessions/format.js'
 import { truncateMiddle } from '../utils/truncateMiddle.js'
 import { getLang, subscribeLang, t } from '../i18n.js'
+import { inspectionCells, IMAGE_ZOOM_LEVELS } from './messages/imageInspection.js'
+import { useImageInspection } from './messages/useImageInspection.js'
+import { exportOriginalImage } from './messages/originalImage.js'
+import { openFile } from '../utils/openExternal.js'
+import { useTooltip } from './Tooltip.js'
 
 /** Below these viewport sizes the card is metadata-only: an image box would
  *  be too small to read and the chrome itself barely fits. */
@@ -23,11 +25,11 @@ const MIN_GRAPHICS_ROWS = 12
  *  this share of its region's width and height, so the conversation stays
  *  visible around it. The card itself may be wider than the image when the
  *  title needs the room. Card chrome outside the image box: title row +
- *  bottom border + 1 padding row above and below = 4 rows; 2 border cols +
+ *  bottom border + toolbar + 1 padding row above and below = 5 rows; 2 border cols +
  *  2×2 padding = 6 cols. */
-const PREVIEW_MAX_WIDTH_RATIO = 0.7
-const PREVIEW_MAX_HEIGHT_RATIO = 0.8
-const CARD_CHROME_ROWS = 4
+const PREVIEW_MAX_WIDTH_RATIO = 0.95
+const PREVIEW_MAX_HEIGHT_RATIO = 0.95
+const CARD_CHROME_ROWS = 5
 const CARD_CHROME_COLS = 6
 /** Metadata-only card (no image box): title row + one body row + bottom border. */
 const CAPTION_ONLY_ROWS = 3
@@ -54,7 +56,7 @@ const MIN_TITLE_NAME_COLUMNS = 8
  * region is too narrow, the name is shortened in its middle first and
  * dropped from the title last. Images staged from a file or the clipboard
  * in this process show their source path on the card's bottom row, head
- * and tail kept and the middle elided. Nothing else surrounds the image;
+ * and tail kept and the middle elided. Controls sit below the image;
  * Esc and a click outside close (Chat's key chain and the catcher).
  * Catcher and card are sibling absolute nodes — see the comment at the
  * card for why the card is not the catcher's child. The layer only paints
@@ -66,6 +68,7 @@ export function ImagePreviewOverlay({
   onClose,
   region,
   title,
+  navigation,
 }: {
   readonly image: TranscriptImage
   readonly onClose: () => void
@@ -80,6 +83,12 @@ export function ImagePreviewOverlay({
   /** Leading title text, e.g. the composer token `Image #2`. Defaults to
    *  the generic image label. */
   readonly title?: string
+  readonly navigation?: {
+    readonly index: number
+    readonly total: number
+    readonly onPrevious: () => void
+    readonly onNext: () => void
+  }
 }): React.ReactNode {
   // The card must exist on the layer's FIRST frame. A frame with an empty
   // catcher followed by a frame with the card marks the catcher dirty, and
@@ -126,23 +135,18 @@ export function ImagePreviewOverlay({
   const rows = bounds.rows
   const graphicsFit = columns >= MIN_GRAPHICS_COLUMNS && rows >= MIN_GRAPHICS_ROWS
   const graphicsAvailable = useTerminalImages(graphicsFit)
-  const [state, setState] = React.useState<
-    | { readonly kind: 'loading' }
-    | { readonly kind: 'ready'; readonly source: TerminalImageSource }
-    | { readonly kind: 'failed' }
-  >({ kind: 'loading' })
-
-  React.useEffect(() => {
-    if (!graphicsAvailable) return
-    let live = true
-    const controller = new AbortController()
-    setState({ kind: 'loading' })
-    void loadTranscriptImageFull(image, controller.signal).then(
-      source => { if (live) setState({ kind: 'ready', source }) },
-      () => { if (live) setState({ kind: 'failed' }) },
-    )
-    return () => { live = false; controller.abort() }
-  }, [image, graphicsAvailable])
+  const cell = useTerminalImageCellSize()
+  const [view, setView] = React.useState({ image, zoom: 0 })
+  React.useEffect(() => { setView(previous => previous.image === image ? previous : { image, zoom: 0 }) }, [image])
+  const zoom = view.image === image && cell && graphicsAvailable ? view.zoom : 0
+  const setZoom = (value: number): void => setView({ image, zoom: value })
+  const maxImageColumns = Math.max(1, Math.min(columns - 2, Math.floor(columns * PREVIEW_MAX_WIDTH_RATIO)) - CARD_CHROME_COLS)
+  const navigationRows = navigation && navigation.total > 1 && rows >= 6 ? 1 : 0
+  const maxImageRows = Math.max(1, Math.min(rows - 2, Math.floor(rows * PREVIEW_MAX_HEIGHT_RATIO)) - CARD_CHROME_ROWS - 1 - navigationRows)
+  const [imageWidth, imageHeight] = !graphicsFit ? [0, 0] : zoom === 0
+    ? fitPreviewCells(image, maxImageColumns, maxImageRows, cell ?? DEFAULT_TERMINAL_CELL_SIZE)
+    : inspectionCells(maxImageColumns, maxImageRows, cell!)
+  const inspection = useImageInspection(image, graphicsAvailable, imageWidth, imageHeight, cell, zoom)
 
   // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`, fitted to the
   // widest card the region allows. The attachment id is a content hash from
@@ -156,6 +160,7 @@ export function ImagePreviewOverlay({
     format,
     `${image.width}×${image.height}`,
     formatBytes(image.bytes),
+    zoom === 0 ? undefined : `${zoom * 100}%`,
   ].filter((part): part is string => part !== undefined && part !== '')
   const maxCardColumns = Math.max(1, columns)
   const fullTitle = fitTitle(
@@ -164,19 +169,13 @@ export function ImagePreviewOverlay({
     image.name,
     Math.max(0, maxCardColumns - CARD_CHROME_COLS),
   )
-  const stateLine = !graphicsAvailable || state.kind === 'ready'
+  const stateLine = !graphicsAvailable || inspection.source !== undefined
     ? t('transcript-image-ready', { name: label })
-    : state.kind === 'failed'
+    : inspection.failed
       ? t('transcript-image-unavailable', { name: label })
       : t('transcript-image-loading', { name: label })
 
-  const [imageWidth, imageHeight] = graphicsFit
-    ? fitPreviewCells(
-      image,
-      Math.min(columns - 12, Math.floor(columns * PREVIEW_MAX_WIDTH_RATIO) - CARD_CHROME_COLS),
-      Math.min(rows - 9, Math.floor(rows * PREVIEW_MAX_HEIGHT_RATIO) - CARD_CHROME_ROWS),
-    )
-    : [0, 0]
+  const pathRows = 1 + navigationRows
 
   // The card is positioned by hand, as an absolute SIBLING of the catcher
   // rather than its child. Any update inside the card (image decoded, size
@@ -190,14 +189,11 @@ export function ImagePreviewOverlay({
     stringWidth(fullTitle) + CARD_CHROME_COLS,
     MIN_CARD_COLUMNS,
   )))
-  const pathLabel = t('image-preview-path-label')
-  const pathRow = image.path === undefined
-    ? undefined
-    : `${pathLabel}: ${truncateMiddle(
-      image.path,
-      Math.max(1, cardColumns - CARD_CHROME_COLS - stringWidth(pathLabel) - 2),
-    )}`
-  const pathRows = pathRow === undefined ? 0 : 1
+  const pathLabel = t('image-preview-open-original')
+  const pathRow = `${pathLabel}: ${truncateMiddle(
+    image.path ?? label,
+    Math.max(1, cardColumns - CARD_CHROME_COLS - stringWidth(pathLabel) - 2),
+  )}`
   const cardRows = Math.max(1, Math.min(rows, (graphicsFit
     ? imageHeight + CARD_CHROME_ROWS
     : CAPTION_ONLY_ROWS) + pathRows))
@@ -256,11 +252,13 @@ export function ImagePreviewOverlay({
           borderTop={false}
           paddingX={2}
         >
-          <Box flexGrow={1} alignItems="center" justifyContent="center">
+          <Box flexGrow={1} alignItems="center" justifyContent="center"
+            onDragStart={inspection.drag} onDragMove={inspection.drag} onDragEnd={inspection.drag}
+            onWheel={event => { event.stopImmediatePropagation(); if (zoom > 0) inspection.pan(event.deltaX, event.deltaY) }}>
             {graphicsFit ? (
               <Image
                 presentation="preview"
-                source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
+                source={inspection.source}
                 width={imageWidth}
                 height={imageHeight}
                 alt={label}
@@ -278,9 +276,25 @@ export function ImagePreviewOverlay({
               <Text dimColor wrap="truncate">{label}</Text>
             )}
           </Box>
-          {pathRow === undefined ? null : (
-            <Text dimColor wrap="truncate">{pathRow}</Text>
-          )}
+          {graphicsFit ? <Box height={1} flexShrink={0}>
+            <PreviewControl label={t('image-preview-fit')} title={t('image-preview-fit')} active={zoom === 0} onClick={() => setZoom(0)} />
+            <PreviewControl label="100%" title={cell ? t('image-preview-actual') : t('image-preview-no-metrics')}
+              active={zoom === 1} disabled={!cell || !graphicsAvailable} onClick={() => setZoom(1)} />
+            <PreviewControl label="-" title={t('image-preview-zoom-out')} disabled={zoom <= 1}
+              onClick={() => setZoom(Math.max(1, zoom / 2))} />
+            <PreviewControl label="+" title={t('image-preview-zoom-in')} disabled={!cell || !graphicsAvailable || zoom >= IMAGE_ZOOM_LEVELS.at(-1)!}
+              onClick={() => setZoom(zoom === 0 ? 1 : zoom * 2)} />
+            <PreviewControl label="←" title={t('image-preview-left')} disabled={zoom === 0} onClick={() => inspection.pan(-1, 0)} />
+            <PreviewControl label="↑" title={t('image-preview-up')} disabled={zoom === 0} onClick={() => inspection.pan(0, -1)} />
+            <PreviewControl label="↓" title={t('image-preview-down')} disabled={zoom === 0} onClick={() => inspection.pan(0, 1)} />
+            <PreviewControl label="→" title={t('image-preview-right')} disabled={zoom === 0} onClick={() => inspection.pan(1, 0)} />
+          </Box> : null}
+          {navigationRows && navigation ? <Box height={1} flexShrink={0} justifyContent="center">
+            <PreviewControl label="‹" title={t('image-preview-previous')} disabled={navigation.index <= 0} onClick={navigation.onPrevious} />
+            <Text>{navigation.index + 1}/{navigation.total}</Text>
+            <PreviewControl label="›" title={t('image-preview-next')} disabled={navigation.index >= navigation.total - 1} onClick={navigation.onNext} />
+          </Box> : null}
+          <OriginalImageLink key={image.id} image={image} label={pathRow} />
         </Box>
       </Box>
     </>
@@ -329,20 +343,65 @@ function borderTitleRow(title: string, cardColumns: number): string {
   return `╭${'─'.repeat(left)}${labelled}${'─'.repeat(fill - left)}╮`
 }
 
-/** Aspect-preserving cell box for the preview, assuming the conventional
- *  1:2 cell (the host primitive fits pixels using real cell metrics, so the
- *  content never distorts — this only sizes the reserved rectangle). */
+/** Aspect-preserving layout using measured cell pixels, or the conventional
+ *  1:2 cell when unavailable. The host independently fits the actual raster. */
 function fitPreviewCells(
   image: TranscriptImage,
   maxWidth: number,
   maxHeight: number,
+  cell: { readonly width: number; readonly height: number },
 ): readonly [number, number] {
   const ratio = Math.max(0.1, Math.min(10, image.width / image.height))
   let width = Math.max(1, maxWidth)
-  let height = Math.max(1, Math.round(width / (2 * ratio)))
+  const cellRatio = cell.height / cell.width
+  let height = Math.max(1, Math.round(width / (cellRatio * ratio)))
   if (height > maxHeight) {
     height = Math.max(1, maxHeight)
-    width = Math.max(1, Math.min(maxWidth, Math.round(2 * height * ratio)))
+    width = Math.max(1, Math.min(maxWidth, Math.round(cellRatio * height * ratio)))
   }
   return [width, height]
+}
+
+function PreviewControl({ label, title, disabled = false, active = false, onClick }: {
+  label: string; title: string; disabled?: boolean; active?: boolean; onClick: () => void
+}): React.ReactNode {
+  const tooltip = useTooltip(title)
+  return <Box width={stringWidth(label) + 2} height={1} flexShrink={0} justifyContent="center" {...tooltip}
+    onDragStart={stopControlDrag}
+    onClick={event => { event.stopImmediatePropagation(); if (!disabled) onClick() }}>
+    <Text dimColor={disabled} bold={active} underline={active}>{label}</Text>
+  </Box>
+}
+
+// Capture an unmodified press as a button gesture. Repeated +/- clicks must
+// not become terminal word selection; moving off a button cancels its click.
+function stopControlDrag(event: { stopImmediatePropagation(): void }): void {
+  event.stopImmediatePropagation()
+}
+
+function OriginalImageLink({ image, label }: { image: TranscriptImage; label: string }): React.ReactNode {
+  const [status, setStatus] = React.useState<'idle' | 'loading' | 'failed'>('idle')
+  const pending = React.useRef<AbortController | null>(null)
+  React.useEffect(() => {
+    setStatus('idle')
+    return () => { pending.current?.abort(); pending.current = null }
+  }, [image])
+  const tooltip = useTooltip(image.path ?? image.name ?? t('image-preview-open-original'))
+  return <Box height={1} flexShrink={0} {...tooltip} onDragStart={stopControlDrag} onClick={event => {
+    event.stopImmediatePropagation()
+    if (pending.current && !pending.current.signal.aborted) return
+    const controller = new AbortController()
+    pending.current = controller
+    setStatus('loading')
+    void exportOriginalImage(image, controller.signal).then(path => {
+      if (controller.signal.aborted) return
+      openFile(path)
+      setStatus('idle')
+    }, () => { if (!controller.signal.aborted) setStatus('failed') }).finally(() => {
+      if (pending.current === controller) pending.current = null
+    })
+  }}>
+    <Text underline wrap="truncate">{status === 'loading' ? t('image-preview-opening') :
+      status === 'failed' ? t('image-preview-open-failed') : label}</Text>
+  </Box>
 }
