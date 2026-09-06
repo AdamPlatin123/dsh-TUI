@@ -6,13 +6,16 @@ import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import React from 'react'
+import chalk from 'chalk'
 import { decode } from 'sixel'
 import xterm from '@xterm/headless'
 import { AlternateScreen, Box, Image, Text, render } from '../lib/types/ui.js'
 import { ImagePreviewOverlay } from '../lib/types/components/ImagePreviewOverlay.js'
+import { ThemeProvider } from '../lib/types/components/design-system/ThemeProvider.js'
+import { getTheme } from '../lib/types/theme.js'
 import { loadSharp } from '../lib/types/dsh-adapter/sharp.js'
 import instances from '../lib/types/ink/instances.js'
-import { createNode } from '../lib/types/ink/dom.js'
+import { createNode, type DOMElement } from '../lib/types/ink/dom.js'
 import { encodeSixel } from '../lib/types/ink/sixel-codec.js'
 import { SixelGraphicsManager } from '../lib/types/ink/sixel-graphics.js'
 import { selectTerminalImageProtocol } from '../lib/types/ink/terminal-image-protocol.js'
@@ -109,24 +112,57 @@ manager.reconcile(covered, screen())
 assert.equal(manager.paint([]), '', 'image must not overpaint a text overlay')
 
 manager.beginFrame(40, 16)
-manager.prepare({ ...placement, columns: 9 })
+assert.equal(manager.prepare({ ...placement, columns: 10 }), true)
+manager.reconcile(screen(), screen())
+assert.ok(manager.paint([]).includes('\x1b[4;4H'), 'unchanged pixels are centered inside a wider cell box')
+assert.equal(jobs.length, 1, 'extra layout padding alone must not trigger re-encoding')
+
+manager.beginFrame(40, 16)
+manager.prepare({ ...placement, columns: 9, rows: 5 })
 manager.reconcile(screen(), screen())
 await until(() => jobs.length === 2, 'new geometry queues work')
 manager.beginFrame(40, 16)
-manager.prepare({ ...placement, columns: 10 })
+manager.prepare({ ...placement, columns: 10, rows: 5 })
 manager.reconcile(screen(), screen())
 manager.beginFrame(40, 16)
-manager.prepare({ ...placement, columns: 11 })
+manager.prepare({ ...placement, columns: 11, rows: 6 })
 manager.reconcile(screen(), screen())
-jobs[1].resolve({ ...readyRaster, width: 90 })
+jobs[1].resolve({ ...readyRaster, width: 90, height: 90 })
 await until(() => jobs.length === 3, 'only latest pending geometry is processed')
 assert.equal(jobs[2].request.width, 110)
 const beforeClose = notifications
 manager.clear()
-jobs[2].resolve({ ...readyRaster, width: 110 })
+jobs[2].resolve({ ...readyRaster, width: 110, height: 110 })
 await delay(20)
 assert.equal(notifications, beforeClose, 'closed preview must not be resurrected by an old job')
 manager.dispose()
+
+// The image raster must fit its source aspect, not pad the rounded cell box.
+for (const [sourceWidth, sourceHeight] of [[16, 9], [9, 16], [17, 11], [255, 113]]) {
+  const data = new Uint8Array(sourceWidth * sourceHeight * 4)
+  for (let index = 0; index < data.length; index += 4) data.set([0, 255, 0, 255], index)
+  const image = { ...placement, source: { width: sourceWidth, height: sourceHeight, data }, columns: 24, rows: 5 }
+  let result: SixelRaster | undefined
+  let request: SixelEncodeRequest | undefined
+  let ready = false
+  const fitted = new SixelGraphicsManager(() => { ready = true }, async input => {
+    request = input
+    result = await encodeSixel(input)
+    return result
+  })
+  fitted.setCellSize({ width: 11, height: 23 })
+  fitted.beginFrame(40, 16)
+  fitted.prepare(image)
+  fitted.reconcile(screen(), screen())
+  await until(() => ready, 'source-aspect raster is encoded')
+  assert.ok(request && result)
+  assert.ok(request.width <= 264 && request.height <= 115, 'fitted raster stays within the cell box')
+  assert.ok(Math.abs(request.width * sourceHeight - request.height * sourceWidth) <= Math.max(sourceWidth, sourceHeight),
+    'raster aspect differs by no more than pixel rounding')
+  const decoded = decodeRaster(result.data)
+  assert.ok(decoded.data32.every(pixel => pixel === 0xff00ff00), 'no black letterbox pixels are encoded')
+  fitted.dispose()
+}
 
 let failedReady = 0
 const failed = new SixelGraphicsManager(() => failedReady++, async () => { throw new Error('fixture failure') })
@@ -144,7 +180,7 @@ latest.beginFrame(40, 16)
 latest.prepare(placement)
 latest.reconcile(screen(), screen())
 latest.beginFrame(40, 16)
-latest.prepare({ ...placement, columns: 9 })
+latest.prepare({ ...placement, columns: 9, rows: 5 })
 latest.reconcile(screen(), screen())
 latest.beginFrame(40, 16)
 latest.prepare(placement)
@@ -263,18 +299,44 @@ const sharp = await loadSharp()
 assert.ok(sharp)
 const png = await sharp(source.data, { raw: { width: 2, height: 2, channels: 4 } }).png().toBuffer()
 const previewImage = { id: 'sixel-overlay-fixture', width: 2, height: 2, name: 'test.png', mediaType: 'image/png', read: async () => png }
+const previousChalkLevel = chalk.level
+chalk.level = 3
 const overlayInput = new Input()
 const overlayOutput = new Output(overlayInput, '\x1b[?61;4;28c')
-const overlayTree = (show: boolean) => <AlternateScreen><Box width={50} height={17} flexDirection="column"><Text>CONVERSATION</Text>{show ? <ImagePreviewOverlay image={previewImage} onClose={() => {}} region={{ columns: 50, rows: 17 }} /> : null}</Box></AlternateScreen>
+const overlayTree = (show: boolean) => <ThemeProvider theme="light"><AlternateScreen><Box width={50} height={17} flexDirection="column"><Text>CONVERSATION</Text>{show ? <ImagePreviewOverlay image={previewImage} onClose={() => {}} region={{ columns: 50, rows: 17 }} /> : null}</Box></AlternateScreen></ThemeProvider>
 const overlayApp = await render(overlayTree(true), { stdin: overlayInput, stdout: overlayOutput, stderr, exitOnCtrlC: false, patchConsole: false })
 try {
-  await until(() => overlayOutput.data.includes('\x1bP0;1;q'), 'the real preview card must display Sixel with its inherited theme background')
+  await until(() => overlayOutput.data.includes('\x1bP0;1;q'), 'the neutral preview card displays Sixel')
+  const elements: DOMElement[] = []
+  const collect = (element: DOMElement): void => {
+    elements.push(element)
+    for (const child of element.childNodes) if (child.nodeName !== '#text') collect(child)
+  }
+  collect((instances.get(overlayOutput) as unknown as { rootNode: DOMElement }).rootNode)
+  const card = elements.find(element => element.style.position === 'absolute' && element.style.opaque)
+  assert.ok(card, 'preview retains opaque text cleanup')
+  assert.equal(card.style.backgroundColor, 'rgb(255,255,255)', 'light preview uses a white card background')
+  const border = elements.find(element => element.style.borderStyle === 'round')
+  assert.equal(border?.style.borderColor, getTheme('light').inactive, 'preview border uses a neutral theme role')
+  const cardTerminal = new Terminal({ cols: 50, rows: 18, allowProposedApi: true })
+  try {
+    await new Promise<void>(resolve => cardTerminal.write(overlayOutput.data, resolve))
+    const titleY = Array.from({ length: 18 }, (_, y) => y)
+      .find(y => cardTerminal.buffer.active.getLine(y)?.translateToString(true).includes('test.png'))
+    assert.notEqual(titleY, undefined)
+    const titleLine = cardTerminal.buffer.active.getLine(titleY!)!
+    const left = Array.from({ length: 50 }, (_, x) => x).find(x => titleLine.getCell(x)?.getChars() === '╭')
+    const right = Array.from({ length: 50 }, (_, x) => x).find(x => titleLine.getCell(x)?.getChars() === '╮')
+    assert.ok(left !== undefined && right !== undefined && right > left)
+    for (let x = left; x <= right; x++) assert.equal(titleLine.getCell(x)?.getBgColor(), 0xffffff, 'title background is white, not blue')
+  } finally { cardTerminal.dispose() }
   const start = overlayOutput.data.length
   overlayApp.rerender(overlayTree(false))
   await until(() => /\x1b\[\d+X/u.test(overlayOutput.data.slice(start)), 'the real card close erases Sixel')
 } finally {
   overlayOutput.isTTY = false
   overlayApp.unmount()
+  chalk.level = previousChalkLevel
 }
 for (const [name, env, caps] of [
   ['unsupported', {}, '\x1b[?61c'],

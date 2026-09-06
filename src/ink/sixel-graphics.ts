@@ -96,9 +96,15 @@ export class SixelGraphicsManager {
     if (id === undefined) { id = this.nextId++; this.ids.set(placement.source.data, id) }
     const pixelWidth = placement.columns * this.cell.width
     const pixelHeight = placement.rows * this.cell.height
-    const scale = Math.min(1, TERMINAL_IMAGE_MAX_EDGE / Math.max(pixelWidth, pixelHeight))
-    const width = Math.max(1, Math.floor(pixelWidth * scale))
-    const height = Math.max(1, Math.floor(pixelHeight * scale))
+    // Fit the pixels, not the cell box: encoded letterboxing becomes opaque
+    // black bars when the terminal background itself is transparent.
+    const scale = Math.min(
+      pixelWidth / placement.source.width,
+      pixelHeight / placement.source.height,
+      TERMINAL_IMAGE_MAX_EDGE / Math.max(placement.source.width, placement.source.height),
+    )
+    const width = Math.max(1, Math.round(placement.source.width * scale))
+    const height = Math.max(1, Math.round(placement.source.height * scale))
     const canvasColumns = Math.ceil(width / this.cell.width)
     const canvasRows = Math.ceil(height / this.cell.height)
     const originX = placement.x + Math.floor((placement.columns - canvasColumns) / 2)

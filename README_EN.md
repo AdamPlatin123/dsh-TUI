@@ -79,6 +79,7 @@ the interface, and removing it leaves no core modifications behind.
   `DSH_TUI_DISABLE_TERMINAL_IMAGES=1`, accessibility mode, non-TTY output and
   tmux/screen still disable graphics. Missing image dependencies or an encoding
   failure preserve the text fallback. The override does not enable inline Sixel.
+  Light-theme panels and image previews use white surfaces with neutral preview borders.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with
   `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
