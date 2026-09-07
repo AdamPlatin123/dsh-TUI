@@ -222,6 +222,30 @@ const MSG = {
       third: '第三方',
     },
   },
+  // safe 指引与清单降级原因的文案（renderGuide / renderInventory 取用）：
+  // zh 为收编前的字面文案；`@<版本>` 占位以 versionPlaceholder 拼接。
+  safeGuideLabels: {
+    en: {
+      missingReason: 'package.json missing or corrupt',
+      fieldsReason: 'required fields missing or wrong type',
+      uninstallThird: '  # Remove third-party plugins (one by one):',
+      nothingThird: '  # No third-party direct dependencies to uninstall',
+      reinstallTui: '  # Reinstall/align the TUI (see dsh-tui doctor for the version):',
+      versionPlaceholder: '<version>',
+      diagnostics: '  # Environment diagnostics:',
+      globalUpgrade: '  # Global upgrade when the launcher is too old:',
+    },
+    zh: {
+      missingReason: 'package.json 缺失或损坏',
+      fieldsReason: '必需字段缺失或类型错误',
+      uninstallThird: '  # 卸载第三方插件（逐个执行）:',
+      nothingThird: '  # 无第三方直接依赖可卸载',
+      reinstallTui: '  # 重装/对齐 TUI（版本见 dsh-tui doctor）:',
+      versionPlaceholder: '<版本>',
+      diagnostics: '  # 环境诊断:',
+      globalUpgrade: '  # 启动器过旧时的全局升级:',
+    },
+  },
   legacyEnv: {
     en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
     zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
@@ -395,9 +419,10 @@ const readProfileInventory = () => {
 }
 const renderInventory = lines => {
   const L = msg('safeMenuLabels')
+  const G = msg('safeGuideLabels')
   const inv = readProfileInventory()
   if (inv.error) {
-    lines.push(msg('safeListUnreadable')(inv.error === 'missing' ? 'package.json 缺失或损坏' : '必需字段缺失或类型错误'))
+    lines.push(msg('safeListUnreadable')(inv.error === 'missing' ? G.missingReason : G.fieldsReason))
     return
   }
   lines.push(L.bundlesHeader)
@@ -406,21 +431,22 @@ const renderInventory = lines => {
   for (const d of inv.deps) lines.push(`  · ${d}  (${PROTECTED_PLUGINS.has(d) ? L.builtin : L.third})`)
 }
 const renderGuide = lines => {
+  const L = msg('safeGuideLabels')
   lines.push(msg('safeGuideIntro'))
   const inv = readProfileInventory()
   const third = inv.error ? [] : inv.deps.filter(d => !PROTECTED_PLUGINS.has(d))
   if (third.length > 0) {
-    lines.push(`  # 卸载第三方插件（逐个执行）:`)
+    lines.push(L.uninstallThird)
     for (const d of third) lines.push(`  dsh plugin --profile ${PROFILE} remove ${d}`)
   } else {
-    lines.push(`  # 无第三方直接依赖可卸载`)
+    lines.push(L.nothingThird)
   }
-  lines.push(`  # 重装/对齐 TUI（版本见 dsh-tui doctor）:`)
-  lines.push(`  dsh plugin --profile ${PROFILE} add ${PACKAGE}@<版本>`)
-  lines.push(`  # 环境诊断:`)
+  lines.push(L.reinstallTui)
+  lines.push(`  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${L.versionPlaceholder}`)
+  lines.push(L.diagnostics)
   lines.push(`  dsh-tui doctor`)
-  lines.push(`  # 启动器过旧时的全局升级:`)
-  lines.push(`  npm install -g --legacy-peer-deps ${PACKAGE}@<版本>`)
+  lines.push(L.globalUpgrade)
+  lines.push(`  npm install -g --legacy-peer-deps ${PACKAGE}@${L.versionPlaceholder}`)
 }
 const renderSafeReport = extraLines => {
   const lines = []

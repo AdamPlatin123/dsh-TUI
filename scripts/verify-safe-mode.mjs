@@ -49,7 +49,7 @@ const run = (args, env = {}) =>
     },
   })
 
-// 递归快照：路径 → (类型, size, mtimeMs)。只读断言的证据来源。
+// 递归快照：路径 → 类型/大小。只读断言的证据来源。
 const snapshot = dir => {
   const out = {}
   const walk = (d, prefix) => {
@@ -164,6 +164,9 @@ const snapshot = dir => {
     check('清单: 保护包标注内置', r.stdout.includes('内置') && r.stdout.includes('@deepseek-ai/dsh-base'))
     // 指引的卸载候选 = 第三方直接依赖
     check('指引: 卸载候选只列第三方', r.stdout.includes('dsh plugin --profile dsh-tui remove cool-plugin'))
+    // 双语契约：en 模式指引全量英文，不得残留中文指引串。
+    const ren = run(['safe'], { DSH_HOME: invHome, DSH_TUI_LANG: 'en' })
+    check('指引: 英文模式输出英文指引且无中文残留', ren.stdout.includes('# Remove third-party plugins') && !ren.stdout.includes('卸载第三方插件'))
   }
   // 字段缺失：无 dsh.profile.bundles
   {
