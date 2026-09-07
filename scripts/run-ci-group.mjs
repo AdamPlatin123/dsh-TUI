@@ -123,6 +123,11 @@ const GROUPS = {
 // 一键回底回归：pill 常驻显示、End/Enter 回底、远距回底不触发空白
 // 死锁（大偏移一步到位后首帧即有内容）。
     ["verify-back-to-bottom", ['node', '--import', 'tsx/esm', 'scripts/verify-back-to-bottom.tsx']],
+// 底部超滚门控回归：已贴底时 wheel-down 必须是完全惰性的 no-op（不清
+// sticky、不积 delta、不重绘）——修复前每格 sticky flip-flop + pill 闪现
+// + 整屏重绘（流式下可感知为"强拖+闪烁"）；且滚上再滚回仍须正常（着陆
+// 格放行、at-bottom re-pin 恢复 sticky）。
+    ["verify-scrollbox-bottom-overscroll", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-bottom-overscroll.tsx']],
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
