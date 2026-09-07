@@ -170,6 +170,14 @@ const MSG = {
     en: code => `[dsh-tui] dsh profile exited with code ${code}. Run it directly for diagnostics:\n  dsh --profile ${PROFILE}`,
     zh: code => `[dsh-tui] dsh profile 已退出（退出码 ${code}）。可直接运行以下命令查看诊断：\n  dsh --profile ${PROFILE}`,
   },
+  safeAsk: {
+    en: code => `dsh-tui exited unexpectedly (code ${code}). Enter safe mode? [Y/n] `,
+    zh: code => `dsh-tui 异常退出（码 ${code}）。进入安全模式？[Y/n] `,
+  },
+  safeHint: {
+    en: code => `[dsh-tui] Exited with code ${code}. Run dsh-tui safe for diagnostics and repair guidance.`,
+    zh: code => `[dsh-tui] 异常退出（码 ${code}）。可运行 dsh-tui safe 进入安全模式`,
+  },
   legacyEnv: {
     en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
     zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
@@ -373,18 +381,65 @@ const startDshSession = dshArgs =>
     })
   })
 
-// 首次启动的结算：本任务维持既有语义（signal self-kill / 非零保留诊断并
-// 透传 / error 走 launchFailed）；Task 3 将在非零与 error 分支接入 fallback。
-const settleFirstResult = result => {
+// TTY 判定：询问与菜单都要求 stdin/stdout 均可交互（readline 需要 stdin，
+// 菜单可读需要 stdout）；任一非 TTY（脚本/管道/headless 宿主）走降级。
+const isInteractive = () => Boolean(process.stdin.isTTY && process.stdout.isTTY)
+
+// 子进程异常退出后终端可能停在脏状态（alt-screen/鼠标/隐藏光标——清理
+// 责任在 TUI 的 ink 退出路径，不保证完成）。进入询问/菜单前做最小恢复，
+// 仅为让后续界面可读，不承诺完整复原（spec §6.2）。
+const restoreTerminalMinimal = () => {
+  process.stdout.write('\x1b[?1049l\x1b[?1000l\x1b[?1006l\x1b[?25h')
+}
+
+const askSafeEntry = async pendingExitCode => {
+  restoreTerminalMinimal()
+  const readline = (await import('node:readline/promises')).default
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  let cancelled = false
+  rl.on('SIGINT', () => { cancelled = true; rl.close() })
+  let answer = ''
+  try { answer = await rl.question(msg('safeAsk')(pendingExitCode)) } catch { cancelled = true }
+  try { rl.close() } catch { /* 已关闭 */ }
+  if (cancelled || answer === undefined) return false
+  const a = answer.trim().toLowerCase()
+  return a === '' || a === 'y' || a === 'yes'
+}
+
+const runSafeSession = async ({ pendingExitCode = 0, retryDsh }) => {
+  // Task 4 填充非 TTY 降级；Task 5 填充 readline 菜单。本任务仅保证
+  // fallback 链路可编译可结算：直接返回携带的退出码。
+  return pendingExitCode
+}
+
+// 首次启动的结算：signal 自杀透传；error 打印 launchFailed 后接 fallback
+// （TTY 询问进入安全模式，非 TTY 追加 safeHint）并以 1 收束；非零退出保留
+// profileExited 诊断、接 fallback 后按保真退出码收束。
+const settleFirstResult = async (result, firstArgs) => {
   if (result.kind === 'signal') {
     process.kill(process.pid, result.signal)
     return
   }
   if (result.kind === 'error') {
     console.error(msg('launchFailed')(result.error))
+    if (isInteractive()) {
+      if (await askSafeEntry(1)) process.exit(await runSafeSession({ pendingExitCode: 1, retryDsh: () => startDshSession(firstArgs) }))
+    } else {
+      console.error(msg('safeHint')(1))
+    }
     process.exit(1)
+    return
   }
-  if (result.code !== 0) console.error(msg('profileExited')(result.code))
+  if (result.code !== 0) {
+    console.error(msg('profileExited')(result.code))
+    if (isInteractive()) {
+      if (await askSafeEntry(result.code)) {
+        process.exit(await runSafeSession({ pendingExitCode: result.code, retryDsh: () => startDshSession(firstArgs) }))
+      }
+    } else {
+      console.error(msg('safeHint')(result.code))
+    }
+  }
   process.exit(result.code)
 }
 
@@ -609,5 +664,5 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   }
 
   const firstArgs = args
-  settleFirstResult(await startDshSession(firstArgs))
+  settleFirstResult(await startDshSession(firstArgs), firstArgs)
 }

@@ -85,6 +85,43 @@ const snapshot = dir => {
   )
 }
 
+// --- fallback 触发矩阵（非 TTY：spawnSync 默认管道，stdin 非 TTY）--------------
+{
+  const stubDir = join(tmp, 'fb-stub')
+  mkdirSync(stubDir, { recursive: true })
+  writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
+  chmodSync(join(stubDir, 'dsh'), 0o755)
+  // profile 已装且与启动器同版：版本核对不产生额外输出，stderr 断言干净。
+  const profHome = join(tmp, 'fb-home')
+  const pkgDir = join(profHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  mkdirSync(pkgDir, { recursive: true })
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: ownVersion }))
+  const runFb = (env = {}) => run([], { PATH: stubDir, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', ...env })
+  {
+    const r = runFb()
+    check('fallback: exit 0 无提示', r.status === 0 && !r.stderr.includes('safe'), `status=${r.status}`)
+  }
+  {
+    const r = runFb({ DSH_STUB_EXIT: '42' })
+    check(
+      'fallback: exit 42 → 保留 profileExited 诊断 + 追加 safeHint + 退出码保真',
+      r.status === 42 && r.stderr.includes('退出码 42') && r.stderr.includes('dsh-tui safe') && r.stderr.indexOf('已退出') < r.stderr.indexOf('safe'),
+      `status=${r.status}`,
+    )
+  }
+  {
+    const r = runFb({ DSH_STUB_EXIT: '42', DSH_TUI_LANG: 'en' })
+    check('fallback: safeHint 双语', r.stderr.includes('Run dsh-tui safe'), `status=${r.status}`)
+  }
+  {
+    // 信号场景：stub 自杀 SIGINT → 启动器 self-kill 透传，无提示。
+    writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nif [ "$1" = "--profile" ]; then kill -INT $$; fi\nexit 0\n')
+    const r = runFb()
+    check('fallback: 信号透传且无 safe 提示', r.status === null && r.signal === 'SIGINT' && !r.stderr.includes('safe'), `signal=${r.signal}`)
+    writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
+  }
+}
+
 rmSync(tmp, { recursive: true, force: true })
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)
