@@ -134,6 +134,15 @@ sh install.sh
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
+### 安全模式（`dsh-tui safe`）
+
+dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件清单与修复指引。
+
+- **双入口**：手动运行 `dsh-tui safe`；或在 dsh 以非零退出码结束后按提示进入。该询问仅出现在交互终端——脚本/管道等非交互环境只追加一行提示，且退出码保真；询问只覆盖最终 dsh 子进程的非零退出码，不含启动挂起。
+- **只读边界**：安全模式控制面只读（诊断/清单/指引均不改动状态），唯一例外是"重试正常启动"；重试不会自举（不触发首次安装），profile 不完整时直接给出重装指引。
+- **旧全局启动器**：profile 副本不可读或过旧时，先升级启动器：`npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<版本>`。
+- **修复命令示例**（安全模式只列出，需自行执行）：`dsh plugin --profile dsh-tui remove <第三方插件>` 逐个移除可疑插件；`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<版本>` 重装对齐；`dsh-tui doctor` 环境诊断。
+
 
 
 ## 插件扩展与开发指南

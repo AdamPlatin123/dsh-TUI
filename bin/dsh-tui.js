@@ -302,6 +302,7 @@ const MSG = {
       `Commands:\n` +
       `  update                 Update the ${PROFILE} profile to the latest release\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
+      `  safe                   Safe mode: read-only diagnostics, inventory, repair guidance\n` +
       `  version                Show launcher and profile versions\n` +
       `  help                   Show this help\n\n` +
       `Options:\n` +
@@ -314,6 +315,7 @@ const MSG = {
       `命令：\n` +
       `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
+      `  safe                   安全模式：只读诊断、插件清单与修复指引\n` +
       `  version                显示启动器与 profile 版本\n` +
       `  help                   显示本帮助\n\n` +
       `选项：\n` +

@@ -198,6 +198,28 @@ The repository-root `dsh-tui.cmd` is a launch wrapper that goes straight to
 `dsh --profile` and carries no subcommands — subcommands belong to the
 npm-installed `dsh-tui` command.
 
+### Safe mode (`dsh-tui safe`)
+
+When dsh exits unexpectedly, safe mode provides read-only environment
+diagnostics, a profile plugin inventory, and repair guidance.
+
+- **Two entries**: run `dsh-tui safe` manually; or accept the prompt offered
+  after dsh exits with a non-zero code. The prompt only appears in interactive
+  terminals — scripts and pipes just get a single appended hint line, and the
+  exit code is preserved. It covers only a non-zero exit of the final dsh
+  child process, not a startup hang.
+- **Read-only boundary**: the safe-mode control plane is read-only (diagnostics,
+  inventory, and guidance never change state); the one exception is
+  "retry normal startup". The retry never bootstraps (no first-run install) —
+  an incomplete profile gets reinstall guidance instead.
+- **Outdated global launcher**: if the profile copy is unreadable or too old,
+  upgrade the launcher first:
+  `npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<version>`.
+- **Example repair commands** (safe mode only lists them — you run them
+  yourself): `dsh plugin --profile dsh-tui remove <third-party plugin>` to
+  remove suspects one by one, `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<version>`
+  to reinstall/align, and `dsh-tui doctor` for environment diagnostics.
+
 ### Herdr
 
 Run `dsh-tui` directly in a [Herdr](https://herdr.dev) pane; no extra setup is
