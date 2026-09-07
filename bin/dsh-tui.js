@@ -33,7 +33,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY) {
+if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY && process.argv[2] !== 'safe') {
   try {
     const oldBinary = `${process.env.DSH_TUI_STANDALONE_BINARY}.old`
     if (existsSync(oldBinary)) rmSync(oldBinary, { force: true })
@@ -530,9 +530,90 @@ const askSafeEntry = async pendingExitCode => {
 }
 
 const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}) => {
-  // Task 4 填充非 TTY 降级；Task 5 填充 readline 菜单。本任务仅保证
-  // fallback 链路可编译可结算：直接返回携带的退出码。
-  return pendingExitCode
+  const L = msg('safeMenuLabels')
+  let exitCode = pendingExitCode
+  const readline = (await import('node:readline/promises')).default
+  const doctorLines = () => runDoctorChecks().lines
+  // 询问态跨问句共享：cancelled 只由用户中断（SIGINT/EOF）置位；重试
+  // 交接前先置 handingOff，此后到达的中断不再按用户取消处理。
+  const state = { cancelled: false, handingOff: false }
+  const printMenu = () => {
+    console.log(msg('safeTitle')(runningInsideProfile ? 'profile' : 'launcher'))
+    for (const l of extraLines ?? []) console.log(l)
+    for (const l of doctorLines()) console.log(l)
+    console.log(`  1) ${L.retry}`)
+    console.log(`  2) ${L.doctor}`)
+    console.log(`  3) ${L.inventory}`)
+    console.log(`  4) ${L.guide}`)
+    console.log(`  5) ${L.exit(exitCode)}`)
+  }
+  const askChoice = async () => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    rl.on('SIGINT', () => { if (!state.handingOff) { state.cancelled = true; rl.close() } })
+    // readline/promises 的 question 在接口 close（EOF/Ctrl+D，或上方 SIGINT
+    // 处理器主动 close）时 promise 永不结算（Node v24 实测）——裸 await 会
+    // 挂死。与 close 事件竞速，close 一律按用户取消收束。
+    let value
+    try {
+      value = await Promise.race([
+        rl.question(L.prompt),
+        new Promise((_, reject) => rl.once('close', () => reject(new Error('closed')))),
+      ])
+    } catch { state.cancelled = true }
+    if (!state.cancelled && !state.handingOff) { try { rl.close() } catch { /* 已关闭 */ } }
+    return { cancelled: state.cancelled || value === undefined, value: String(value ?? '').trim() }
+  }
+  // 重试结果结算（重放与冷启动两来源共用）：exit 0 → 返回 0 收束会话；
+  // 非零 exit → 更新退出码、保留 profileExited 诊断回菜单；signal → 提示
+  // 后回菜单；error → launchFailed 后回菜单。返回 null 表示回菜单，菜单内
+  // 不自动重试（防死循环：询问只发生在外层首次非零退出）。
+  const settleRetry = result => {
+    if (result.kind === 'exit') {
+      if (result.code === 0) return 0
+      exitCode = result.code
+      console.error(msg('profileExited')(result.code))
+      return null
+    }
+    if (result.kind === 'signal') {
+      console.error(`[dsh-tui] retry signaled: ${result.signal}`)
+      return null
+    }
+    console.error(msg('launchFailed')(result.error))
+    return null
+  }
+  // 无效输入重提示上限 3 次，之后重印完整菜单继续等待；有效选择后计数重置。
+  const INVALID_LIMIT = 3
+  for (;;) {
+    printMenu()
+    let invalid = 0
+    let choice = ''
+    for (;;) {
+      const { cancelled, value } = await askChoice()
+      if (cancelled) { choice = '5'; break }
+      if (['1', '2', '3', '4', '5'].includes(value)) { choice = value; break }
+      invalid++
+      if (invalid >= INVALID_LIMIT) break
+      console.log(L.invalid)
+    }
+    if (choice === '') continue // 达无效上限：重印菜单继续等待（计数随轮重置）
+    if (choice === '1') {
+      // 分支开头区分来源提示：replay = fallback 携带的首启规范化 args 重放；
+      // cold start = 手动入口无已规范化 args，按空参数冷启动。
+      const replay = typeof retryDsh === 'function'
+      console.log(L.retry + (replay ? ' (replay)' : ' (cold start)'))
+      // 两来源共用 profileReady 前置（spec §4：重试不得隐式自举）。
+      if (!profileReady()) { console.error(msg('safeListUnreadable')('profile-not-ready')); continue }
+      state.handingOff = true // 主动交接：此刻起的中断不算用户取消
+      const settled = settleRetry(replay ? await retryDsh() : await startDshSession([]))
+      state.handingOff = false
+      if (settled !== null) return settled
+      continue
+    }
+    if (choice === '2') { for (const l of doctorLines()) console.log(l); continue }
+    if (choice === '3') { const lines = []; renderInventory(lines); for (const l of lines) console.log(l); continue }
+    if (choice === '4') { const lines = []; renderGuide(lines); for (const l of lines) console.log(l); continue }
+    return exitCode
+  }
 }
 
 // 首次启动的结算：signal 自杀透传；error 打印 launchFailed 后接 fallback

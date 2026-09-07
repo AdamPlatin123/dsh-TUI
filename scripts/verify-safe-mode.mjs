@@ -145,6 +145,12 @@ const snapshot = dir => {
   check('safe: 标题双语', r.stdout.includes('safe mode'), `status=${r.status}`)
 }
 
+// --- 菜单交互边界（非 TTY 不进交互；PTY 子集见文件尾说明）-----------------------
+{
+  const r = run(['safe'], { DSH_HOME: join(tmp, 'safe-home') })
+  check('safe: 非 TTY 不进入交互菜单（无 safe> 提示符）', r.status === 0 && !r.stdout.includes('safe>'))
+}
+
 // --- 插件清单解析矩阵（伪 profile 根 package.json）------------------------------
 {
   const invHome = join(tmp, 'inv-home')
@@ -196,6 +202,12 @@ const snapshot = dir => {
     check('清单: 损坏 JSON 降级且不崩溃', r.status === 0 && r.stdout.includes('清单不可读'))
   }
 }
+
+// --- 交互菜单的 PTY 子集（本套件不覆盖，手动演练兜底）--------------------------
+// readline 菜单（选项 1-5 动作、无效输入 3 次重印、SIGINT/EOF 取消、重试
+// 前终端交接与结束后重建输入）需要真实 TTY/PTY 驱动，不依赖外部原生模块
+// 时无法在此自动化；逐项演练清单见 spec §8 与任务简报 Step 5，结果记录在
+// PR 描述。
 
 rmSync(tmp, { recursive: true, force: true })
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
