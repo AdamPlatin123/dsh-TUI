@@ -275,17 +275,15 @@ if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
   console.log(msg('helpText'))
   process.exit(0)
 }
-// ─── 子命令：doctor ──────────────────────────────────────────────────────────
-// 启动前环境诊断——针对「TUI 起不来」的故障域（装不上、update 后版本不
-// 同步、密钥没配），与 TUI 内 /doctor 的会话内诊断互补。零 lib 依赖、
-// 不委托、不自举：profile 残缺时它必须还能跑。密钥红线：只报告是否已
-// 设置，绝不输出值。仅 dsh 缺失记为硬失败（其余检查全部照常打印后再
-// 以退出码 1 收束）。
-if (subcommand === 'doctor') {
-  const L = msg('doctorLabels')
+// ─── doctor 检查逻辑（doctor 子命令与 safe 会话共用）──────────────────────────
+// 输出与退出语义与单命令时代逐字一致：版本探针白名单回显、密钥只报
+// truthiness、仅 dsh 缺失为硬失败。safe 复用同一函数——两个入口的
+// diagnostics 不许分叉（对齐 doctor 与 TUI 内 /doctor 的既有契约）。
+const runDoctorChecks = () => {
+  const lines = []
   let hardFailure = false
-  const report = (ok, label, detail) => console.log(`${ok ? '✓' : '✗'} ${label}: ${detail}`)
-  console.log(`dsh-tui doctor · ${PACKAGE} ${ownVersion ?? 'unknown'}`)
+  const report = (ok, label, detail) => lines.push(`${ok ? '✓' : '✗'} ${label}: ${detail}`)
+  lines.push(`dsh-tui doctor · ${PACKAGE} ${ownVersion ?? 'unknown'}`)
   report(true, 'node', `${process.version} · ${process.platform} ${process.arch}`)
   const probeVersion = command => {
     const probe = spawnSync(...cmd(command, ['--version']), { stdio: 'pipe', encoding: 'utf8', ...shellOpt })
@@ -299,34 +297,45 @@ if (subcommand === 'doctor') {
   const dshVersion = probeVersion('dsh')
   if (dshVersion === undefined) {
     hardFailure = true
-    report(false, 'dsh', L.dshMissing)
+    report(false, 'dsh', msg('doctorLabels').dshMissing)
   } else {
     report(true, 'dsh', dshVersion)
   }
   const pnpmVersion = probeVersion('pnpm')
-  report(pnpmVersion !== undefined, 'pnpm', pnpmVersion ?? L.pnpmMissing)
+  report(pnpmVersion !== undefined, 'pnpm', pnpmVersion ?? msg('doctorLabels').pnpmMissing)
   const profileVersion = readJson(installedPkgPath)?.version
   if (profileVersion === undefined) {
-    report(false, 'profile', `${L.profileMissing}  (${profileDir})`)
+    report(false, 'profile', `${msg('doctorLabels').profileMissing}  (${profileDir})`)
   } else {
     report(true, 'profile', `${profileVersion}  (${profileDir})`)
     if (ownVersion !== undefined && !runningInsideProfile) {
       if (profileVersion === ownVersion) {
-        report(true, 'launcher ↔ profile', L.aligned)
+        report(true, 'launcher ↔ profile', msg('doctorLabels').aligned)
       } else if (isVersionNewer(profileVersion, ownVersion)) {
-        report(false, 'launcher ↔ profile', L.profileNewer(profileVersion))
+        report(false, 'launcher ↔ profile', msg('doctorLabels').profileNewer(profileVersion))
       } else {
-        report(false, 'launcher ↔ profile', L.profileOlder(ownVersion))
+        report(false, 'launcher ↔ profile', msg('doctorLabels').profileOlder(ownVersion))
       }
     }
   }
   // truthiness 而非 !== undefined：空字符串的 key 同样发不了请求，且 TUI 内
   // /doctor（channel.doctorInfo）按 truthiness 报告——两个 doctor 不许分叉。
   const keySet = Boolean(process.env.DEEPSEEK_API_KEY)
-  report(keySet, 'DEEPSEEK_API_KEY', keySet ? L.keySet : L.keyMissing)
+  report(keySet, 'DEEPSEEK_API_KEY', keySet ? msg('doctorLabels').keySet : msg('doctorLabels').keyMissing)
   for (const candidate of [join(homedir(), '.dsh-tui', 'cordis.yml'), join(profileDir, 'cordis.patch.yml')]) {
-    report(existsSync(candidate), 'config', `${candidate}${existsSync(candidate) ? '' : `  ${L.missing}`}`)
+    report(existsSync(candidate), 'config', `${candidate}${existsSync(candidate) ? '' : `  ${msg('doctorLabels').missing}`}`)
   }
+  return { hardFailure, lines }
+}
+// ─── 子命令：doctor ──────────────────────────────────────────────────────────
+// 启动前环境诊断——针对「TUI 起不来」的故障域（装不上、update 后版本不
+// 同步、密钥没配），与 TUI 内 /doctor 的会话内诊断互补。零 lib 依赖、
+// 不委托、不自举：profile 残缺时它必须还能跑。密钥红线：只报告是否已
+// 设置，绝不输出值。仅 dsh 缺失记为硬失败（其余检查全部照常打印后再
+// 以退出码 1 收束）。
+if (subcommand === 'doctor') {
+  const { hardFailure, lines } = runDoctorChecks()
+  for (const line of lines) console.log(line)
   process.exit(hardFailure ? 1 : 0)
 }
 
