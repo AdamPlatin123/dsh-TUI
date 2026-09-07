@@ -354,6 +354,40 @@ const forwardExit = child => {
   })
 }
 
+// ─── dsh 会话结果模型（fallback 与 safe 重试共用）─────────────────────────────
+// 统一表示子进程结局；不在此处做任何退出决定——退出权在调用者（首启结算
+// 或 safe 菜单）。Windows 经 cmd()/shell:true 启动（见 cmd 注释），壳层
+// 观察到的 signal 不保证等同内部 dsh 的中断语义：判定一律只看数值 code，
+// 不从数值反推信号（spec §5.1）。
+const startDshSession = dshArgs =>
+  new Promise(resolve => {
+    const child = spawn(...cmd('dsh', ['--profile', PROFILE, ...dshArgs]), {
+      stdio: 'inherit',
+      env: process.env,
+      ...shellOpt,
+    })
+    child.on('error', err => resolve({ kind: 'error', error: err }))
+    child.on('exit', (code, signal) => {
+      if (signal) resolve({ kind: 'signal', signal })
+      else resolve({ kind: 'exit', code: code ?? 0 })
+    })
+  })
+
+// 首次启动的结算：本任务维持既有语义（signal self-kill / 非零保留诊断并
+// 透传 / error 走 launchFailed）；Task 3 将在非零与 error 分支接入 fallback。
+const settleFirstResult = result => {
+  if (result.kind === 'signal') {
+    process.kill(process.pid, result.signal)
+    return
+  }
+  if (result.kind === 'error') {
+    console.error(msg('launchFailed')(result.error))
+    process.exit(1)
+  }
+  if (result.code !== 0) console.error(msg('profileExited')(result.code))
+  process.exit(result.code)
+}
+
 // 首次运行自举：探测 dsh 与 pnpm，随后 `dsh plugin add` 固定到与启动器一
 // 致的版本（避免 pnpm store 缓存带来的旧版漂移）。-w 重试（issue #239）与
 // 「no-op 假成功」复查（issue #209）在此集中实现，瘦壳与完整逻辑共用。
@@ -574,10 +608,6 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
   }
 
-  const child = spawn(...cmd('dsh', ['--profile', PROFILE, ...args]), {
-    stdio: 'inherit',
-    env: process.env,
-    ...shellOpt,
-  })
-  forwardExit(child)
+  const firstArgs = args
+  settleFirstResult(await startDshSession(firstArgs))
 }
