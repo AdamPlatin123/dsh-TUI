@@ -178,6 +178,50 @@ const MSG = {
     en: code => `[dsh-tui] Exited with code ${code}. Run dsh-tui safe for diagnostics and repair guidance.`,
     zh: code => `[dsh-tui] 异常退出（码 ${code}）。可运行 dsh-tui safe 进入安全模式`,
   },
+  safeTitle: {
+    en: role => `dsh-tui safe · safe mode (read-only control plane)  [${role}]`,
+    zh: role => `dsh-tui safe · 安全模式（控制面只读）  [${role}]`,
+  },
+  safeIgnoredArgs: {
+    en: n => `[dsh-tui] ignored ${n} extra argument(s) after \`safe\``,
+    zh: n => `[dsh-tui] 已忽略附加参数：${n} 个`,
+  },
+  safeListUnreadable: {
+    en: reason => `Profile inventory unreadable (${reason}). See repair guidance below.`,
+    zh: reason => `清单不可读：<${reason}>。修复指引见下方。`,
+  },
+  safeGuideIntro: {
+    en: 'Repair commands (run them yourself — safe mode is read-only):',
+    zh: '修复命令（需自行执行——安全模式只读）：',
+  },
+  safeMenuLabels: {
+    en: {
+      retry: 'Retry normal startup',
+      doctor: 'Run environment diagnostics',
+      inventory: 'Show profile plugin inventory (read-only)',
+      guide: 'Show repair command guidance',
+      exit: code => `Exit (exit code ${code})`,
+      prompt: 'safe> ',
+      invalid: 'Invalid choice — enter 1-5:',
+      bundlesHeader: 'Composition layers (dsh.profile.bundles, ordered):',
+      depsHeader: 'Direct dependencies (uninstallable candidates marked 3rd-party):',
+      builtin: 'builtin',
+      third: '3rd-party',
+    },
+    zh: {
+      retry: '重试正常启动',
+      doctor: '运行环境诊断',
+      inventory: '查看 profile 插件清单（只读）',
+      guide: '显示修复命令指引',
+      exit: code => `退出（退出码 ${code}）`,
+      prompt: 'safe> ',
+      invalid: '无效选择——请输入 1-5：',
+      bundlesHeader: '组合层（dsh.profile.bundles，有序）：',
+      depsHeader: '直接依赖（第三方为可卸载候选）：',
+      builtin: '内置',
+      third: '第三方',
+    },
+  },
   legacyEnv: {
     en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
     zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
@@ -335,6 +379,59 @@ const runDoctorChecks = () => {
   }
   return { hardFailure, lines }
 }
+// ─── safe 会话支撑（清单解析与报告渲染，交互/非交互共用）──────────────────────
+// 保护包：组合层模板与 TUI 本体，不进入卸载候选。两维度分类是 PR② 卸载
+// 功能将复用的唯一分类规则，不得合并简化（spec §6.1）。
+const PROTECTED_PLUGINS = new Set(['@deepseek-ai/dsh-base', PACKAGE])
+const readProfileInventory = () => {
+  const pkg = readJson(join(profileDir, 'package.json'))
+  if (pkg === undefined || typeof pkg !== 'object') return { error: 'missing' }
+  const bundles = Array.isArray(pkg?.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles.filter(x => typeof x === 'string') : undefined
+  const deps = pkg?.dependencies && typeof pkg.dependencies === 'object' && !Array.isArray(pkg.dependencies)
+    ? Object.keys(pkg.dependencies)
+    : undefined
+  if (bundles === undefined || deps === undefined) return { error: 'fields' }
+  return { bundles, deps }
+}
+const renderInventory = lines => {
+  const L = msg('safeMenuLabels')
+  const inv = readProfileInventory()
+  if (inv.error) {
+    lines.push(msg('safeListUnreadable')(inv.error === 'missing' ? 'package.json 缺失或损坏' : '必需字段缺失或类型错误'))
+    return
+  }
+  lines.push(L.bundlesHeader)
+  for (const b of inv.bundles) lines.push(`  · ${b}  (${L.builtin})`)
+  lines.push(L.depsHeader)
+  for (const d of inv.deps) lines.push(`  · ${d}  (${PROTECTED_PLUGINS.has(d) ? L.builtin : L.third})`)
+}
+const renderGuide = lines => {
+  lines.push(msg('safeGuideIntro'))
+  const inv = readProfileInventory()
+  const third = inv.error ? [] : inv.deps.filter(d => !PROTECTED_PLUGINS.has(d))
+  if (third.length > 0) {
+    lines.push(`  # 卸载第三方插件（逐个执行）:`)
+    for (const d of third) lines.push(`  dsh plugin --profile ${PROFILE} remove ${d}`)
+  } else {
+    lines.push(`  # 无第三方直接依赖可卸载`)
+  }
+  lines.push(`  # 重装/对齐 TUI（版本见 dsh-tui doctor）:`)
+  lines.push(`  dsh plugin --profile ${PROFILE} add ${PACKAGE}@<版本>`)
+  lines.push(`  # 环境诊断:`)
+  lines.push(`  dsh-tui doctor`)
+  lines.push(`  # 启动器过旧时的全局升级:`)
+  lines.push(`  npm install -g --legacy-peer-deps ${PACKAGE}@<版本>`)
+}
+const renderSafeReport = extraLines => {
+  const lines = []
+  lines.push(msg('safeTitle')(runningInsideProfile ? 'profile' : 'launcher'))
+  for (const l of extraLines ?? []) lines.push(l)
+  const { lines: doctorLines } = runDoctorChecks()
+  for (const l of doctorLines) lines.push(l)
+  renderInventory(lines)
+  renderGuide(lines)
+  return lines
+}
 // ─── 子命令：doctor ──────────────────────────────────────────────────────────
 // 启动前环境诊断——针对「TUI 起不来」的故障域（装不上、update 后版本不
 // 同步、密钥没配），与 TUI 内 /doctor 的会话内诊断互补。零 lib 依赖、
@@ -406,7 +503,7 @@ const askSafeEntry = async pendingExitCode => {
   return a === '' || a === 'y' || a === 'yes'
 }
 
-const runSafeSession = async ({ pendingExitCode = 0, retryDsh }) => {
+const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}) => {
   // Task 4 填充非 TTY 降级；Task 5 填充 readline 菜单。本任务仅保证
   // fallback 链路可编译可结算：直接返回携带的退出码。
   return pendingExitCode
@@ -489,6 +586,20 @@ const bootstrapProfile = () => {
     console.error(msg('bootstrapUnreadable')(profileDir))
     process.exit(1)
   }
+}
+
+// ─── 子命令：safe（安全模式入口，两种角色同一段代码）──────────────────────────
+// 零 lib 依赖、不委托、不自举（对齐 doctor 的依赖边界，而非 update 的
+// profile-lib 路径）：profile 损坏时它必须仍可达。控制面只读；重试与
+// 修复动作语义见 safe 会话实现（spec §4/§5）。
+if (subcommand === 'safe') {
+  const extra = process.argv.slice(3)
+  const extraLines = extra.length > 0 ? [msg('safeIgnoredArgs')(extra.length)] : []
+  if (!isInteractive()) {
+    for (const line of renderSafeReport(extraLines)) console.log(line)
+    process.exit(0)
+  }
+  process.exit(await runSafeSession({ pendingExitCode: 0, retryDsh: null, extraLines }))
 }
 
 // ─── 子命令：update ──────────────────────────────────────────────────────────

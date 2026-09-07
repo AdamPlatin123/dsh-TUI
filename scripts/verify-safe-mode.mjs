@@ -122,6 +122,78 @@ const snapshot = dir => {
   }
 }
 
+// --- safe 手动入口：零环境 + 非 TTY 降级 + 控制面只读 --------------------------
+{
+  const freshHome = join(tmp, 'safe-home')
+  mkdirSync(freshHome, { recursive: true })
+  const before = snapshot(freshHome)
+  const r = run(['safe'], { DSH_HOME: freshHome })
+  const after = snapshot(freshHome)
+  check('safe: 零环境非 TTY 退出 0', r.status === 0, `status=${r.status}`)
+  check('safe: 打印标题', r.stdout.includes('安全模式'))
+  check('safe: 内嵌 doctor 诊断', r.stdout.includes('✗ dsh'))
+  check('safe: 打印修复指引', r.stdout.includes('dsh plugin --profile dsh-tui'))
+  check('safe: 清单不可读降级（空 profile）', r.stdout.includes('清单不可读'))
+  check('safe: 控制面只读（DSH_HOME 无任何新增/修改）', JSON.stringify(before) === JSON.stringify(after))
+}
+{
+  const r = run(['safe', 'extra1', 'extra2'], { DSH_HOME: join(tmp, 'safe-home') })
+  check('safe: 附加参数提示忽略', r.stdout.includes('已忽略附加参数：2 个'), `status=${r.status}`)
+}
+{
+  const r = run(['safe'], { DSH_HOME: join(tmp, 'safe-home'), DSH_TUI_LANG: 'en' })
+  check('safe: 标题双语', r.stdout.includes('safe mode'), `status=${r.status}`)
+}
+
+// --- 插件清单解析矩阵（伪 profile 根 package.json）------------------------------
+{
+  const invHome = join(tmp, 'inv-home')
+  // 正常清单：bundles 两项 + dependencies 三项（含一个保护包）
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-dsh-tui',
+      dependencies: { '@deepseek-harness-tui/dsh-tui': '1.0.0', '@deepseek-ai/dsh-base': '1.0.0', 'cool-plugin': '0.1.0' },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-harness-tui/dsh-tui'] } },
+    }))
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: bundles 与 dependencies 两维度分列', r.stdout.includes('组合层') && r.stdout.includes('直接依赖'))
+    check('清单: 第三方依赖列出', r.stdout.includes('cool-plugin'))
+    check('清单: 保护包标注内置', r.stdout.includes('内置') && r.stdout.includes('@deepseek-ai/dsh-base'))
+    // 指引的卸载候选 = 第三方直接依赖
+    check('指引: 卸载候选只列第三方', r.stdout.includes('dsh plugin --profile dsh-tui remove cool-plugin'))
+  }
+  // 字段缺失：无 dsh.profile.bundles
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), JSON.stringify({ name: 'dsh-profile-dsh-tui', dependencies: {} }))
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: 字段缺失降级', r.stdout.includes('清单不可读'))
+  }
+  // 字段类型错误：bundles 为字符串
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: 'oops' } } }))
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: 字段类型错误降级', r.stdout.includes('清单不可读'))
+  }
+  // 损坏 JSON：文件存在但非法
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), '{oops')
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: 损坏 JSON 降级且不崩溃', r.status === 0 && r.stdout.includes('清单不可读'))
+  }
+}
+
 rmSync(tmp, { recursive: true, force: true })
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)
