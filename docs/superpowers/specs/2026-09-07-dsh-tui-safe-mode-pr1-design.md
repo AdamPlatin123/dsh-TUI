@@ -129,7 +129,8 @@ MSG 新增 `safeHint`（§5.2，追加语义）；`helpText` 补 safe 一行；s
 1. **零环境可用 + 只读证明**：绝对 Node 路径、空 PATH、隔离 HOME/DSH_HOME（`verify-cli-subcommands.mjs:49` 手法）→ `safe` 非 TTY 降级退出 0；断言输出含标题/诊断/指引标记；断言沙箱 DSH_HOME 内**无目录新增、无文件写入**（前后快照对比——只读的证明靠文件系统差异，不靠退出码）
 2. **清单解析矩阵**：伪 profile package.json 夹具（扩展 `verify-cli-subcommands.mjs:93` 手法）覆盖：正常（两维度+保护包分类）、缺文件、字段缺失、字段类型错误、损坏 JSON——输出断言 + 文件内容不变断言。注意诊断读包安装清单（`installedPkgPath`）与插件清单读 profile 根清单是两个夹具
 3. **fallback 触发矩阵**：dsh 替身用分命令脚本控制（`--version` 成功、实际启动按脚本退出，`verify-launcher.mjs:51/63` 手法）× 结果 {exit 0 / exit 3 / SIGINT / error} × TTY {无}（PTY 见下）：exit 0 无提示且码 0；exit 3 有 safeHint 且码 3；SIGINT 信号透传无提示；error 有 launchFailed+提示且码 1。另测非交互确认拒绝路径、连续失败 pendingExitCode 更新、重试成功以 0 结束、重试不自动二次询问
-4. **PTY 交互子集**：`pty-conpty-probe.mjs` 依赖外部原生模块（其头部 `:8` 注明）——脚本探测依赖可用性：可用则驱动询问 Y/n 与菜单动作 1/5（含超时清理），不可用则**报告跳过并留手动证据清单**（不静默跳过）；Windows conpty 路径同法单列
+   勘误（终审）：spawn error 场景在非 TTY 沙箱不可无竞态构造（预检与最终 spawn 共用 PATH），error 分支自动化覆盖延至 PR② 注入点；现由代码评审覆盖
+4. **PTY 交互子集**：`pty-conpty-probe.mjs` 依赖外部原生模块（其头部 `:8` 注明）——脚本探测依赖可用性：可用则驱动询问 Y/n 与菜单动作 1/5（含超时清理），不可用则**报告跳过并留手动证据清单**（不静默跳过）；Windows conpty 路径同法单列；运行时输出 SKIP 行（不静默跳过）——已落地
 5. **doctor 等价**：`runDoctorChecks` 提取前后 doctor 输出完整期望值比对（仅规范化临时路径等易变字段；覆盖双语、顺序、换行、退出码；不以 doctor/safe 同源互比充当证明）；同时跑既有 `verify-cli-subcommands.mjs`
 6. **双角色截获**：全局瘦壳角色 + `DSH_TUI_NO_DELEGATE=1` + **真实 profile 内副本运行**（扩展 `verify-launcher.mjs:251` 复制真实入口的夹具，含单文件迁移布局：仅入口文件的安装形态下 safe 仍可用——这是 §3.1 单文件契约的直接断言）
 7. **既有断言更新**：`verify-launcher.mjs:174` 涉及非零退出输出的断言按"追加不替换"更新期望；新脚本登记进 CI 聚合入口（`run-ci-group.mjs`）

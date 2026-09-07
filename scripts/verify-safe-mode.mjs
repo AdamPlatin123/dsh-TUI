@@ -173,6 +173,19 @@ const snapshot = dir => {
     // 双语契约：en 模式指引全量英文，不得残留中文指引串。
     const ren = run(['safe'], { DSH_HOME: invHome, DSH_TUI_LANG: 'en' })
     check('指引: 英文模式输出英文指引且无中文残留', ren.stdout.includes('# Remove third-party plugins') && !ren.stdout.includes('卸载第三方插件'))
+    // en 零 CJK 正式断言：对完整 stdout 扫描 CJK 统一表意文字（U+4E00–U+9FFF），
+    // 零命中——夹具含第三方依赖，标题/诊断/清单/卸载指引全分支均被覆盖。
+    {
+      const hits = ren.stdout
+        .split('\n')
+        .map((line, i) => ({ no: i + 1, line, chars: [...new Set(line.match(/[一-鿿]/g) ?? [])] }))
+        .filter(h => h.chars.length > 0)
+      check(
+        '指引: en 模式完整输出零 CJK（U+4E00–U+9FFF 零命中）',
+        hits.length === 0,
+        hits.map(h => `L${h.no} [${h.chars.join('')}] ${h.line.trim()}`).join(' | '),
+      )
+    }
   }
   // 字段缺失：无 dsh.profile.bundles
   {
@@ -192,6 +205,33 @@ const snapshot = dir => {
     const r = run(['safe'], { DSH_HOME: invHome })
     check('清单: 字段类型错误降级', r.stdout.includes('清单不可读'))
   }
+  // 字段类型错误：dependencies 为数组（仅该字段非法，dsh 保持合法）
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), JSON.stringify({ dependencies: [], dsh: { profile: { bundles: [] } } }))
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: dependencies 为数组降级', r.stdout.includes('清单不可读'))
+  }
+  // 字段类型错误：dsh 为 null（仅该字段非法，dependencies 保持合法）
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), JSON.stringify({ dependencies: {}, dsh: null }))
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: dsh 为 null 降级', r.stdout.includes('清单不可读'))
+  }
+  // 边角：bundles 混入非字符串项 → 非字符串被过滤，合法字符串项正常列出
+  {
+    rmSync(invHome, { recursive: true, force: true })
+    const profDir = join(invHome, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'package.json'), JSON.stringify({ dependencies: { 'cool-plugin': '0.1.0' }, dsh: { profile: { bundles: [1, 'x'] } } }))
+    const r = run(['safe'], { DSH_HOME: invHome })
+    check('清单: bundles 非字符串项被过滤且字符串项正常列出', r.stdout.includes('· x  (内置)') && !r.stdout.includes('· 1'))
+  }
   // 损坏 JSON：文件存在但非法
   {
     rmSync(invHome, { recursive: true, force: true })
@@ -210,5 +250,6 @@ const snapshot = dir => {
 // PR 描述。
 
 rmSync(tmp, { recursive: true, force: true })
+console.log('SKIP: PTY interactive subset — manual drill per spec §8 (deferred, see PR description)')
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

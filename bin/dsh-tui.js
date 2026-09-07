@@ -368,6 +368,7 @@ if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
 // truthiness、仅 dsh 缺失为硬失败。safe 复用同一函数——两个入口的
 // diagnostics 不许分叉（对齐 doctor 与 TUI 内 /doctor 的既有契约）。
 const runDoctorChecks = () => {
+  const L = msg('doctorLabels')
   const lines = []
   let hardFailure = false
   const report = (ok, label, detail) => lines.push(`${ok ? '✓' : '✗'} ${label}: ${detail}`)
@@ -385,33 +386,33 @@ const runDoctorChecks = () => {
   const dshVersion = probeVersion('dsh')
   if (dshVersion === undefined) {
     hardFailure = true
-    report(false, 'dsh', msg('doctorLabels').dshMissing)
+    report(false, 'dsh', L.dshMissing)
   } else {
     report(true, 'dsh', dshVersion)
   }
   const pnpmVersion = probeVersion('pnpm')
-  report(pnpmVersion !== undefined, 'pnpm', pnpmVersion ?? msg('doctorLabels').pnpmMissing)
+  report(pnpmVersion !== undefined, 'pnpm', pnpmVersion ?? L.pnpmMissing)
   const profileVersion = readJson(installedPkgPath)?.version
   if (profileVersion === undefined) {
-    report(false, 'profile', `${msg('doctorLabels').profileMissing}  (${profileDir})`)
+    report(false, 'profile', `${L.profileMissing}  (${profileDir})`)
   } else {
     report(true, 'profile', `${profileVersion}  (${profileDir})`)
     if (ownVersion !== undefined && !runningInsideProfile) {
       if (profileVersion === ownVersion) {
-        report(true, 'launcher ↔ profile', msg('doctorLabels').aligned)
+        report(true, 'launcher ↔ profile', L.aligned)
       } else if (isVersionNewer(profileVersion, ownVersion)) {
-        report(false, 'launcher ↔ profile', msg('doctorLabels').profileNewer(profileVersion))
+        report(false, 'launcher ↔ profile', L.profileNewer(profileVersion))
       } else {
-        report(false, 'launcher ↔ profile', msg('doctorLabels').profileOlder(ownVersion))
+        report(false, 'launcher ↔ profile', L.profileOlder(ownVersion))
       }
     }
   }
   // truthiness 而非 !== undefined：空字符串的 key 同样发不了请求，且 TUI 内
   // /doctor（channel.doctorInfo）按 truthiness 报告——两个 doctor 不许分叉。
   const keySet = Boolean(process.env.DEEPSEEK_API_KEY)
-  report(keySet, 'DEEPSEEK_API_KEY', keySet ? msg('doctorLabels').keySet : msg('doctorLabels').keyMissing)
+  report(keySet, 'DEEPSEEK_API_KEY', keySet ? L.keySet : L.keyMissing)
   for (const candidate of [join(homedir(), '.dsh-tui', 'cordis.yml'), join(profileDir, 'cordis.patch.yml')]) {
-    report(existsSync(candidate), 'config', `${candidate}${existsSync(candidate) ? '' : `  ${msg('doctorLabels').missing}`}`)
+    report(existsSync(candidate), 'config', `${candidate}${existsSync(candidate) ? '' : `  ${L.missing}`}`)
   }
   return { hardFailure, lines }
 }
