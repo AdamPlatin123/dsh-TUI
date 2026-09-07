@@ -178,6 +178,10 @@ const MSG = {
     en: code => `[dsh-tui] Exited with code ${code}. Run dsh-tui safe for diagnostics and repair guidance.`,
     zh: code => `[dsh-tui] 异常退出（码 ${code}）。可运行 dsh-tui safe 进入安全模式`,
   },
+  safeRetrySignaled: {
+    en: signal => `[dsh-tui] retry signaled: ${signal}`,
+    zh: signal => `[dsh-tui] 重试被信号中断：${signal}`,
+  },
   safeTitle: {
     en: role => `dsh-tui safe · safe mode (read-only control plane)  [${role}]`,
     zh: role => `dsh-tui safe · 安全模式（控制面只读）  [${role}]`,
@@ -203,6 +207,8 @@ const MSG = {
       exit: code => `Exit (exit code ${code})`,
       prompt: 'safe> ',
       invalid: 'Invalid choice — enter 1-5:',
+      replaySource: ' (replay)',
+      coldStartSource: ' (cold start)',
       bundlesHeader: 'Composition layers (dsh.profile.bundles, ordered):',
       depsHeader: 'Direct dependencies (uninstallable candidates marked 3rd-party):',
       builtin: 'builtin',
@@ -216,6 +222,8 @@ const MSG = {
       exit: code => `退出（退出码 ${code}）`,
       prompt: 'safe> ',
       invalid: '无效选择——请输入 1-5：',
+      replaySource: '（重放）',
+      coldStartSource: '（冷启动）',
       bundlesHeader: '组合层（dsh.profile.bundles，有序）：',
       depsHeader: '直接依赖（第三方为可卸载候选）：',
       builtin: '内置',
@@ -228,6 +236,7 @@ const MSG = {
     en: {
       missingReason: 'package.json missing or corrupt',
       fieldsReason: 'required fields missing or wrong type',
+      notReadyReason: 'profile not ready (missing or half-installed)',
       uninstallThird: '  # Remove third-party plugins (one by one):',
       nothingThird: '  # No third-party direct dependencies to uninstall',
       reinstallTui: '  # Reinstall/align the TUI (see dsh-tui doctor for the version):',
@@ -238,6 +247,7 @@ const MSG = {
     zh: {
       missingReason: 'package.json 缺失或损坏',
       fieldsReason: '必需字段缺失或类型错误',
+      notReadyReason: 'profile 未就绪（未安装或残缺）',
       uninstallThird: '  # 卸载第三方插件（逐个执行）:',
       nothingThird: '  # 无第三方直接依赖可卸载',
       reinstallTui: '  # 重装/对齐 TUI（版本见 dsh-tui doctor）:',
@@ -521,8 +531,18 @@ const askSafeEntry = async pendingExitCode => {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   let cancelled = false
   rl.on('SIGINT', () => { cancelled = true; rl.close() })
-  let answer = ''
-  try { answer = await rl.question(msg('safeAsk')(pendingExitCode)) } catch { cancelled = true }
+  // 与 runSafeSession.askChoice 同款 close 竞速：接口 close（上方 SIGINT
+  // 处理器主动 close，或 TTY 的 Ctrl+D/EOF）时 question 可能永不结算——
+  // 裸 await 会让 fallback 询问挂死（PTY 实测 Ctrl+C 下顶层 await 以退出
+  // 码 13 异常中止）。close 一律按取消，对齐 spec §6.2：Ctrl+C/Ctrl+D/EOF
+  // 等价拒绝（按原退出码收束）。
+  let answer
+  try {
+    answer = await Promise.race([
+      rl.question(msg('safeAsk')(pendingExitCode)),
+      new Promise((_, reject) => rl.once('close', () => reject(new Error('closed')))),
+    ])
+  } catch { cancelled = true }
   try { rl.close() } catch { /* 已关闭 */ }
   if (cancelled || answer === undefined) return false
   const a = answer.trim().toLowerCase()
@@ -534,8 +554,10 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
   let exitCode = pendingExitCode
   const readline = (await import('node:readline/promises')).default
   const doctorLines = () => runDoctorChecks().lines
-  // 询问态跨问句共享：cancelled 只由用户中断（SIGINT/EOF）置位；重试
-  // 交接前先置 handingOff，此后到达的中断不再按用户取消处理。
+  // 询问态跨问句共享：cancelled 只由用户中断（SIGINT/EOF）置位。handingOff
+  // 在重试交接期置位；当前流程有效选择返回时接口已关闭，SIGINT/close 两处
+  // handingOff 守卫实际不可达，属防御性——防未来流程中接口存活跨入交接期
+  // 时，主动交接被误记为用户取消。
   const state = { cancelled: false, handingOff: false }
   const printMenu = () => {
     console.log(msg('safeTitle')(runningInsideProfile ? 'profile' : 'launcher'))
@@ -575,7 +597,7 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
       return null
     }
     if (result.kind === 'signal') {
-      console.error(`[dsh-tui] retry signaled: ${result.signal}`)
+      console.error(msg('safeRetrySignaled')(result.signal))
       return null
     }
     console.error(msg('launchFailed')(result.error))
@@ -600,9 +622,9 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
       // 分支开头区分来源提示：replay = fallback 携带的首启规范化 args 重放；
       // cold start = 手动入口无已规范化 args，按空参数冷启动。
       const replay = typeof retryDsh === 'function'
-      console.log(L.retry + (replay ? ' (replay)' : ' (cold start)'))
+      console.log(L.retry + (replay ? L.replaySource : L.coldStartSource))
       // 两来源共用 profileReady 前置（spec §4：重试不得隐式自举）。
-      if (!profileReady()) { console.error(msg('safeListUnreadable')('profile-not-ready')); continue }
+      if (!profileReady()) { console.error(msg('safeListUnreadable')(msg('safeGuideLabels').notReadyReason)); continue }
       state.handingOff = true // 主动交接：此刻起的中断不算用户取消
       const settled = settleRetry(replay ? await retryDsh() : await startDshSession([]))
       state.handingOff = false
