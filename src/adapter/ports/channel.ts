@@ -20,6 +20,8 @@
  *   projection snapshot.
  */
 
+import type { ChannelUi } from './channel-ui.js'
+import type { ComposerSubmission } from './channel-view.js'
 import type { HostDisposer } from './owner.js'
 
 // ── projection ────────────────────────────────────────────────────────────
@@ -65,6 +67,8 @@ export interface HostChannelProjectionSnapshot {
 }
 
 export interface HostChannelProjectionPort {
+  /** In-process renderer view; never serialized or exposed as a wire snapshot. */
+  ui?(): ChannelUi
   snapshot(): HostChannelProjectionSnapshot
   subscribe(listener: () => void): HostDisposer
 }
@@ -75,7 +79,7 @@ export interface HostChannelActionsPort {
   submit(text: string): void
   steer(text: string): void
   cancel(): void
-  interruptAndDeliver(texts: readonly string[]): number
+  interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
   clear(): void
   loadOlder(): number
   notify(text: string, options?: { readonly color?: 'error' | 'warning' | 'success'; readonly timeoutMs?: number }): HostDisposer

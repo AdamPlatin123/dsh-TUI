@@ -35,6 +35,7 @@ const { installDecisionGuard, markDecisionDispatchTopology, unmarkDecisionDispat
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { buildHostDescriptor, buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/adapter/standard/descriptor.js')
 const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
+const { KernelRuntime } = await import('../src/adapter/kernel/kernel-runtime.js')
 const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
 const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/adapter/standard/registry.js')
 const { createContractIndex, validateHost } = await import('../src/adapter/standard/validate.js')
@@ -53,6 +54,34 @@ if (!data) {
 const index = createContractIndex(data.registry, data.permissions)
 const REGISTRY_PERMISSIONS = data.permissions.permissions.map(p => p.name)
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const INITIAL_KERNEL_REFRESH_TIMEOUT_MS = 5_000
+
+/** Wait for the host-owned initial live verification, rather than assuming a
+ * timer made the new-mode descriptor publishable. This bounded seam exposes
+ * result only; it cannot control or expose the Kernel to plugin callers. */
+async function awaitInitialKernelReadiness(
+  host: Parameters<typeof pluginHostRow.getHostInitialKernelRefreshForTest>[0],
+  fixture: string,
+): Promise<void> {
+  const readiness = pluginHostRow.getHostInitialKernelRefreshForTest(host)
+  if (readiness === undefined) throw new Error(`${fixture}: initial kernel readiness accessor unavailable`)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      readiness.awaitResult(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(
+          `${fixture}: initial kernel refresh did not settle within ${INITIAL_KERNEL_REFRESH_TIMEOUT_MS}ms`,
+        )), INITIAL_KERNEL_REFRESH_TIMEOUT_MS)
+      }),
+    ])
+    if (result.status !== 'completed') {
+      throw new Error(`${fixture}: initial kernel refresh ended ${result.status}${result.error === undefined ? '' : ` (${result.error})`}`)
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 /** Test helper: construct an explicit all-supported live descriptor (the old
  * no-lifecycles fallback was removed from production). */
@@ -283,13 +312,17 @@ check1('decision permission map is immutable',
   guardCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
     guardWarnings.push([format, ...params].map(String).join(' '))
   }
-  guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-  await sleep(50)
+  const guardHostFiber = guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply }) as unknown as { await(): Promise<unknown> }
+  await guardHostFiber.await()
+  const guardHost = guardCtx.get('tuiPluginHost')
+  await awaitInitialKernelReadiness(guardHost, 'guard admission fixture')
+  check1('guard admission fixture initial kernel refresh completed',
+    pluginHostRow.getHostInitialKernelRefreshForTest(guardHost)?.result()?.status === 'completed')
   // This battery exercises DecisionEvents directly without composing a full
   // channel. Mark the real dispatch topology explicitly so admission sees the
   // same topology a live channel would provide.
   markDecisionDispatchTopology(guardCtx)
-  const topologyDescriptor = guardCtx.get('tuiPluginHost')?.hostDescriptor()
+  const topologyDescriptor = guardHost?.hostDescriptor()
   const topologyDecision = topologyDescriptor?.contracts.find(contract => contract.kind === 'DecisionEvents')
   check1('real dispatch topology publishes DecisionEvents feature set',
     topologyDecision !== undefined
@@ -301,7 +334,7 @@ check1('decision permission map is immutable',
     requires: [DECISION_COORDINATE],
     permissions: [{ name: 'session.input.intercept', scope: 'tui/input' }],
   }), 'test:cordis-export-name/dsh-plugin.json', { activationId: 'act-guard' })
-  const release = guardCtx.get('tuiPluginHost')?.subscribeDecision(
+  const release = guardHost?.subscribeDecision(
     admitted.context,
     'tui/input',
     event => event.text === '拦截' ? { cancel: true, reason: '授权拦截' } : undefined,
@@ -332,7 +365,7 @@ check1('decision permission map is immutable',
   // same composition's public Host Descriptor must stop publishing
   // DecisionEvents.
   unmarkDecisionDispatchTopology(guardCtx)
-  const afterUnload = guardCtx.get('tuiPluginHost')?.hostDescriptor()
+  const afterUnload = guardHost?.hostDescriptor()
   check1('unmarking DecisionEvents topology removes it from the public Host Descriptor',
     afterUnload !== undefined && !afterUnload.contracts.some(contract => contract.kind === 'DecisionEvents'),
     JSON.stringify(afterUnload?.contracts.map(contract => contract.kind)))
@@ -521,6 +554,185 @@ check1('decision permission map is immutable',
       decisionError !== undefined && decisionError.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
       && decisionError.message.includes('tui.dsh/v1alpha1#DecisionEvents'),
       decisionError?.message ?? 'no error')
+
+    // mountAdmitted must surface Cordis' stored apply/admission error instead
+    // of converting it to a generic readiness timeout.
+    let helperAdmissionError: Error | undefined
+    try {
+      await mountAdmitted(
+        admissionCtx,
+        'helper-required-command-plugin',
+        testManifest({
+          id: 'helper-required-command-plugin',
+          requires: [COMMAND_COORDINATE],
+        }),
+      )
+    } catch (error) {
+      helperAdmissionError = error instanceof Error ? error : new Error(String(error))
+    }
+    check1('mountAdmitted propagates the actual Cordis admission error',
+      helperAdmissionError?.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE') === true
+      && helperAdmissionError.message.includes('commands.dsh/v1alpha1#Command'),
+      helperAdmissionError?.message ?? 'no error')
+  }
+
+  // Initial new-mode refresh is a real admission barrier. A host with a
+  // delayed first refresh must reject while pending, then admit after that
+  // exact refresh completes and the real dispatch markers are already present.
+  {
+    const delayedCtx = new Context()
+    delayedCtx.logger.warn = () => undefined
+    const originalRefresh = KernelRuntime.prototype.refresh
+    let releaseRefresh: (() => void) | undefined
+    const refreshStarted = new Promise<void>(resolve => { releaseRefresh = resolve })
+    let delayedRefreshStarted = false
+    let releaseDelayedRefresh: (() => void) | undefined
+    const delayedRefresh = new Promise<void>(resolve => { releaseDelayedRefresh = resolve })
+    KernelRuntime.prototype.refresh = async function (options) {
+      const context = (this as unknown as { context?: unknown }).context
+      if (context === delayedCtx && !delayedRefreshStarted) {
+        delayedRefreshStarted = true
+        releaseRefresh?.()
+        await delayedRefresh
+      }
+      return originalRefresh.call(this, options)
+    }
+    let pendingAdmitted: Awaited<ReturnType<typeof mountAdmitted>> | undefined
+    let pendingAdmissionError: Error | undefined
+    let readyAdmitted: Awaited<ReturnType<typeof mountAdmitted>> | undefined
+    let readinessError: Error | undefined
+    let releaseTopology: (() => void) | undefined
+    const fibers: { dispose(): unknown }[] = []
+    try {
+      const delayedHostFiber = delayedCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply }) as unknown as {
+        dispose(): unknown
+        await(): Promise<unknown>
+      }
+      fibers.push(delayedHostFiber)
+      await delayedHostFiber.await()
+      await refreshStarted
+      const delayedHost = delayedCtx.get('tuiPluginHost')
+      const readiness = pluginHostRow.getHostInitialKernelRefreshForTest(delayedHost)
+      check1('delayed-refresh fixture exposes a pending host-owned initial refresh',
+        readiness?.result()?.status === 'pending')
+      releaseTopology = markDecisionDispatchTopology(delayedCtx)
+      const pendingDescriptor = delayedHost?.hostDescriptor()
+      check1('pending initial refresh keeps new-mode DecisionEvents unpublished',
+        pendingDescriptor?.contracts.some(contract => contract.kind === 'DecisionEvents') === false,
+        JSON.stringify(pendingDescriptor?.contracts.map(contract => contract.kind)))
+      try {
+        pendingAdmitted = await mountAdmitted(
+          delayedCtx,
+          'delayed-refresh-pending-plugin',
+          testManifest({ id: 'com.example.delayed-pending', requires: [DECISION_COORDINATE] }),
+        )
+      } catch (error) {
+        pendingAdmissionError = error instanceof Error ? error : new Error(String(error))
+      }
+      check1('admission rejects while the initial refresh is pending',
+        pendingAdmitted === undefined
+        && pendingAdmissionError?.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE') === true
+        && pendingAdmissionError.message.includes('tui.dsh/v1alpha1#DecisionEvents'),
+        pendingAdmissionError?.message ?? 'admission unexpectedly succeeded')
+      releaseDelayedRefresh?.()
+      try {
+        await awaitInitialKernelReadiness(delayedHost, 'delayed-refresh fixture')
+      } catch (error) {
+        readinessError = error instanceof Error ? error : new Error(String(error))
+      }
+      check1('delayed-refresh fixture completes initial refresh after release',
+        readinessError === undefined
+        && pluginHostRow.getHostInitialKernelRefreshForTest(delayedHost)?.result()?.status === 'completed',
+        readinessError?.message)
+      const readyDescriptor = delayedHost?.hostDescriptor()
+      check1('completed initial refresh publishes real DecisionEvents markers immediately',
+        readyDescriptor?.contracts.some(contract => contract.kind === 'DecisionEvents') === true,
+        JSON.stringify(readyDescriptor?.contracts.map(contract => contract.kind)))
+      readyAdmitted = await mountAdmitted(
+        delayedCtx,
+        'delayed-refresh-ready-plugin',
+        testManifest({ id: 'com.example.delayed-ready', requires: [DECISION_COORDINATE] }),
+      )
+      check1('admission succeeds after initial readiness with real markers', readyAdmitted !== undefined)
+    } finally {
+      releaseDelayedRefresh?.()
+      KernelRuntime.prototype.refresh = originalRefresh
+      try {
+        releaseTopology?.()
+      } catch {
+        // Best-effort cleanup for the real topology marker.
+      }
+      await Promise.resolve(readyAdmitted?.fiber.dispose())
+      await Promise.resolve(pendingAdmitted?.fiber.dispose())
+      for (const fiber of fibers.reverse()) await Promise.resolve(fiber.dispose())
+    }
+  }
+
+  // A stale completed refresh can retain the topology that existed before a
+  // channel marks DecisionEvents. Admission must use build(), which performs
+  // the same synchronous detection as hostDescriptor(), before reading that
+  // refresh snapshot. The controlled Kernel seam below makes the old direct
+  // descriptorBuild() bypass deterministically return the pre-marker build;
+  // it is not timing- or retry-based.
+  {
+    const topologyCtx = new Context()
+    topologyCtx.logger.warn = () => undefined
+    topologyCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+    await sleep(50)
+    const topologyHost = topologyCtx.get('tuiPluginHost')
+    const staleBuild = topologyHost?.describe()
+    check1('stale-topology fixture starts without DecisionEvents',
+      staleBuild !== undefined && !staleBuild.descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),
+      JSON.stringify(staleBuild?.descriptor.contracts.map(contract => contract.kind)))
+    const releaseTopology = markDecisionDispatchTopology(topologyCtx)
+    const freshBuild = topologyHost?.describe()
+    check1('stale-topology fixture synchronously detects DecisionEvents after marker registration',
+      freshBuild !== undefined && freshBuild.descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),
+      JSON.stringify(freshBuild?.descriptor.contracts.map(contract => contract.kind)))
+    const originalDetect = KernelRuntime.prototype.detect
+    const originalDescriptorBuild = KernelRuntime.prototype.descriptorBuild
+    let synchronousTopologyDetection = false
+    let descriptorBuildDepth = 0
+    const isTopologyKernel = (runtime: InstanceType<typeof KernelRuntime>): boolean => {
+      const context = (runtime as unknown as { context?: { get?(name: string): unknown } }).context
+      return context?.get?.('tuiPluginHost') === topologyHost
+    }
+    KernelRuntime.prototype.detect = function (): ReturnType<typeof originalDetect> {
+      if (isTopologyKernel(this) && descriptorBuildDepth === 0) synchronousTopologyDetection = true
+      return originalDetect.call(this)
+    }
+    KernelRuntime.prototype.descriptorBuild = function (): ReturnType<typeof originalDescriptorBuild> {
+      if (!isTopologyKernel(this) || staleBuild === undefined || freshBuild === undefined) return originalDescriptorBuild.call(this)
+      descriptorBuildDepth += 1
+      try {
+        originalDescriptorBuild.call(this)
+        return synchronousTopologyDetection ? freshBuild : staleBuild
+      } finally {
+        descriptorBuildDepth -= 1
+      }
+    }
+    let topologyAdmissionError: Error | undefined
+    let topologyAdmitted: Awaited<ReturnType<typeof mountAdmitted>> | undefined
+    try {
+      topologyAdmitted = await mountAdmitted(
+        topologyCtx,
+        'stale-topology-decision-plugin',
+        testManifest({
+          id: 'stale-topology-decision-plugin',
+          requires: [DECISION_COORDINATE],
+        }),
+      )
+    } catch (error) {
+      topologyAdmissionError = error instanceof Error ? error : new Error(String(error))
+    } finally {
+      KernelRuntime.prototype.detect = originalDetect
+      KernelRuntime.prototype.descriptorBuild = originalDescriptorBuild
+      releaseTopology()
+    }
+    check1('admission synchronously rebuilds stale DecisionEvents topology',
+      topologyAdmitted !== undefined && topologyAdmissionError === undefined,
+      topologyAdmissionError?.message ?? 'admission did not complete')
+    await Promise.resolve(topologyAdmitted?.fiber.dispose())
   }
 
   // A lazy descriptor must also follow services that appear or disappear

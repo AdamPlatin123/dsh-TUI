@@ -575,7 +575,7 @@ function fileHasMethodCallNamedWithUndefinedArg(relative: string, method: string
 // sites below are the ones the gate promises.
 const EXTRA_CAPABILITY_GUARDS: ReadonlyArray<{ capability: string; file: string }> = Object.freeze([
   { capability: 'host.grants.evaluate', file: 'adapter/standard/grants.ts' },
-  { capability: 'host.commands.invoke', file: 'dsh-adapter/channel.ts' },
+  { capability: 'host.commands.invoke', file: 'dsh-adapter/channel/external-commands.ts' },
   { capability: 'host.presentation.ask', file: 'dsh-adapter/questions.ts' },
   { capability: 'host.presentation.approve', file: 'dsh-adapter/approvals.ts' },
 ])
@@ -588,15 +588,15 @@ assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.commands.invoke'] === 'mutate'
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.presentation.ask'] === 'mutate')
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.presentation.approve'] === 'mutate')
 
-// The grant evaluation path in channel.ts is a host-internal use of the grant
-// store, not an adapter capability guard. It is still a machine-checkable
-// invocation claim, so keep it in the explicit heuristic section below rather
-// than adding it to the AST guard list above.
+// The grant evaluation path is hosted by external-commands.ts, not an adapter
+// capability guard. It is still a machine-checkable invocation claim, so keep
+// it in the explicit heuristic section below rather than adding it to the AST
+// guard list above.
 const HEURISTIC_INTEGRATION_CLAIMS: ReadonlyArray<{ file: string; description: string; needle: string }> = Object.freeze([
   {
-    file: 'dsh-adapter/channel.ts',
-    description: 'channel wraps grant evaluation through currentGrantStore().allows',
-    needle: 'currentGrantStore().allows(',
+    file: 'dsh-adapter/channel/external-commands.ts',
+    description: 'external command invoker receives grant evaluation through allows',
+    needle: 'deps.allows(',
   },
   {
     file: 'adapter/upstream/host-descriptor-driver.ts',
@@ -664,8 +664,10 @@ assert.ok(KNOWN_GATE_BOUNDARIES.length >= 2, 'known gate boundary list must be e
 
 // ── Production integration claims (AST-verified call sites) ────────────────
 const integrationClaimChecks: ReadonlyArray<{ file: string; label: string; check: () => boolean }> = Object.freeze([
-  { file: 'dsh-adapter/channel.ts', label: 'getHostFacade(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'getHostFacade') },
-  { file: 'dsh-adapter/channel.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'collectAdapterDiagnostics') },
+  // Diagnostics/report behavior is owned by the extracted report specialist,
+  // not the composition root; keep the AST proof at its real ownership seam.
+  { file: 'dsh-adapter/channel/reports.ts', label: 'getHostFacade(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'getHostFacade') },
+  { file: 'dsh-adapter/channel/reports.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'collectAdapterDiagnostics') },
   { file: 'dsh-adapter/channel.ts', label: 'markDecisionDispatchTopology(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'markDecisionDispatchTopology') },
   { file: 'dsh-adapter/effect-ledger.ts', label: 'createKernelLedger(...)', check: () => fileHasNamedCall('dsh-adapter/effect-ledger.ts', 'createKernelLedger') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'commands.list(undefined)', check: () => fileHasMethodCallNamedWithUndefinedArg('adapter/upstream/host-descriptor-driver.ts', 'list') },
@@ -753,6 +755,7 @@ try {
   } = await import('../src/dsh-adapter/command-trees.js')
   const {
     TuiWorkspaceRuntime,
+    getHostWorkspaceRuntime,
   } = await import('../src/dsh-adapter/workspaces.js')
   const {
     TuiDialogRuntime,
@@ -785,6 +788,23 @@ try {
   assert.throws(() => p3Toast.show('x'), /shadow policy denies/)
   assert.throws(() => p3CommandTrees.register({ root: 'x', children: () => [] } as never), /shadow policy denies/)
   await assert.rejects(p3Workspaces.rename('x', 'y'), /shadow policy denies/)
+  // The Channel mutates workspaces through the host facade, not through the
+  // guarded public service surface, so the facade must enforce the same
+  // policy (review finding: workspace host facade bypassed shadow policy).
+  const workspaceHost = getHostWorkspaceRuntime(p3Workspaces)
+  assert.ok(workspaceHost !== undefined, 'passive root must expose the workspace host facade')
+  const denied = async (label: string, run: () => unknown): Promise<void> => {
+    let message = ''
+    try {
+      await run()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    assert.match(message, /shadow policy denies/, `${label} must be denied by shadow policy`)
+  }
+  await denied('facade commandShell', () => workspaceHost!.commandShell(process.cwd()))
+  await denied('facade rename', () => workspaceHost!.rename(process.cwd(), 'x'))
+  await denied('facade runCommand', () => workspaceHost!.runCommand('x', '', process.cwd()))
   assert.throws(() => p3Dialogs.select({ title: 'x', options: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Questions.ask({ questions: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Approvals.park({ toolName: 'x' } as never), /shadow policy denies/)
@@ -895,6 +915,7 @@ try {
   } = await import('../src/dsh-adapter/command-trees.js')
   const {
     TuiWorkspaceRuntime,
+    getHostWorkspaceRuntime,
   } = await import('../src/dsh-adapter/workspaces.js')
   const {
     TuiDialogRuntime,
@@ -927,6 +948,23 @@ try {
   assert.throws(() => p3Toast.show('x'), /shadow policy denies/)
   assert.throws(() => p3CommandTrees.register({ root: 'x', children: () => [] } as never), /shadow policy denies/)
   await assert.rejects(p3Workspaces.rename('x', 'y'), /shadow policy denies/)
+  // The Channel mutates workspaces through the host facade, not through the
+  // guarded public service surface, so the facade must enforce the same
+  // policy (review finding: workspace host facade bypassed shadow policy).
+  const workspaceHost = getHostWorkspaceRuntime(p3Workspaces)
+  assert.ok(workspaceHost !== undefined, 'passive root must expose the workspace host facade')
+  const denied = async (label: string, run: () => unknown): Promise<void> => {
+    let message = ''
+    try {
+      await run()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    assert.match(message, /shadow policy denies/, `${label} must be denied by shadow policy`)
+  }
+  await denied('facade commandShell', () => workspaceHost!.commandShell(process.cwd()))
+  await denied('facade rename', () => workspaceHost!.rename(process.cwd(), 'x'))
+  await denied('facade runCommand', () => workspaceHost!.runCommand('x', '', process.cwd()))
   assert.throws(() => p3Dialogs.select({ title: 'x', options: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Questions.ask({ questions: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Approvals.park({ toolName: 'x' } as never), /shadow policy denies/)
