@@ -147,6 +147,10 @@ MSG 新增 `safeHint`（§5.2，追加语义）；`helpText` 补 safe 一行；s
 - PR③：三槽健康检查点（含 pnpm-lock.yaml 与 workspace 配置与市场状态）+ 依赖重建（`dsh plugin install` 先例，优先验证 frozen-lockfile 语义）+ 干净 profile 两隔离等级（同 home 救援 profile / 隔离 home 诊断环境）
 - 结构化失败检测（stderr 管道化、就绪协议/挂起检测）独立立项，不依附 PR②③
 
+### 范围变更记录（2026-09-10）：救援 profile 提前至本 PR
+
+按维护者"最小可用"定义（创建空白 profile 并以 doctor 指导用户操作），PR③ 的"同 home 救援 profile"以简化版提前进本 PR：菜单选项 5 = 先展示 doctor 诊断 → 创建 `dsh-tui-safe` 空白 profile（`dsh plugin add` 钉当前版本，bootstrap 同款 -w 重试与 no-op 复查；**已存在绝不重复安装**——固定名 add 不清旧内容）→ 以它干净启动（`startDshSession` 参数化 profile），结果与重试同结算（exit 0 结束会话，其余回菜单）。写边界收窄为：**写操作只发生在全新目录**（本 PR §4 的第二个显式例外）。隔离 home 诊断环境与检查点/依赖重建仍留 PR③。验证：非 TTY 指引含救援手动命令（verify-safe-mode 断言）+ PTY 演练 D12（doctor 展示/创建落盘/干净启动 exit 0，24/24）。
+
 ## 11. 开放问题（实现计划阶段解决，不阻塞本 spec）
 
 - PTY 依赖在 CI 的落位（原生模块安装或专用 runner）

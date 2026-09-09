@@ -211,9 +211,16 @@ diagnostics, a profile plugin inventory, and repair guidance.
   child process, not a startup hang (a spawn failure is treated as exit
   code 1).
 - **Read-only boundary**: the safe-mode control plane is read-only (diagnostics,
-  inventory, and guidance never change state); the one exception is
-  "retry normal startup". The retry never bootstraps (no first-run install) —
-  an incomplete profile gets reinstall guidance instead.
+  inventory, and guidance never change state); the two exceptions are
+  "retry normal startup" and "create blank rescue profile" — the latter is an
+  explicit rescue action whose writes land only in a brand-new directory.
+- **Rescue profile (minimum-viable clean start)**: menu option 5 shows the
+  environment diagnostics first, then creates a blank `dsh-tui-safe` profile
+  (base + TUI only, no third-party plugins, pinned to the current version)
+  and starts it clean — the "use dsh to fix dsh" lane for a broken main
+  profile. When the rescue session ends you are back in the menu. If the
+  profile already exists it is started as-is, never re-installed over. Manual
+  equivalents are listed in the guidance (option 4).
 - **Outdated global launcher**: if the profile copy is unreadable or too old,
   upgrade the launcher first:
   `npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<version>`.

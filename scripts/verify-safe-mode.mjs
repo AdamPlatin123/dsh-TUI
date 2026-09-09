@@ -170,6 +170,9 @@ const snapshot = dir => {
     check('清单: 保护包标注内置', r.stdout.includes('内置') && r.stdout.includes('@deepseek-ai/dsh-base'))
     // 指引的卸载候选 = 第三方直接依赖
     check('指引: 卸载候选只列第三方', r.stdout.includes('dsh plugin --profile dsh-tui remove cool-plugin'))
+    // 救援 profile（最小可用）：指引须给出干净环境的手动命令——非交互
+    // 用户即使不进菜单也能看到这条路。
+    check('指引: 含救援 profile 创建与启动命令', r.stdout.includes('dsh plugin --profile dsh-tui-safe add') && r.stdout.includes('dsh --profile dsh-tui-safe'))
     // 双语契约：en 模式指引全量英文，不得残留中文指引串。
     const ren = run(['safe'], { DSH_HOME: invHome, DSH_TUI_LANG: 'en' })
     check('指引: 英文模式输出英文指引且无中文残留', ren.stdout.includes('# Remove third-party plugins') && !ren.stdout.includes('卸载第三方插件'))

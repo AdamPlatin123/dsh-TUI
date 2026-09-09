@@ -62,6 +62,10 @@ const ownPackage = readJson(join(ownDir, 'package.json'))
 const ownVersion = ownPackage?.name === '@deepseek-harness-tui/dsh-tui' ? ownPackage.version : undefined
 const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
+// 救援 profile（最小可用）：同 home 下的空白 profile（仅 base+TUI，无第三方
+// 插件），是主 profile 装炸时的干净启动通道——创建走官方 dsh plugin add
+// （钉当前版本，同 bootstrap 语义），写操作只发生在这个新目录。
+const RESCUE_PROFILE = 'dsh-tui-safe'
 
 // --- 内联小工具（见文件头：零 lib 依赖是迁移契约的一部分）---------------------
 // 与 lib/types/utils/shellQuote.js 同语义的最小实现：cmd.exe 以空格拼接参数
@@ -198,15 +202,32 @@ const MSG = {
     en: 'Repair commands (run them yourself — safe mode is read-only):',
     zh: '修复命令（需自行执行——安全模式只读）：',
   },
+  safeRescueCreating: {
+    en: `[dsh-tui] Creating the blank rescue profile (${RESCUE_PROFILE})…`,
+    zh: `[dsh-tui] 正在创建空白救援 profile（${RESCUE_PROFILE}）…`,
+  },
+  safeRescueExists: {
+    en: `[dsh-tui] Rescue profile already exists — starting it as-is.`,
+    zh: `[dsh-tui] 救援 profile 已存在——按现状直接启动。`,
+  },
+  safeRescueCreated: {
+    en: `[dsh-tui] Rescue profile created (base + TUI only, no third-party plugins) — starting it.`,
+    zh: `[dsh-tui] 救援 profile 已创建（仅 base + TUI，无第三方插件）——正在启动。`,
+  },
+  safeRescueFailed: {
+    en: detail => `[dsh-tui] Rescue profile creation failed (${detail}). See the diagnostics above and the guidance (option 4).`,
+    zh: detail => `[dsh-tui] 救援 profile 创建失败（${detail}）。请看上方诊断与指引（选项 4）。`,
+  },
   safeMenuLabels: {
     en: {
       retry: 'Retry normal startup',
       doctor: 'Run environment diagnostics',
       inventory: 'Show profile plugin inventory (read-only)',
       guide: 'Show repair command guidance',
+      rescue: 'Create blank rescue profile and start clean (dsh-tui-safe)',
       exit: code => `Exit (exit code ${code})`,
       prompt: 'safe> ',
-      invalid: 'Invalid choice — enter 1-5:',
+      invalid: 'Invalid choice — enter 1-6:',
       replaySource: ' (replay)',
       coldStartSource: ' (cold start)',
       bundlesHeader: 'Composition layers (dsh.profile.bundles, ordered):',
@@ -219,9 +240,10 @@ const MSG = {
       doctor: '运行环境诊断',
       inventory: '查看 profile 插件清单（只读）',
       guide: '显示修复命令指引',
+      rescue: '创建空白救援 profile 并干净启动（dsh-tui-safe）',
       exit: code => `退出（退出码 ${code}）`,
       prompt: 'safe> ',
-      invalid: '无效选择——请输入 1-5：',
+      invalid: '无效选择——请输入 1-6：',
       replaySource: '（重放）',
       coldStartSource: '（冷启动）',
       bundlesHeader: '组合层（dsh.profile.bundles，有序）：',
@@ -243,6 +265,7 @@ const MSG = {
       versionPlaceholder: '<version>',
       diagnostics: '  # Environment diagnostics:',
       globalUpgrade: '  # Global upgrade when the launcher is too old:',
+      rescueProfile: '  # Rescue profile (blank, no third-party plugins; also menu option 5):',
     },
     zh: {
       missingReason: 'package.json 缺失或损坏',
@@ -254,6 +277,7 @@ const MSG = {
       versionPlaceholder: '<版本>',
       diagnostics: '  # 环境诊断:',
       globalUpgrade: '  # 启动器过旧时的全局升级:',
+      rescueProfile: '  # 救援 profile（空白，无第三方插件；也可用菜单选项 5 一键创建并启动）:',
     },
   },
   legacyEnv: {
@@ -460,6 +484,9 @@ const renderGuide = lines => {
   lines.push(`  dsh-tui doctor`)
   lines.push(L.globalUpgrade)
   lines.push(`  npm install -g --legacy-peer-deps ${PACKAGE}@${L.versionPlaceholder}`)
+  lines.push(L.rescueProfile)
+  lines.push(`  dsh plugin --profile ${RESCUE_PROFILE} add ${PACKAGE}@${L.versionPlaceholder}`)
+  lines.push(`  dsh --profile ${RESCUE_PROFILE}`)
 }
 const renderSafeReport = extraLines => {
   const lines = []
@@ -503,9 +530,9 @@ const forwardExit = child => {
 // 或 safe 菜单）。Windows 经 cmd()/shell:true 启动（见 cmd 注释），壳层
 // 观察到的 signal 不保证等同内部 dsh 的中断语义：判定一律只看数值 code，
 // 不从数值反推信号（spec §5.1）。
-const startDshSession = dshArgs =>
+const startDshSession = (dshArgs, profile = PROFILE) =>
   new Promise(resolve => {
-    const child = spawn(...cmd('dsh', ['--profile', PROFILE, ...dshArgs]), {
+    const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
       stdio: 'inherit',
       env: process.env,
       ...shellOpt,
@@ -570,7 +597,8 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
     console.log(`  2) ${L.doctor}`)
     console.log(`  3) ${L.inventory}`)
     console.log(`  4) ${L.guide}`)
-    console.log(`  5) ${L.exit(exitCode)}`)
+    console.log(`  5) ${L.rescue}`)
+    console.log(`  6) ${L.exit(exitCode)}`)
   }
   const askChoice = async () => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -614,8 +642,8 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
     let choice = ''
     for (;;) {
       const { cancelled, value } = await askChoice()
-      if (cancelled) { choice = '5'; break }
-      if (['1', '2', '3', '4', '5'].includes(value)) { choice = value; break }
+      if (cancelled) { choice = '6'; break }
+      if (['1', '2', '3', '4', '5', '6'].includes(value)) { choice = value; break }
       invalid++
       if (invalid >= INVALID_LIMIT) break
       console.log(L.invalid)
@@ -637,8 +665,48 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
     if (choice === '2') { for (const l of doctorLines()) console.log(l); continue }
     if (choice === '3') { const lines = []; renderInventory(lines); for (const l of lines) console.log(l); continue }
     if (choice === '4') { const lines = []; renderGuide(lines); for (const l of lines) console.log(l); continue }
+    if (choice === '5') {
+      // 救援动作（最小可用）：先展示 doctor 诊断（决策依据），再创建/复用
+      // 空白救援 profile 并干净启动。创建失败回菜单并指向诊断与指引；
+      // 启动结果与重试同一结算语义（exit 0 结束会话，其余回菜单）。
+      for (const l of doctorLines()) console.log(l)
+      const created = createRescueProfile()
+      if (created.kind === 'failed') { console.error(msg('safeRescueFailed')(created.detail)); continue }
+      console.log(created.kind === 'exists' ? msg('safeRescueExists') : msg('safeRescueCreated'))
+      state.handingOff = true
+      const settled = settleRetry(await startDshSession([], RESCUE_PROFILE))
+      state.handingOff = false
+      if (settled !== null) return settled
+      continue
+    }
     return exitCode
   }
+}
+
+// 救援 profile 创建（最小可用的显式救援动作，spec §4 边界的第二个例外——
+// 写操作只发生在全新目录）。已存在时绝不重复 add（固定名 add 不清旧内容，
+// 见调研报告 1.2）；失败返回原因供菜单提示转看诊断与指引。
+const createRescueProfile = () => {
+  // 就绪判定与 bootstrapProfile 同源：安装判定文件在 node_modules 深处
+  // （真实 dsh plugin add 与测试 stub 都落这里），不是 profile 根 manifest。
+  const rescueInstalledPkg = join(dshHome, 'profiles', RESCUE_PROFILE, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json')
+  if (readJson(rescueInstalledPkg) !== undefined) return { kind: 'exists' }
+  const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+  if (probe.error || probe.status !== 0) return { kind: 'failed', detail: 'dsh missing' }
+  console.log(msg('safeRescueCreating'))
+  const runAdd = extraArgs => spawnSync(
+    ...cmd('dsh', ['plugin', '--profile', RESCUE_PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
+    { stdio: ['inherit', 'pipe', 'pipe'], ...shellOpt },
+  )
+  let add = runAdd([])
+  if (add.status !== 0) {
+    const captured = `${add.stdout ?? ''}${add.stderr ?? ''}`
+    process.stderr.write(captured)
+    if (captured.includes('ERR_PNPM_ADDING_TO_ROOT')) add = runAdd(['-w'])
+  }
+  if (add.status !== 0) return { kind: 'failed', detail: `exit ${add.status ?? 1}` }
+  if (readJson(rescueInstalledPkg) === undefined) return { kind: 'failed', detail: 'no-op install' }
+  return { kind: 'created' }
 }
 
 // 首次启动的结算：signal 自杀透传；error 打印 launchFailed 后接 fallback
