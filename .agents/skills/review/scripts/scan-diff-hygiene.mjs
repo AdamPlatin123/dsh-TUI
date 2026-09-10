@@ -137,7 +137,11 @@ function parseUnifiedDiff(diffText) {
       continue
     }
 
-    if (rawLine.startsWith('+++ ')) {
+    // A file header only at a file boundary (`diff --git` reset newLine to
+    // null). Inside a hunk the same prefix is content: an added line whose
+    // text starts with `++` renders as `+++ …`, and treating it as a header
+    // both dropped the line and rewrote currentFile.
+    if (newLine == null && rawLine.startsWith('+++ ')) {
       const value = rawLine.slice(4).trim()
       if (value === '/dev/null') currentFile = null
       else currentFile = value.startsWith('b/') ? value.slice(2) : value
@@ -152,7 +156,7 @@ function parseUnifiedDiff(diffText) {
 
     if (currentFile == null || newLine == null) continue
 
-    if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+    if (rawLine.startsWith('+')) {
       const added = rawLine.slice(1)
       if (!shouldSkipFile(currentFile)) {
         for (const candidate of candidateForFile(currentFile, newLine, added)) {
@@ -215,7 +219,7 @@ function selfTest() {
 index 1111111..2222222 100644
 --- a/src/demo.ts
 +++ b/src/demo.ts
-@@ -1,3 +1,10 @@
+@@ -1,3 +1,12 @@
  export const keep = true
 -console.log('removed')
 +console.log('added')
@@ -225,6 +229,9 @@ index 1111111..2222222 100644
 +const value = input as any
 +test.skip('later', () => {})
 +const literal = 'console.log is text only'
++++counter
++++ increment
++console.log('after plus-plus')
  return keep
 diff --git a/lib/generated.js b/lib/generated.js
 new file mode 100644
@@ -256,12 +263,25 @@ new file mode 100644
   if (candidates.some(item => item.excerpt.includes('removed'))) {
     throw new Error('removed lines must not be scanned')
   }
+  // Added lines whose text starts with `++` render as `+++ …` in the diff. They
+  // are content, not file headers: the line must be scanned (kind below) and
+  // the following lines must keep their true new-file numbers.
+  if (!candidates.some(item => item.file === 'src/demo.ts' && item.line === 11 && item.kind === 'stdout-debug-output')) {
+    throw new Error('++-prefixed added lines must be scanned and keep following line numbers aligned')
+  }
+  if (candidates.some(item => item.file === 'increment')) {
+    throw new Error('++-prefixed content must not be mistaken for a file header')
+  }
   console.log(`scan-diff-hygiene self-test: OK (${candidates.length} candidates)`)
 }
 
 async function readInput(path) {
   if (path) return readFileSync(path, 'utf8')
   if (process.stdin.isTTY) throw new Error('provide --input <patch> or pipe a unified diff on stdin')
+  // Explicit utf8: without it each chunk is a Buffer decoded on its own, so a
+  // multibyte character split across the 64 KiB boundary becomes U+FFFD and a
+  // regex can silently miss the line (this repo's docs and UI copy are bilingual).
+  process.stdin.setEncoding('utf8')
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   return text

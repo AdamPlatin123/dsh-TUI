@@ -174,10 +174,25 @@ function extractProtocol(text) {
 }
 
 function readSubmodulePointers(repo, revision) {
-  if (revision === 'WORKTREE' || revision === 'INDEX') {
-    const treeish = revision === 'INDEX' ? '--cached' : 'HEAD'
-    const args = treeish === '--cached' ? ['ls-files', '--stage', '--', ...SUBMODULE_PATHS] : ['ls-tree', treeish, '--', ...SUBMODULE_PATHS]
-    const output = git(repo, args, { allowFailure: true }) ?? ''
+  if (revision === 'WORKTREE') {
+    // The worktree revision is what is checked out on disk, so read each
+    // submodule's own HEAD: a staged switch and an unstaged `git submodule
+    // update` both move it, while `git ls-tree HEAD` keeps reporting the
+    // committed gitlink for either.
+    const recorded = parseSubmoduleOutput(git(repo, ['ls-tree', 'HEAD', '--', ...SUBMODULE_PATHS], { allowFailure: true }) ?? '')
+    const result = {}
+    for (const path of SUBMODULE_PATHS) {
+      const head = git(repo, ['-C', path, 'rev-parse', 'HEAD'], { allowFailure: true })?.trim()
+      // Uninitialized submodule: keep the recorded gitlink instead of dropping
+      // the key, so a missing checkout does not read as contract drift.
+      if (head) result[path] = head
+      else if (recorded[path]) result[path] = recorded[path]
+    }
+    return stable(result)
+  }
+
+  if (revision === 'INDEX') {
+    const output = git(repo, ['ls-files', '--stage', '--', ...SUBMODULE_PATHS], { allowFailure: true }) ?? ''
     return parseSubmoduleOutput(output)
   }
 
@@ -343,6 +358,45 @@ function selfTest() {
     git(root, ['add', 'package.json'])
     const index = buildSnapshot(root, 'INDEX')
     if (index.package.version !== '1.2.0') throw new Error('INDEX snapshot did not read staged content')
+
+    // Submodule pointers: WORKTREE reads each submodule's own HEAD, so both a
+    // staged and an unstaged pointer switch are visible (ls-tree HEAD reports
+    // the committed gitlink for either).
+    const subUpstream = mkdtempSync(join(tmpdir(), 'contract submodule-'))
+    try {
+      git(subUpstream, ['init', '-q'])
+      git(subUpstream, ['config', 'user.email', 'fixture@example.invalid'])
+      git(subUpstream, ['config', 'user.name', 'Fixture'])
+      writeFileSync(join(subUpstream, 'file.txt'), 'one\n')
+      git(subUpstream, ['add', '.'])
+      git(subUpstream, ['commit', '-qm', 'sub base'])
+      const subBase = git(subUpstream, ['rev-parse', 'HEAD']).trim()
+      writeFileSync(join(subUpstream, 'file.txt'), 'two\n')
+      git(subUpstream, ['commit', '-qam', 'sub head'])
+      const subHead = git(subUpstream, ['rev-parse', 'HEAD']).trim()
+
+      git(root, ['clone', '-q', subUpstream, 'dsh-auth'])
+      git(join(root, 'dsh-auth'), ['checkout', '-q', subBase])
+      git(root, ['update-index', '--add', '--cacheinfo', `160000,${subBase},dsh-auth`])
+      git(root, ['commit', '-qm', 'submodule pointer'])
+      if (buildSnapshot(root, 'HEAD').submodules['dsh-auth'] !== subBase) {
+        throw new Error('HEAD snapshot must report the committed submodule gitlink')
+      }
+
+      // Unstaged switch: only the submodule's own HEAD moves.
+      git(join(root, 'dsh-auth'), ['checkout', '-q', subHead])
+      if (buildSnapshot(root, 'WORKTREE').submodules['dsh-auth'] !== subHead) {
+        throw new Error('WORKTREE snapshot must read the submodule HEAD, not the committed gitlink')
+      }
+
+      // Staged switch: the index moves as well.
+      git(root, ['add', 'dsh-auth'])
+      if (buildSnapshot(root, 'INDEX').submodules['dsh-auth'] !== subHead) {
+        throw new Error('INDEX snapshot must read the staged submodule gitlink')
+      }
+    } finally {
+      rmSync(subUpstream, { recursive: true, force: true })
+    }
 
     console.log(`contract-snapshot self-test: OK (${result.differences.length} differences)`)
   } finally {
