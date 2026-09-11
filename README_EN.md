@@ -177,6 +177,11 @@ commands), then `dsh-tui` (or `dst`) and `dsh --profile dsh-tui` are equivalent.
 >
 > `/update` and `dsh-tui update` seed this configuration automatically —
 > no manual step needed.
+>
+> Updates also seed `ignoredOptionalDependencies` covering foreign-platform
+> `@img/sharp-*` natives: sharp ships as all-platform optional dependencies,
+> and the filter keeps only the current platform's binaries downloading,
+> cutting an update from roughly 90MB back to about 18MB.
 
 `dsh-tui` (or its `dst` alias) with `--resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.
