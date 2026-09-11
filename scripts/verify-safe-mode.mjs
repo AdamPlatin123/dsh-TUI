@@ -73,7 +73,7 @@ const snapshot = dir => {
     `✗ dsh: 未找到——请先安装：  npm install -g @deepseek-ai/dsh`,
     `✗ pnpm: 未找到——安装/升级需要它：  npm install -g pnpm`,
     `✗ profile: 未安装——运行一次 \`dsh-tui\` 即可自举  (${join(emptyHome, 'profiles', 'dsh-tui')})`,
-    `✗ DEEPSEEK_API_KEY: 未设置——交互启动读取 DEEPSEEK_API_KEY`,
+    `✗ DEEPSEEK_API_KEY: 未设置——环境变量与 DSH 凭据库中都没有 DEEPSEEK_API_KEY`,
     `✗ config: ${join(fakeUserHome, '.dsh-tui', 'cordis.yml')}  缺失`,
     `✗ config: ${join(emptyHome, 'profiles', 'dsh-tui', 'cordis.patch.yml')}  缺失`,
   ]
