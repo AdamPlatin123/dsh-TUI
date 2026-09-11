@@ -51,6 +51,7 @@ const {
   sharpCurrentSuffix,
   ignoredSharpOptionalPatterns,
   ensureProfileSharpPlatformFilter,
+  detectLibc,
   profileWorkspaceYamlPath,
   isStandaloneRuntime,
   getStandaloneBinaryPath,
@@ -745,9 +746,13 @@ check(
   const onLinuxX64 = ignoredSharpOptionalPatterns('linux', 'x64', 'glibc')
   check('忽略清单: 排除本平台 wrapper 与 libvips', !onLinuxX64.includes('@img/sharp-linux-x64') && !onLinuxX64.includes('@img/sharp-libvips-linux-x64'))
   check('忽略清单: 含异平台代表项', onLinuxX64.includes('@img/sharp-win32-x64') && onLinuxX64.includes('@img/sharp-darwin-arm64') && onLinuxX64.includes('@img/sharp-libvips-linuxmusl-x64'))
+  check('忽略清单: 与 registry 矩阵对齐（不列不存在的包）', !onLinuxX64.includes('@img/sharp-libvips-win32-x64') && !onLinuxX64.includes('@img/sharp-linuxmusl-arm') && !onLinuxX64.includes('@img/sharp-linux-ia32'))
+  check('忽略清单: 显式保留无平台归属的 wasm 回退包', !onLinuxX64.includes('@img/sharp-wasm32') && !onLinuxX64.includes('@img/sharp-webcontainers-wasm32') && onLinuxX64.includes('@img/sharp-freebsd-wasm32'))
   const onMusl = ignoredSharpOptionalPatterns('linux', 'x64', 'musl')
   check('忽略清单: musl 环境排除 linuxmusl-x64 而保留 linux-x64', !onMusl.includes('@img/sharp-linuxmusl-x64') && onMusl.includes('@img/sharp-linux-x64'))
   check('忽略清单: 不含非平台的纯 JS 包', !onMusl.some(p => p.includes('colour')))
+  check('libc 判定: report 的 glibc 标记优先于 musl loader 存在', detectLibc({ header: { glibcVersionRuntime: '2.36' } }, true) === 'glibc')
+  check('libc 判定: 无 report 时 loader 探测兜底', detectLibc(undefined, true) === 'musl' && detectLibc(undefined, false) === 'glibc')
 
   const sharpScratch = mkdtempSync(join(tmpdir(), 'verify-sharp-filter-'))
   const prevDshHome = process.env.DSH_HOME
@@ -760,7 +765,8 @@ check(
     const yamlText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
     check('workspace 预种: 块落盘且带模式行', first !== undefined && yamlText.includes('ignoredOptionalDependencies:') && yamlText.includes(`- '@img/sharp-win32-x64'`))
     check('workspace 预种: 既有内容保留', yamlText.includes('nodeLinker: hoisted'))
-    check('workspace 预种: 不忽略本机平台', !yamlText.includes(`- '@img/sharp-${sharpCurrentSuffix(process.platform, process.arch, 'glibc')}'`))
+    const loaderPresent = existsSync('/lib/ld-musl-x86_64.so.1') || existsSync('/lib/ld-musl-aarch64.so.1') || existsSync('/etc/alpine-release')
+    check('workspace 预种: 不忽略本机平台', !yamlText.includes(`- '@img/sharp-${sharpCurrentSuffix(process.platform, process.arch, detectLibc(undefined, loaderPresent) === 'musl' ? 'musl' : 'glibc')}'`))
     const second = ensureProfileSharpPlatformFilter('dsh-tui')
     const afterText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
     check('workspace 预种: 幂等（不重复块）', afterText.match(/ignoredOptionalDependencies:/gu)?.length === 1 && second !== undefined)
@@ -768,7 +774,6 @@ check(
     writeFileSync(join(profDir, 'pnpm-workspace.yaml'), 'ignoredOptionalDependencies:\n  - fsevents\n')
     const third = ensureProfileSharpPlatformFilter('dsh-tui')
     check('workspace 预种: 已有块不覆盖', third !== undefined && readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8') === 'ignoredOptionalDependencies:\n  - fsevents\n')
-    rmSync(join(process.env.DSH_HOME, 'profiles', 'absent'), { recursive: true, force: true })
     check('workspace 预种: profile 目录缺失返回 undefined', ensureProfileSharpPlatformFilter('absent') === undefined)
   } finally {
     if (prevDshHome === undefined) delete process.env.DSH_HOME

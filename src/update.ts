@@ -1147,17 +1147,16 @@ function existsSafe(path: string): boolean {
  * ignored optionals entirely (no download, no node_modules entry), while the
  * current platform's packages — the only ones sharp loads — stay untouched.
  */
-const SHARP_WRAPPER_SUFFIXES: readonly string[] = [
-  'darwin-arm64', 'darwin-x64', 'linux-arm', 'linux-arm64', 'linux-ia32',
+const SHARP_WRAPPER_SUFFIXES = [
+  'darwin-arm64', 'darwin-x64', 'freebsd-wasm32', 'linux-arm', 'linux-arm64',
   'linux-ppc64', 'linux-riscv64', 'linux-s390x', 'linux-x64',
-  'linuxmusl-arm', 'linuxmusl-arm64', 'linuxmusl-x64',
+  'linuxmusl-arm64', 'linuxmusl-x64',
   'win32-arm64', 'win32-ia32', 'win32-x64',
 ] as const
-const SHARP_LIBVIPS_SUFFIXES: readonly string[] = [
+const SHARP_LIBVIPS_SUFFIXES = [
   'darwin-arm64', 'darwin-x64', 'linux-arm', 'linux-arm64',
   'linux-ppc64', 'linux-riscv64', 'linux-s390x', 'linux-x64',
-  'linuxmusl-arm', 'linuxmusl-arm64', 'linuxmusl-x64',
-  'win32-arm64', 'win32-ia32', 'win32-x64',
+  'linuxmusl-arm64', 'linuxmusl-x64',
 ] as const
 
 /** The @img suffix of the RUNNING platform (musl linux maps to linuxmusl). */
@@ -1165,6 +1164,16 @@ export function sharpCurrentSuffix(platform: string, cpu: string, libc: string):
   const os = platform === 'linux' && libc === 'musl' ? 'linuxmusl' : platform
   return `${os}-${cpu}`
 }
+
+/**
+ * Deliberate omission: sharp's registry matrix (0.35.3) also carries the
+ * platform-agnostic `wasm32` fallback (~9MB unpacked) plus
+ * `webcontainers-wasm32`. They carry no os constraint, so they resolve on
+ * every platform — including architectures with no native @img build at all
+ * (loong64 etc.), where wasm is the only working form. They are therefore
+ * NOT ignored: updates keep downloading them, trading ~9MB for not breaking
+ * sharp on fallback-only architectures.
+ */
 
 /** Patterns for every @img platform package EXCEPT the running one. */
 export function ignoredSharpOptionalPatterns(platform: string, cpu: string, libc: string): string[] {
@@ -1175,10 +1184,33 @@ export function ignoredSharpOptionalPatterns(platform: string, cpu: string, libc
   ]
 }
 
-/** Conservative musl probe: Alpine's loader path or release marker. */
+/**
+ * Libc detection, parameterized for tests. Node's report wins when present:
+ * a stray musl loader (Debian's musl package, cross-compile toolchains) on a
+ * glibc system must NOT flip the verdict, or the current platform's own
+ * packages would land in the ignore list — and the never-touch-existing-block
+ * rule would keep that wrong list forever. The loader-path probe only
+ * answers when the report is unavailable (same fallback sharp's detect-libc
+ * uses).
+ */
+export function detectLibc(
+  report: { header?: { glibcVersionRuntime?: string } } | undefined,
+  muslLoaderPresent: boolean,
+): 'glibc' | 'musl' {
+  if (process.platform !== 'linux') return 'glibc'
+  if (report?.header?.glibcVersionRuntime !== undefined) return 'glibc'
+  return muslLoaderPresent ? 'musl' : 'glibc'
+}
+
+/** The running libc, via detectLibc's precedence (report first, paths last). */
 function isMuslRuntime(): boolean {
-  if (process.platform !== 'linux') return false
-  return existsSafe('/lib/ld-musl-x86_64.so.1') || existsSafe('/lib/ld-musl-aarch64.so.1') || existsSafe('/etc/alpine-release')
+  const report = (process.report as NodeJS.ProcessReport | undefined)?.getReport() as
+    | { header?: { glibcVersionRuntime?: string } }
+    | undefined
+  return detectLibc(
+    report,
+    existsSafe('/lib/ld-musl-x86_64.so.1') || existsSafe('/lib/ld-musl-aarch64.so.1') || existsSafe('/etc/alpine-release'),
+  ) === 'musl'
 }
 
 /** What ensureProfileSharpPlatformFilter wrote. */
@@ -1455,8 +1487,8 @@ export async function updateTui(
   const sharpFilter = ensureProfileSharpPlatformFilter(profile)
   if (sharpFilter !== undefined && sharpFilter.added.length > 0) {
     process.stderr.write(
-      `dsh-tui: pre-seeded sharp platform filter (${sharpFilter.added.length} foreign @img packages ignored) — ` +
-        'only the current platform\'s binaries download\n',
+      `dsh-tui: pre-seeded sharp platform filter (${sharpFilter.added.length} foreign-platform patterns ignored) — ` +
+        `only the current platform's binaries download (needs pnpm ≥10.17; older pnpm silently ignores the key)\n`,
     )
   }
   // pnpm ≥11's minimumReleaseAge (24h by default) refuses installs of
