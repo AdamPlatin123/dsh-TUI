@@ -90,21 +90,23 @@ export function createModelActions(
     // so an unchanged downgrade must not re-toast.
     const applied = nearestLowerEffort(preferredEffort, available)
     if (applied === undefined) {
-      if (lastEffortFallbackNotice?.preferred === preferredEffort && lastEffortFallbackNotice.applied === undefined) return
-      lastEffortFallbackNotice = { preferred: preferredEffort, applied: undefined }
-      notify(t('effort-preference-unsupported', { preferred: preferredEffort }), { color: 'warning' })
+      if (lastEffortFallbackNotice?.preferred !== preferredEffort || lastEffortFallbackNotice.applied !== undefined) {
+        lastEffortFallbackNotice = { preferred: preferredEffort, applied: undefined }
+        notify(t('effort-preference-unsupported', { preferred: preferredEffort }), { color: 'warning' })
+      }
       return
     }
-    if (applied !== preferredEffort) {
-      if (lastEffortFallbackNotice?.preferred === preferredEffort && lastEffortFallbackNotice.applied === applied) return
+    // Dedupe gates ONLY the toast: bind resets selection.current on every
+    // session switch, so the pin below must re-apply unconditionally — an
+    // early return here would ship the model default from the second session
+    // on (review C1). The status line shows the tier that actually ships.
+    const fresh = lastEffortFallbackNotice?.preferred !== preferredEffort || lastEffortFallbackNotice.applied !== applied
+    if (applied !== preferredEffort && fresh) {
       lastEffortFallbackNotice = { preferred: preferredEffort, applied }
       notify(t('effort-preference-downgraded', { preferred: preferredEffort, applied }), { color: 'warning' })
-      // The status line must show the tier that will actually ship, not the
-      // stored preference the route cannot honor.
-      state.reasoningEffort = applied
-    } else {
-      lastEffortFallbackNotice = undefined
     }
+    if (applied === preferredEffort) lastEffortFallbackNotice = undefined
+    state.reasoningEffort = applied
     selection.current = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(applied) }
     state.emit()
   }

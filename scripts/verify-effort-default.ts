@@ -9,6 +9,8 @@
  *   2. readEffortPref / writeEffortPref 的 best-effort 文件语义：写入回读、
  *      缺文件、坏 JSON、结构不符（非对象 / effort 非字符串 / 空串）均回落
  *      undefined。
+ *   3.（组合节）优先级链与文件链的交叉。
+ *   4. nearestLowerEffort 向下就近降档矩阵（只降不升；未知 id 双向不参与）。
  *
  * 运行：node --import tsx/esm scripts/verify-effort-default.ts
  */
@@ -102,7 +104,7 @@ try {
   rmSync(dir2, { recursive: true, force: true })
 }
 
-// ── 3. 偏好档不被路由支持时的向下就近降档 ────────────────────────────────
+// ── 4. 偏好档不被路由支持时的向下就近降档 ────────────────────────────────
 // 只降不升：偏好 max 在 [off, high] 上落 high；偏好 low 在 [off, high] 上落
 // off（更低可用档存在）；偏好 off 无更低档 → undefined（保持默认，绝不升档）。
 // 未知档 id 不参与排序（偏好未知 → 不降；候选未知 → 跳过），避免错误比较。
