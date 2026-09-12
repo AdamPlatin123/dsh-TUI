@@ -50,6 +50,38 @@ export function resolveEffortDefault(
   return settingsDefault ?? configured ?? persisted
 }
 
+/** Standard effort-tier order, weakest to strongest. */
+const EFFORT_TIER_ORDER = ['off', 'low', 'medium', 'high', 'max'] as const
+
+/**
+ * Resolve a preferred effort tier against a route's available tiers when the
+ * exact tier is absent: pick the NEAREST LOWER standard tier that the route
+ * offers (max→high, high→low, …). Only-down, never-up — a user who prefers
+ * `low` on a route without it must not be pushed to `high`. Unknown tier ids
+ * (custom route tiers outside the standard order) never participate: an
+ * unknown preference yields undefined, an unknown candidate is skipped.
+ * @param preferred - The preferred tier id (exact match short-circuits).
+ * @param available - Tier ids the current route offers.
+ * @returns The tier id to apply, or undefined to keep the model default.
+ */
+export function nearestLowerEffort(preferred: string, available: readonly string[]): string | undefined {
+  if (preferred === '' || available.length === 0) return undefined
+  if (available.includes(preferred)) return preferred
+  const preferredRank = EFFORT_TIER_ORDER.indexOf(preferred as (typeof EFFORT_TIER_ORDER)[number])
+  if (preferredRank <= 0) return undefined // unknown id, or 'off' has nothing lower
+  let result: string | undefined
+  let resultRank = -1
+  for (const candidate of available) {
+    const rank = EFFORT_TIER_ORDER.indexOf(candidate as (typeof EFFORT_TIER_ORDER)[number])
+    if (rank < 0 || rank >= preferredRank) continue
+    if (rank > resultRank) {
+      result = candidate
+      resultRank = rank
+    }
+  }
+  return result
+}
+
 /**
  * Persist the chosen reasoning-effort id (best effort).
  * @param effort - Adapter-owned effort id to persist.
