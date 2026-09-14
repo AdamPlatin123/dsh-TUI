@@ -1,19 +1,20 @@
 /**
  * Migration registry and import engine.
  *
- * Import writes one DSH session log per foreign conversation:
- * `$DSH_HOME/sessions/--<munged cwd>--/<uuid>/session.jsonl.zstd` (Node's
- * built-in zstd via node:zlib). The session id is UUIDv5 over
- * `<agent>:<sourceId>`, so re-importing the same conversation overwrites its
- * own copy — idempotent by construction, no duplicate stacking. Sources are
- * only ever read.
+ * Import writes one DSH session log per foreign conversation, matching the
+ * upstream store's on-disk contract exactly: TWO zstd frames (frame 1 = the
+ * header line alone, frame 2 = the event lines — the upstream materializer
+ * separates them and single-frame logs exceed the TUI's bounded frame
+ * reader), file mode 0600 with directories 0700, written via tmp+rename,
+ * and SKIPPED when a copy already exists (the deterministic UUIDv5 over
+ * `<agent>:<sourceId>` makes re-import land on the same path — skip, not
+ * truncate, so a session the TUI has opened for续聊 never gets clobbered).
  *
  * @module @deepseek-harness-tui/dsh-tui/migrate
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { zstdCompress } from 'node:zlib'
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { zstdCompressSync } from 'node:zlib'
 import { homedir } from 'node:os'
-import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { synthesizeSessionEvents } from './synthesize.js'
 import type { MigrationAdapter, MigrationSession } from './types.js'
@@ -29,10 +30,14 @@ export const MIGRATION_ADAPTERS: readonly MigrationAdapter[] = [
   ompAdapter,
 ]
 
+/** Longest single path segment the upstream store's projectKey allows. */
+const MUNGE_MAX = 251
+
 /** cwd → the `--dash-munged--` workspace segment DSH sessions use. */
 export function mungeCwd(cwd: string): string {
   const body = cwd.replace(/^\/+/u, '').replace(/\/+$/u, '').replace(/[/\\]+/gu, '-')
-  return `--${body}--`
+  const munged = `--${body}--`
+  return munged.length <= MUNGE_MAX ? munged : munged.slice(0, MUNGE_MAX)
 }
 
 /** What importing one conversation produced. */
@@ -40,9 +45,9 @@ export interface ImportOutcome {
   readonly session: MigrationSession
   readonly target: string
   readonly turns: number
+  /** False when a copy already existed and was left untouched. */
+  readonly wrote: boolean
 }
-
-const compressZstd = promisify(zstdCompress)
 
 /**
  * Import one conversation into the DSH sessions tree.
@@ -51,21 +56,31 @@ const compressZstd = promisify(zstdCompress)
  * @param dshHome - Target DSH home (defaults to `$DSH_HOME ?? ~/.dsh`).
  * @returns The outcome, or undefined when the conversation had no user turn.
  */
-export async function importSession(
+export function importSession(
   agent: MigrationAdapter,
   session: MigrationSession,
   dshHome: string = process.env.DSH_HOME ?? join(homedir(), '.dsh'),
-): Promise<ImportOutcome | undefined> {
+): ImportOutcome | undefined {
   const sessionId = migrationUuid(`${agent.id}:${session.sourceId}`)
   const events = synthesizeSessionEvents(session, agent.id, sessionId)
   if (events.length === 0) return undefined
   const dir = join(dshHome, 'sessions', mungeCwd(session.cwd), sessionId)
-  mkdirSync(dir, { recursive: true })
   const target = join(dir, 'session.jsonl.zstd')
-  const payload = Buffer.from(events.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8')
-  const compressed = await compressZstd(payload)
-  writeFileSync(target, compressed)
-  return { session, target, turns: session.turns.filter(turn => turn.role === 'user').length }
+  if (existsSync(target)) {
+    return { session, target, turns: session.turns.filter(turn => turn.role === 'user').length, wrote: false }
+  }
+  const [header, ...rest] = events
+  if (rest.length === 0) return undefined
+  // Two frames, exactly like the upstream materializer: frame 1 = header
+  // line, frame 2 = every event line. The TUI's bounded frame reader and the
+  // upstream reader both consume concatenated frames.
+  const headerFrame = zstdCompressSync(Buffer.from(`${JSON.stringify(header)}\n`, 'utf8'))
+  const eventsFrame = zstdCompressSync(Buffer.from(rest.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8'))
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const tmp = `${target}.${process.pid}.tmp`
+  writeFileSync(tmp, Buffer.concat([headerFrame, eventsFrame]), { mode: 0o600 })
+  renameSync(tmp, target)
+  return { session, target, turns: session.turns.filter(turn => turn.role === 'user').length, wrote: true }
 }
 
 export { synthesizeSessionEvents } from './synthesize.js'

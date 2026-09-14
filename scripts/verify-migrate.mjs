@@ -36,6 +36,19 @@ const munge = (await import('../src/migrate/index.ts')).mungeCwd
 const uuidOf = (await import('../src/migrate/uuid.ts')).migrationUuid
 const { importSession, MIGRATION_ADAPTERS } = await import('../src/migrate/index.ts')
 
+// 上游真实读取链（审查 C1 的教训：只断言自身形状会漏掉格式契约违约）
+const { createRequire } = await import('node:module')
+const require = createRequire(new URL('..', import.meta.url))
+let catalog
+try {
+  catalog = require('@deepseek-ai/dsh-session-format-catalog')
+} catch {
+  const { readdirSync } = await import('node:fs')
+  const pnpm = readdirSync(new URL('../node_modules/.pnpm', import.meta.url).pathname).find(name => name.startsWith('@deepseek-ai+dsh-session-format-catalog@'))
+  catalog = require(`${new URL('../node_modules/.pnpm', import.meta.url).pathname}/${pnpm}/node_modules/@deepseek-ai/dsh-session-format-catalog`)
+}
+const readHeader = catalog.sessionFormatCatalog ? catalog.sessionFormatCatalog.readHeader.bind(catalog.sessionFormatCatalog) : catalog.readHeader.bind(catalog)
+
 // ── 1. 合成器 ────────────────────────────────────────────────────────────
 {
   const session = {
@@ -49,17 +62,25 @@ const { importSession, MIGRATION_ADAPTERS } = await import('../src/migrate/index
   }
   const events = synth(session, 'cc', 'id-1')
   const head = events[0]
-  check('合成: session 头带 origin 与契约字段', head.type === 'session' && head.origin === 'migrated:cc' && head.cwd === '/w/one' && head.version === 0 && head.delegationDepth === 0)
+  check('合成: session 头契约字段（无 origin——header 只允许 subagent）', head.type === 'session' && head.origin === undefined && head.cwd === '/w/one' && head.version === 0 && head.delegationDepth === 0)
+  const verdict = readHeader(JSON.parse(JSON.stringify(head)))
+  check('上游 catalog: 合成头可读（非 malformed）', verdict.status !== 'malformed', verdict.reason ?? verdict.status)
   const types = events.map(event => event.type)
   check('合成: 策略三连在头部之后', types.slice(1, 4).join(',') === 'permission/preset,sandbox/mode,approval/policy')
   check('合成: 两轮 turn/start↔turn/end 骨架', types.filter(t => t === 'turn/start').length === 2 && types.filter(t => t === 'turn/end').length === 2)
+  const firstUser = events.find(event => event.type === 'user/message')
+  check('合成: user/message surfaceOp 在信封层且 data 仅四键', firstUser.surfaceOp === 'append'
+    && Object.keys(firstUser.data).sort().join(',') === 'content,id,role,source')
   const firstAssistant = events.find(event => event.type === 'assistant/message')
-  check('合成: assistant 带双 turn/step 与 reasoning 块', firstAssistant.data.turn === 1 && firstAssistant.data.step === 1
-    && firstAssistant.data.message.content[0].type === 'reasoning' && firstAssistant.data.message.content[1].type === 'text')
+  check('合成: assistant 带双 turn/step 与 reasoning 块（信封无 surfaceOp）', firstAssistant.data.turn === 1 && firstAssistant.data.step === 1
+    && firstAssistant.data.message.content[0].type === 'reasoning' && firstAssistant.data.message.content[1].type === 'text'
+    && firstAssistant.surfaceOp === undefined)
   const secondAssistant = events.filter(event => event.type === 'assistant/message')[1]
   check('合成: 空 reasoning 不产生空块', secondAssistant.data.message.content.length === 1 && secondAssistant.data.message.content[0].type === 'text')
+  const turnEnd = events.find(event => event.type === 'turn/end')
+  check('合成: turn/end 用合法 variant completed', turnEnd.data.reason.kind === 'completed')
   const title = events.find(event => event.type === 'session/title')
-  check('合成: title 锚定首个用户轮', title.data.title === '你好' && title.data.messageSeqs.length === 1)
+  check('合成: title 锚定首个用户轮的精确 seq', title.data.title === '你好' && title.data.messageSeqs.length === 1 && title.data.messageSeqs[0] === firstUser.seq)
   const seqs = events.filter(event => event.seq !== undefined).map(event => event.seq)
   check('合成: seq 从 0 严格递增', seqs[0] === 0 && seqs.every((seq, i) => i === 0 || seq === seqs[i - 1] + 1))
   const times = events.filter(event => event.time !== undefined).map(event => event.time)
@@ -134,9 +155,11 @@ check('munge: DSH 段格式', munge('/mnt/shared/_Projects') === '--mnt-shared-_
     const out = await importSession(omp, ompF.sessions[0], dshHome)
     check('导入: 落盘于 munged 段下的 uuid 目录', out.target.includes(join('sessions', '--mnt-w3--')) && out.target.endsWith('session.jsonl.zstd'))
     const lines = (await dec(readFileSync(out.target))).toString().split('\n').filter(Boolean)
-    check('导入: zstd 可解压、头行合法', JSON.parse(lines[0]).type === 'session' && JSON.parse(lines[0]).origin === 'migrated:omp')
+    check('导入: zstd 可解压、头行合法（无 origin）', JSON.parse(lines[0]).type === 'session' && JSON.parse(lines[0]).origin === undefined)
+    const storeVerdict = readHeader(JSON.parse(lines[0]))
+    check('导入: 上游 catalog 认可落盘头', storeVerdict.status !== 'malformed', storeVerdict.reason ?? storeVerdict.status)
     const again = await importSession(omp, ompF.sessions[0], dshHome)
-    check('导入: 幂等（同 target 覆盖）', again.target === out.target)
+    check('导入: 幂等（同 target，已存在不重写）', again.target === out.target && again.wrote === false)
   } finally {
     process.env.HOME = prevHome
     rmSync(root, { recursive: true, force: true })

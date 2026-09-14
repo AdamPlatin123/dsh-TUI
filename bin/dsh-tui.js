@@ -496,7 +496,9 @@ if (subcommand === 'migrate') {
     cliMigrate = undefined
   }
   if (typeof cliMigrate !== 'function') {
-    console.error(`[dsh-tui] migrate needs the compiled package under the profile — run dsh-tui update first.`)
+    console.error(lang === 'en'
+      ? `[dsh-tui] migrate needs the compiled package under the profile — run dsh-tui update first.`
+      : `[dsh-tui] migrate 需要 profile 内的编译产物——请先运行 dsh-tui update。`)
     process.exit(1)
   }
   process.exit(await cliMigrate(process.argv.slice(3)))

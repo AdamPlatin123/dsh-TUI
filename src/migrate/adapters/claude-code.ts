@@ -59,6 +59,7 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
   const sourceId = path.split('/').pop()?.replace(/\.jsonl$/u, '') ?? path
   let startedAt = 0
   let turns: MigrationTurn[] = []
+  let lineCwd: string | undefined
   for (const line of lines) {
     if (line === '') continue
     let entry: Record<string, unknown>
@@ -76,6 +77,10 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
     if (entry.isSidechain === true || entry.isMeta === true) continue
     const message = entry.message as { role?: unknown, content?: unknown } | undefined
     if (message === undefined || typeof message !== 'object') continue
+    // Claude Code writes the authoritative cwd on every message line; the
+    // dash-munged directory name cannot preserve `_`/`.`/`-` and the
+    // system-reminder marker appears in only a small minority of logs.
+    if (typeof entry.cwd === 'string' && entry.cwd !== '') lineCwd = entry.cwd
     const time = toMillis(entry.timestamp)
     if (type === 'user') {
       const text = userText(message as { content?: unknown })
@@ -92,11 +97,12 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
     }
   }
   if (turns.length === 0) return undefined
-  // Claude Code stores the cwd in the directory name (dash-munged) and in
-  // each user prompt's system-reminder; the reminder is authoritative.
-  let cwd = fallbackCwd
+  // cwd precedence: the per-line `cwd` field (authoritative, present on real
+  // logs) → the first user prompt's system-reminder → the unmunged directory
+  // name (lossy fallback for foreign/moved logs).
+  let cwd = lineCwd ?? fallbackCwd
   const reminder = turns.find(turn => turn.role === 'user' && turn.text.includes('Primary working directory:'))
-  if (reminder !== undefined) {
+  if (cwd === fallbackCwd && reminder !== undefined) {
     const match = /Primary working directory: (\S+)/u.exec(reminder.text)
     if (match !== null) cwd = match[1]
   }
@@ -144,5 +150,5 @@ export const claudeCodeAdapter: MigrationAdapter = {
 /** Best-effort inverse of Claude Code's dash-munged directory names. */
 function unmunge(name: string): string | undefined {
   if (!name.startsWith('-')) return undefined
-  return name.split('-').filter(Boolean).join('/') && `/${name.split('-').filter(Boolean).join('/')}`
+  return `/${name.split('-').filter(Boolean).join('/')}`
 }

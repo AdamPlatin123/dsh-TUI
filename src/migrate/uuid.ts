@@ -8,7 +8,7 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/migrate/uuid
  */
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 
 /** This project's migration namespace: dsh-tui-migrate as 16 fixed bytes. */
 const NAMESPACE = Buffer.from([0x9f, 0x1d, 0x3a, 0x72, 0x6c, 0x55, 0x4c, 0x8e, 0xb0, 0x2f, 0x6d, 0x69, 0x67, 0x72, 0x61, 0x74])
@@ -25,6 +25,3 @@ export function migrationUuid(name: string): string {
   const hex = hash.subarray(0, 16).toString('hex')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
-
-/** A fresh random uuid (used when no source id survives). */
-export const freshUuid = randomUUID

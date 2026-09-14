@@ -228,10 +228,11 @@ dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 ```
 
 - **Read-only sources**: migration only reads the foreign agents' local
-  stores, never modifies them; output lands under `$DSH_HOME/sessions` with
-  an `origin: migrated:<agent>` marker
-- **Idempotent**: re-importing the same conversation overwrites its own copy
-  (deterministic UUIDs) — no duplicate stacking
+  stores, never modifies them; output lands under `$DSH_HOME/sessions`,
+  honoring the session-log format contract (readable by the upstream chain)
+- **Idempotent**: re-importing the same conversation resolves to the same
+  deterministic UUID path — an existing copy is skipped, never rewritten, so
+  duplicates never stack
 - **Structure preserved**: user/assistant messages and reasoning traces are
   rebuilt per turn; tool traffic is not migrated (source formats cannot be
   replayed faithfully)
