@@ -33,6 +33,7 @@ import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolv
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
+import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
@@ -49,6 +50,8 @@ import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { openInjectChannel, type InjectController } from './inject-channel.js'
+import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
+import { reserveMount } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
@@ -462,6 +465,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Opening a persisted TUI session is an explicit ownership action too.
     // Older TUI versions only wrote the Session log, so attaching on every
     // startup repairs those durable-but-ungrouped sessions idempotently.
+    //
+    // This is ALSO how a workspace enters the rail: `resolveByPath(cwd) ??
+    // create(cwd)` mints the durable record for the directory this terminal
+    // was launched in, so the session screen lists every directory a TUI has
+    // ever started in. The ledger is DSH's own workspace store, so the Web UI
+    // reads the same records. There is deliberately no rail-side "add a
+    // workspace" control any more: a terminal's launch directory is the whole
+    // registration story.
     const attached = await attachSessionToWorkspace(ctx, meta.cwd, agent.session.id)
     if (!attached) {
       ctx.logger.warn(
@@ -1564,12 +1575,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // BEFORE creating Chat: the element must see the same bootedFullscreen the
   // root tree resolves after settingsReady below.
   await settingsReady
+  /**
+   * One-shot workspace-home landing.
+   *
+   * Only an ORDINARY launch is eligible: an explicit resume (`--resume` /
+   * `-c` / the launcher's remembered target), an explicit workspace target, and
+   * a first prompt all mean the user already said where they want to be, and
+   * covering that with a browser would be the TUI second-guessing them. The
+   * `seen` marker is written when the screen is dismissed (see `closeHome`),
+   * so a process that dies before the first frame does not consume it.
+   */
+  const homeSeen = readHomePrefs().seen === true
+  const openHomeOnBoot = !homeSeen
+    && launchSessionId === undefined
+    && requestedWorkspace === undefined
+    && initialPromptFromCmdlineArgs(process.argv.slice(2)) === ''
   const chat = React.createElement(Chat, {
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
     approvalStore,
     injectControllerRef,
+    openHomeOnBoot,
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
@@ -1692,6 +1719,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.effect(() => () => injectChannel.close())
   }
 
+  // Cross-process session mounting: publish the sessions this process has
+  // mounted so another TUI (a different terminal process on the same machine)
+  // can see them as occupied and refuse to mount the same log. Two processes
+  // driving one session would interleave writes into a single append-only
+  // transcript, so this is the guard that makes multi-process TUI use safe.
+  // Registered on the same teardown funnel as everything else: the disposer
+  // stops the heartbeat and removes the claim, so a clean exit frees its
+  // sessions at once while a killed process is reclaimed by liveness.
+  ctx.effect(() => startSessionMountHeartbeat(ctx))
+
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
   // command remains available regardless of network access.
@@ -1776,6 +1813,46 @@ async function resolveAgent(
     if (existing !== undefined) {
       return { agent: existing, agentPreset: runningPresetOf(existing.session) }
     }
+    // The launch-time counterpart of the in-session `/resume` claim
+    // (`channel/session-resume.ts`), and it has to happen before ANY await:
+    // without it `dsh-tui --resume <id>` mounts the log purely because the user
+    // asked for it, so a second terminal doing the same joins the first and
+    // both interleave writes into one append-only transcript. The mount
+    // publisher cannot cover this — it publishes the set, it never refuses a
+    // mount — so the claim is the only place the refusal can come from.
+    //
+    // Every failure refuses. "The ledger was busy" and "the ledger could not be
+    // read" are not evidence that the session is free, and a boot that guesses
+    // the wrong way here interleaves two writers into one append-only log —
+    // the one outcome nothing downstream can repair. A genuinely read-only home
+    // therefore costs a `--resume` refusal, which is loud and fixable, instead
+    // of silent corruption.
+    const reserved = await reserveMount(requestedSessionId)
+    if (!reserved.ok) {
+      if (reserved.reason === 'occupied') {
+        throw new Error(
+          `dsh-tui: cannot resume session "${requestedSessionId}": it is mounted by another TUI terminal ` +
+          `(pid ${reserved.holders[0] ?? 0}) — two processes driving one session log would corrupt it. ` +
+          'Close that terminal, or drop --resume to start a fresh session.',
+        )
+      }
+      if (reserved.reason === 'busy') {
+        throw new Error(
+          `dsh-tui: cannot resume session "${requestedSessionId}": another process is holding the ` +
+          'session mount ledger right now, so its occupancy could not be checked. Retry in a moment.',
+        )
+      }
+      throw new Error(
+        `dsh-tui: cannot resume session "${requestedSessionId}": its occupancy could not be verified ` +
+        `(${reserved.detail}). Refusing rather than risk two processes writing one session log. ` +
+        'If that file is damaged, remove it (and the matching .lock) while no other TUI is running, ' +
+        'or drop --resume to start a fresh session.',
+      )
+    }
+    // The reservation spans the awaits below: the agent only appears in the
+    // registry once `agents.resume` returns, and a publisher beat landing in
+    // between would otherwise drop the claim this boot just committed.
+    const reservation = reserved.reservation
     try {
       // Compat boundary: register vouched-for legacy event types before the
       // strict read path (issue #153) — same seam as the /resume picker,
@@ -1807,6 +1884,9 @@ async function resolveAgent(
         route: resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(resumed.agent.session)),
       }
     } catch (error) {
+      // A claim says "this process is driving the log". A resume that never
+      // mounted must not leave one behind for a peer to see and refuse.
+      reservation.abandon()
       // A launch-time --resume is an explicit request: silently substituting a
       // fresh session presents a cold conversation as the resumed one (the
       // "resume did nothing" failure mode — the warn below never reached a
@@ -1819,6 +1899,10 @@ async function resolveAgent(
         'Drop --resume to start fresh, or repair the session log first.',
         { cause: error },
       )
+    } finally {
+      // The reservation only has to outlive the mount. From here the agent is
+      // in the registry, which is what the publisher derives the set from.
+      reservation.settle()
     }
   }
   const sessionId = SessionId(randomUUID())
@@ -1843,16 +1927,31 @@ async function resolveAgent(
       `dsh-tui: model route ${rejected.provider}/${rejected.model} is not advertised by provider "${rejected.provider}"; falling back to ${route.provider}/${route.model}`,
     )
   }
-  const created = await ctx.agents.create({
-    sessionId,
-    meta: {
-      ...meta,
-      // Durable header value: a later resume re-mounts exactly this preset.
-      ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
-    },
-    agentOptions: route,
-    ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-  }).catch((error: unknown) => {
+  // Reserve the fresh id before the factory, exactly like the in-session
+  // creates: from the moment `agents.create` returns this process holds the
+  // only write handle on a log the publisher has not named yet. A brand-new id
+  // cannot conflict, so a refusal is only warned about — it costs
+  // announcement, not correctness — but the reservation is what keeps the gap
+  // between the create and the next beat from being open.
+  const bootReserved = await reserveMount(String(sessionId))
+  if (!bootReserved.ok && bootReserved.reason !== 'occupied') {
+    ctx.logger.warn(`dsh-tui: could not announce the new session in the mount ledger: ${bootReserved.reason}`)
+  }
+  const bootReservation = bootReserved.ok ? bootReserved.reservation : undefined
+  let created: Awaited<ReturnType<typeof ctx.agents.create>>
+  try {
+    created = await ctx.agents.create({
+      sessionId,
+      meta: {
+        ...meta,
+        // Durable header value: a later resume re-mounts exactly this preset.
+        ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
+      },
+      agentOptions: route,
+      ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+    })
+  } catch (error: unknown) {
+    bootReservation?.abandon()
     // Fail loud with the reason on stderr — a dead TUI with no message is
     // the worst outcome for a misconfigured leaf (unknown provider/model).
     const message = error instanceof Error ? error.message : String(error)
@@ -1860,7 +1959,8 @@ async function resolveAgent(
       `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
       { cause: error },
     )
-  })
+  }
+  bootReservation?.settle()
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
 }
 
