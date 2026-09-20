@@ -3,13 +3,13 @@ import { marked, type Token } from 'marked'
 import Box from '../ink/components/Box.js'
 import { formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { t } from '../i18n.js'
-import { Markdown } from './Markdown.js'
+import { isStandaloneToken, Markdown } from './Markdown.js'
 
 /**
- * Renders markdown during streaming by splitting at the last top-level block
- * boundary: everything before is stable (memoized, never re-parsed), only the
- * final block is re-parsed per delta. marked.lexer() correctly handles unclosed code
- * fences as a single token, so block boundaries are always safe.
+ * Renders streaming markdown in sealed groups of completed top-level blocks.
+ * Only the unsealed group and growing final block change as text arrives.
+ * marked.lexer() keeps unclosed fences inside one token, and the boundary
+ * analysis below preserves the whole-document formatter's row spacing.
  */
 /**
  * Tail budget for the unstable suffix during streaming. The sticky view only
@@ -28,6 +28,7 @@ import { Markdown } from './Markdown.js'
 const SUFFIX_TAIL_BUDGET = 3584
 const SUFFIX_BOUNDARY_LOOKBACK = 2048
 const SUFFIX_CUT_STEP = 1024
+const STABLE_BLOCK_BUDGET = 8192
 
 function clipSuffixTail(suffix: string, cut: { current: number }): string {
   const total = suffix.length
@@ -53,16 +54,17 @@ type StableBoundary = {
   safe: boolean
   /** Empty display rows before a following text block. */
   gap: number
-  /** Tables use Markdown's fixed node gap instead of text newline spacing. */
-  endsWithTable: boolean
-  /** Whitespace after a table becomes a zero-height node between two tables. */
+  /** Standalone nodes (tables, mermaid diagrams) use Markdown's fixed node
+   *  gap instead of text newline spacing. */
+  endsWithNode: boolean
+  /** Whitespace after a standalone node becomes a zero-height node between two of them. */
   trailingEmptyTextNode: boolean
 }
 
 const UNSAFE_BOUNDARY: StableBoundary = {
   safe: false,
   gap: 0,
-  endsWithTable: false,
+  endsWithNode: false,
   trailingEmptyTextNode: false,
 }
 
@@ -85,8 +87,8 @@ function blankTokenNewlines(type: string): number {
  * Analyze the candidate stable tokens using the same formatter as Markdown.
  * Both split halves trim their outer whitespace, so the trailing newline count
  * determines the Yoga gap: one newline merely starts the next row; every
- * additional newline is one genuinely blank row. Tables are separate layout
- * nodes and therefore keep Markdown's fixed one-row node gap.
+ * additional newline is one genuinely blank row. Standalone nodes are
+ * separate layout nodes and therefore keep Markdown's fixed one-row node gap.
  *
  * Only the LAST token that can produce visible text decides the outcome, so
  * the region is walked backwards and formatted one token at a time instead of
@@ -94,14 +96,14 @@ function blankTokenNewlines(type: string): number {
  * boundary. `formatToken` runs once for the common case.
  */
 function analyzeStableBoundary(tokens: readonly Token[], suffixIndex: number): StableBoundary {
-  // A table resets the accumulated text, so only the segment after the last
-  // one matters; anything before it is already folded into the table branch.
+  // A standalone node resets the accumulated text, so only the segment after
+  // the last one matters; anything before it is already folded into the node branch.
   let segmentStart = 0
-  let hasTable = false
+  let hasNode = false
   for (let i = suffixIndex - 1; i >= 0; i--) {
-    if (tokens[i]!.type === 'table') {
+    if (isStandaloneToken(tokens[i]!)) {
       segmentStart = i + 1
-      hasTable = true
+      hasNode = true
       break
     }
   }
@@ -132,18 +134,18 @@ function analyzeStableBoundary(tokens: readonly Token[], suffixIndex: number): S
     return {
       safe: true,
       gap: Math.max(0, trailingNewlines - 1),
-      endsWithTable: false,
+      endsWithNode: false,
       trailingEmptyTextNode: false,
     }
   }
 
-  if (hasTable) {
+  if (hasNode) {
     return {
       safe: true,
       gap: 1,
-      endsWithTable: true,
-      // Whitespace after the table still occupies a zero-height text node
-      // between two tables.
+      endsWithNode: true,
+      // Whitespace after the node still occupies a zero-height text node
+      // between two standalone nodes.
       trailingEmptyTextNode: blankNewlines > 0,
     }
   }
@@ -153,7 +155,7 @@ function analyzeStableBoundary(tokens: readonly Token[], suffixIndex: number): S
 }
 
 type SuffixStart = {
-  kind: 'text' | 'table' | undefined
+  kind: 'text' | 'node' | undefined
   leadingNewlines: number
 }
 
@@ -164,16 +166,35 @@ type SuffixStart = {
 function analyzeSuffixStart(tokens: readonly Token[], startIndex: number): SuffixStart {
   let leadingNewlines = 0
   for (let i = startIndex; i < tokens.length; i++) {
-    const type = tokens[i]?.type
-    if (type === 'table') return { kind: 'table', leadingNewlines }
-    if (type === 'space' || type === 'br') {
+    const token = tokens[i]
+    if (token === undefined) break
+    if (isStandaloneToken(token)) return { kind: 'node', leadingNewlines }
+    if (token.type === 'space' || token.type === 'br') {
       leadingNewlines += 1
       continue
     }
-    if (type === 'def' || type === 'del' || type === 'html') continue
+    if (token.type === 'def' || token.type === 'del' || token.type === 'html') continue
     return { kind: 'text', leadingNewlines }
   }
   return { kind: undefined, leadingNewlines }
+}
+
+function gapBetween(boundary: StableBoundary, start: SuffixStart): number {
+  if (start.kind === undefined) return 0
+  if (boundary.endsWithNode) {
+    return start.kind === 'node' && (boundary.trailingEmptyTextNode || start.leadingNewlines > 0) ? 2 : 1
+  }
+  return start.kind === 'node' ? 1 : boundary.gap + start.leadingNewlines
+}
+
+type StableBlocks = {
+  blocks: Array<{ text: string; gap: number }>
+  end: number
+  tokens: Token[]
+  tail: string
+  tailGap: number
+  boundary: StableBoundary | undefined
+  definitions: boolean
 }
 
 export function StreamingMarkdown({
@@ -183,15 +204,17 @@ export function StreamingMarkdown({
   children: string
   dimColor?: boolean
 }): React.ReactNode {
-  // The stable prefix is kept as ONE string identity across renders: a
-  // fresh substring per render would break Markdown's React.memo and
-  // re-layout the entire finished transcript tail on every token. The
-  // identity only changes when a new block boundary advances the prefix.
+  // The prefix tracks source offsets; its rendered blocks are sealed once
+  // so an advancing boundary never reparses the entire accumulated answer.
   const prefixRef = React.useRef('')
+  const blocksRef = React.useRef<StableBlocks>({
+    blocks: [], end: 0, tokens: [], tail: '', tailGap: 0,
+    boundary: undefined, definitions: false,
+  })
   const cutRef = React.useRef(0)
   const boundaryGapRef = React.useRef(0)
   const prefixVisibleRef = React.useRef(false)
-  const prefixEndsWithTableRef = React.useRef(false)
+  const prefixEndsWithNodeRef = React.useRef(false)
   const prefixTrailingEmptyTextRef = React.useRef(false)
 
   const stripped = stripPromptXMLTags(children)
@@ -202,13 +225,27 @@ export function StreamingMarkdown({
     cutRef.current = 0
     boundaryGapRef.current = 0
     prefixVisibleRef.current = false
-    prefixEndsWithTableRef.current = false
+    prefixEndsWithNodeRef.current = false
     prefixTrailingEmptyTextRef.current = false
+    blocksRef.current = {
+      blocks: [], end: 0, tokens: [], tail: '', tailGap: 0,
+      boundary: undefined, definitions: false,
+    }
   }
 
   // Lex only from current boundary — O(unstable length), not O(full text)
   const boundary = prefixRef.current.length
   const tokens = marked.lexer(stripped.substring(boundary))
+  const blocks = blocksRef.current
+  // Reference definitions have document-wide scope, including references
+  // in the growing suffix. These documents cannot use independent parsers.
+  if (!blocks.definitions && Object.keys(tokens.links).length > 0) {
+    blocks.definitions = true
+    blocks.blocks = []
+    blocks.tokens = []
+    blocks.end = 0
+    blocks.boundary = undefined
+  }
 
   // Last non-space token is the growing block; everything before is final
   let lastContentIdx = tokens.length - 1
@@ -223,16 +260,42 @@ export function StreamingMarkdown({
   if (advance > 0) {
     const stableBoundary = analyzeStableBoundary(tokens, lastContentIdx)
     if (stableBoundary.safe) {
+      if (!blocks.definitions) {
+        let end = boundary
+        for (let index = 0; index < lastContentIdx; index++) {
+          const token = tokens[index]!
+          blocks.tokens.push(token)
+          end += token.raw.length
+          if (end - blocks.end < STABLE_BLOCK_BUDGET) continue
+          const blockBoundary = analyzeStableBoundary(blocks.tokens, blocks.tokens.length)
+          if (!blockBoundary.safe) continue
+          const gap = blocks.boundary === undefined ? 0 : gapBetween(blocks.boundary, analyzeSuffixStart(blocks.tokens, 0))
+          // Detach the sealed slice from the growing source buffer, preserving
+          // UTF-16 code units rather than pinning every historical full reply.
+          const text = Buffer.from(stripped.substring(blocks.end, end), 'utf16le').toString('utf16le')
+          blocks.blocks.push({ text, gap })
+          blocks.end = end
+          blocks.boundary = blockBoundary
+          blocks.tokens = []
+        }
+        blocks.tail = stripped.substring(blocks.end, boundary + advance)
+        blocks.tailGap = blocks.boundary === undefined ? 0 : gapBetween(blocks.boundary, analyzeSuffixStart(blocks.tokens, 0))
+      }
       prefixRef.current = stripped.substring(0, boundary + advance)
       boundaryGapRef.current = stableBoundary.gap
       prefixVisibleRef.current = true
-      prefixEndsWithTableRef.current = stableBoundary.endsWithTable
+      prefixEndsWithNodeRef.current = stableBoundary.endsWithNode
       prefixTrailingEmptyTextRef.current = stableBoundary.trailingEmptyTextNode
       suffixTokenIndex = lastContentIdx
     }
   }
 
+  if (blocks.definitions) {
+    return <Markdown dimColor={dimColor} cacheTokens={false}>{stripped}</Markdown>
+  }
+
   const stablePrefix = prefixRef.current
+  const prefixTail = blocks.tail
   const suffixSource = stripped.substring(stablePrefix.length)
   const unstableSuffix = clipSuffixTail(suffixSource, cutRef)
   const suffixStart = cutRef.current > 0
@@ -240,12 +303,12 @@ export function StreamingMarkdown({
     : analyzeSuffixStart(tokens, suffixTokenIndex)
   const boundaryGap =
     prefixVisibleRef.current && suffixStart.kind !== undefined
-      ? prefixEndsWithTableRef.current
-        ? suffixStart.kind === 'table' &&
+      ? prefixEndsWithNodeRef.current
+        ? suffixStart.kind === 'node' &&
           (prefixTrailingEmptyTextRef.current || suffixStart.leadingNewlines > 0)
           ? 2
           : 1
-        : suffixStart.kind === 'table'
+        : suffixStart.kind === 'node'
           ? 1
           : boundaryGapRef.current + suffixStart.leadingNewlines
       : 0
@@ -259,9 +322,22 @@ export function StreamingMarkdown({
     (stablePrefix === '' || !unstableSuffix.startsWith(stablePrefix))
 
   return (
-    <Box flexDirection="column" gap={boundaryGap}>
-      {stablePrefix && <Markdown dimColor={dimColor}>{stablePrefix}</Markdown>}
-      {hasDistinctSuffix && <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>}
+    <Box flexDirection="column">
+      {blocks.blocks.map((block, index) => (
+        <Box key={index} flexDirection="column" marginTop={block.gap}>
+          <Markdown dimColor={dimColor}>{block.text}</Markdown>
+        </Box>
+      ))}
+      {prefixTail && (
+        <Box key="prefix" flexDirection="column" marginTop={blocks.tailGap}>
+          <Markdown dimColor={dimColor}>{prefixTail}</Markdown>
+        </Box>
+      )}
+      {hasDistinctSuffix && (
+        <Box key="suffix" flexDirection="column" marginTop={boundaryGap}>
+          <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>
+        </Box>
+      )}
     </Box>
   )
 }
