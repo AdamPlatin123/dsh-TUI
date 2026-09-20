@@ -292,7 +292,26 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     return proposed.reasoningEffort
   }
 
-  return { state, selection, notices, defaultEffort: options.defaultEffort, bindOnce, requestTier }
+  /**
+   * `setDefaultEffort` runs applyPreferredEffort through its own closure, so the
+   * `applies` counter above cannot see it — poll a readout the branch must reach
+   * instead. The chain is promise-only, so this settles deterministically in both
+   * the fixed and the buggy tree.
+   */
+  const drainUntil = async (ready: () => boolean): Promise<void> => {
+    for (let i = 0; i < 2000 && !ready(); i += 1) await new Promise(resolve => setImmediate(resolve))
+  }
+
+  return {
+    state,
+    selection,
+    notices,
+    defaultEffort: options.defaultEffort,
+    setDefaultEffort: modelActions.setDefaultEffort,
+    bindOnce,
+    drainUntil,
+    requestTier,
+  }
 }
 
 // A — downgrade (the C1 shape): preferred `max` on a route that only offers
@@ -387,6 +406,49 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     `readout=${String(rig.state.reasoningEffort)} default=${rig.defaultEffort}`,
   )
   check('rebind: 无更低档只提示一次', rig.notices.length === 1, `notices=${JSON.stringify(rig.notices)}`)
+}
+
+// D — the non-bind path. `/settings`' effortDefault hands the chosen level
+// straight to setDefaultEffort → applyPreferredEffort (plugin.ts:804 →
+// model-actions.ts setDefaultEffort) WITHOUT a bind, and the four switch tails
+// that clear `selection.current` all live on the bind side. So a pin installed
+// by an earlier exact hit outlives the default change: unless the miss branch
+// drops that stale effort itself, the request keeps carrying the OLD tier while
+// the readout says the model default ships — the readout-vs-request split this
+// PR exists to remove.
+{
+  const rig = createRebindRig({
+    preferred: 'max',
+    efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
+    defaultEffort: 'high',
+  })
+  await rig.bindOnce(true)
+  const pinned = await rig.requestTier()
+  check(
+    'rebind: 精确命中 max 先把它钉进请求',
+    pinned === 'max' && rig.selection.current?.reasoningEffort === 'max',
+    `tier=${String(pinned)} selection=${JSON.stringify(rig.selection.current)}`,
+  )
+  // Same route, no bind: the settings layer moves the default to a level this
+  // route does not offer and has nothing lower than.
+  rig.setDefaultEffort('low')
+  await rig.drainUntil(() => rig.state.reasoningEffort === rig.defaultEffort)
+  const afterDefault = await rig.requestTier()
+  check(
+    'rebind: 非 bind 改默认档后请求不再携带旧 pin',
+    afterDefault === undefined,
+    `tier=${String(afterDefault)}（"max" = 旧 pin 还留在链路上）`,
+  )
+  check(
+    'rebind: 非 bind 改默认档后 selection.current 不再持有 effort',
+    rig.selection.current?.reasoningEffort === undefined,
+    JSON.stringify(rig.selection.current),
+  )
+  check(
+    'rebind: 非 bind 改默认档后读数与请求一致（读数=模型默认档）',
+    rig.state.reasoningEffort === rig.defaultEffort,
+    `readout=${String(rig.state.reasoningEffort)} default=${rig.defaultEffort}`,
+  )
 }
 
 process.exit(failed === 0 ? 0 : 1)

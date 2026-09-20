@@ -107,6 +107,20 @@ export function createModelActions(
         state.reasoningEffort = shipped
         state.emit()
       }
+      // An effort pin installed earlier (an exact hit, /effort <id>) survives
+      // every path that is NOT a bind: /settings' effortDefault hands the level
+      // straight to setDefaultEffort → applyPreferredEffort (plugin.ts:804 →
+      // setDefaultEffort above), which never resets selection.current — the four
+      // switch tails that do are all on the bind side. Leaving it would put the
+      // OLD tier back on the wire while the readout above announces the model
+      // default. Drop the effort only: the provider/model half of the pin is
+      // this route's, not the stale tier's. No emit — setDefaultEffort reaches
+      // here through that same non-bind path, and nothing UI-visible reads this
+      // ref (it is the router's ModelSelectionRef, not the IDE ChannelSelection
+      // the status line shows); the readout above already emits when it moves.
+      if (selection.current?.reasoningEffort !== undefined) {
+        selection.current = { provider: capture.provider, model: capture.model }
+      }
       return
     }
     // Dedupe gates ONLY the toast: bind resets selection.current on every
