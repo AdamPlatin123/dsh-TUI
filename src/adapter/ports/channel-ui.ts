@@ -1,9 +1,9 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
-import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult } from './channel-workspace.js'
+import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
 import type { ProviderSetupHost, OAuthProviderStatus, SettingsHost, TuiSettingsSection } from './channel-settings.js'
 
 /**
@@ -17,6 +17,11 @@ export interface ChannelUi {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
   readonly rows: readonly ChatRow[]
+  /** Live editor selection from the IDE channel (undefined = no IDE / no
+   *  selection / link dropped). Protocol-2 pushes carry the editor buffer's
+   *  own text; the submit path attaches it verbatim and only falls back to
+   *  reading the file from disk for protocol-1 pushes. */
+  readonly selection: ChannelSelection | undefined
   readonly status: AgentStatus | 'starting' | 'disposed'
   readonly sessionTitle: string
   /** Per-session accent color name (`/color`), '' when unset — persisted via
@@ -209,7 +214,7 @@ export interface ChannelUi {
   openPluginScene(id: string): boolean
   /** Close the open plugin scene, if any (a no-op otherwise). */
   closePluginScene(): void
-  /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+  /** 侧问：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
   sideQuestion(
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
@@ -273,7 +278,7 @@ export interface ChannelUi {
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
   interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
-  /** Rewind the conversation to a past user message (CC's double-Esc rewind):
+  /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
    *  `mode` is the plugin-offered rewind mode the user picked (the
@@ -312,6 +317,19 @@ export interface ChannelUi {
   newSession(): Promise<boolean>
   /** Workspace targets contributed by the TUI and optional providers. */
   listWorkspaces(): Promise<readonly TuiWorkspaceTarget[]>
+  /**
+   * The durable workspace registry, in its own order.
+   *
+   * The workspace home screen's sidebar is built from this (not from
+   * `listWorkspaces`): it is the ledger the user actually registers into, so
+   * an entry exists for every workspace — including ones whose sessions are
+   * all gone, whose directory has been deleted, or that never had a session.
+   */
+  listWorkspaceRegistry(): Promise<readonly TuiWorkspaceEntry[]>
+  /** Drop a workspace registration; the directory and its session logs stay. */
+  removeWorkspace(path: string): Promise<boolean>
+  /** Rename the durable workspace owning `path` (title only; the path is immutable). */
+  renameWorkspaceAt(path: string, title: string): Promise<boolean>
   /** Resolve an absolute path, file URL, or provider URI. */
   resolveWorkspace(reference: string): Promise<TuiWorkspaceTarget | undefined>
   /** Start a fresh session in the selected workspace. */
@@ -431,7 +449,7 @@ export interface ChannelUi {
   previewSession(sessionId: string): Promise<readonly PreviewEntry[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */
   setResumeTarget(sessionId: string): void
-  /** Rename the current session (CC's /rename): appends a `session/title`
+  /** Rename the current session (`/rename`): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
   /** Set the current session's accent color (`/color <name>`): appends a
@@ -450,7 +468,7 @@ export interface ChannelUi {
    *  `session/title` event to its log (live sessions go through the normal
    *  rename path). False when the log is absent or undecodable. */
   renameSessionTo(sessionId: string, title: string): Promise<boolean>
-  /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
+  /** Manually compact the session history (`/compact`); no-op notify when the leaf lacks a compaction service. */
   compact(): void
   /** Render a multi-line local report in the transcript (`/status`,
    *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
@@ -472,7 +490,7 @@ export interface ChannelUi {
    *  the service is absent). */
   listSubagents(): Promise<string[]>
   /**
-   * The agent view (CC's `claude agents`) row snapshot: every live agent in
+   * The agent view row snapshot: every live agent in
    * this process plus every persisted session that no live agent owns,
    * ordered needs-input/working first, then most recently active. Reading it
    * is cheap; subscribe for changes.
@@ -507,7 +525,7 @@ export interface ChannelUi {
   /** `/bg` — background the attached session: swap the TUI to a fresh agent
    *  while the current one keeps running. The agent view lists it as a
    *  background session; `backgroundedSessionId` is the move's return target
-   *  (CC's "Esc returns to that conversation"). */
+   *  ("Esc returns to that conversation"). */
   backgroundCurrent(): Promise<BackgroundResult>
   /** Send a follow-up user message to a session from the agent view's peek
    *  panel. Live sessions receive it directly; a session no live agent owns

@@ -46,7 +46,7 @@ const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
 const { TuiRendererRuntime } = await import('../src/dsh-adapter/renderers.js')
-const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
+const { mountAdmitted, mountAdmissionHost, testManifest, COMMAND_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -171,11 +171,9 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 // ── F2. 命令归属（C-041 per-owner 检查点的数据源）─────────────────────────
 {
   const { commandOwner } = await import('../src/dsh-adapter/command-attribution.js')
-  const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
   const attrCtx = new Context()
   attrCtx.plugin(CommandRuntime)
-  attrCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-  await sleep(50)
+  await mountAdmissionHost(attrCtx, 'commands battery F2')
   const host = attrCtx.get('tuiPluginHost')
   check1('command live probe is not exposed on the plugin-visible host service',
     typeof (host as { probeCommandReversible?: unknown } | undefined)?.probeCommandReversible === 'undefined')
@@ -298,9 +296,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     invoker.includes('supportsImages(')
     && invoker.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
     && invoker.includes('ImagesExecute'))
-  check1('command discovery mirrors the upstream input.images admission flag',
-    readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
-      .includes('acceptsImages: descriptor.input?.images === true'))
+  check1('command discovery mirrors the upstream input admission flag (0.1.5 `attachments`, legacy `images` fallback)',
+    /acceptsImages:[^\n]*\battachments\b[^\n]*\bimages\b/.test(skills))
   check1('draft-aware command outcome is additive',
     invoker.includes('Promise<ExternalCommandOutcome | undefined>')
       && channel.includes('runExternalCommandOutcome'))

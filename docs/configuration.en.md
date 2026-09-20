@@ -29,7 +29,7 @@ A complete common override looks like this:
 - id: dsh-tui
   config:
     provider: deepseek-official
-    model: deepseek-v4-flash
+    model: deepseek-flash
     # Prefer leaving cwd unset — the default resolves to the git worktree
     # root containing the launch directory. To pin a fixed workspace, use an
     # absolute path (e.g. cwd: /repo/packages/app), NOT `!!js process.cwd()`
@@ -48,14 +48,14 @@ A complete common override looks like this:
 | Field | Default/source | Meaning |
 | --- | --- | --- |
 | `provider` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-official` | DSH model route; provider and model must both be set to form an explicit route |
-| `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
+| `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
 | `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default), also shown in the header at startup. Precedence: /settings default reasoning effort `effortDefault` (settings.yaml user layer; `auto` defers) > this field > the persisted `/effort` choice (`~/.dsh-tui/effort.json`) > the model default |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
-| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
+| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row. Both this and `/settings → statusBar.contextBar` (also on by default) must be on for it to render |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
@@ -194,6 +194,7 @@ for the complete field reference.
 | `VISUAL` / `EDITOR` | External editor opened by `Ctrl+G` (`VISUAL` wins; arguments like `code --wait` are allowed; with neither set the TUI prompts you to configure one — no `vi` fallback) |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
+| `DSH_HOME` | Harness home (profiles, sessions, credentials, attachments); falls back to the upstream default `~/.dsh` |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
@@ -208,9 +209,17 @@ for the complete field reference.
 | `DSH_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
 | `DSH_TUI_RENDER_LOG` | File path for raw ANSI frame capture |
 
-The old `CC_TUI_*` and `DSH_CC_*` names (and the early `~/.dsh-cc` data
-directory) come from earlier release naming and are no longer read as of this
-release; use the `DSH_TUI_*` prefix and the `~/.dsh-tui` data directory.
+The old `CC_TUI_*` and `DSH_CC_*` names come from earlier release naming and
+are no longer read as of this release; use the `DSH_TUI_*` prefix.
+
+Two directories are involved and neither substitutes for the other:
+
+- **Harness home**: `$DSH_HOME`, falling back to the upstream default `~/.dsh`.
+  Holds profiles, sessions, credentials, and attachments. Early releases pinned
+  it to `~/.dsh-cc`.
+- **TUI data directory**: `~/.dsh-tui` (a fixed path, independent of
+  `$DSH_HOME`). Holds `/model`, `/lang`, `/theme` and similar preferences plus
+  `resume.txt`. Early releases wrote these under `$DSH_HOME` instead.
 
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.

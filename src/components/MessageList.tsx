@@ -3,6 +3,7 @@ import { getLang, subscribeLang, t, type Lang } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobRow } from '../dsh-adapter/channel.js'
+import { normalizeIdePath } from '../dsh-adapter/ide-channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
@@ -20,6 +21,7 @@ import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
+import { foldLongLines } from '../utils/fold-long-lines.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
@@ -103,6 +105,50 @@ function revealDisplayLen(row: ChatRow, enabled: boolean): number {
 }
 
 /**
+ * Display form of an IDE-selection path (T-FIX-01): when the path lives
+ * under the session cwd, strip that prefix so the indicator line reads
+ * `src/a.ts` instead of a long absolute path (UAT finding — the extension
+ * anchors at its workspace root while the TUI session cwd is the git
+ * worktree root, so raw paths are long and redundant). Pure display layer:
+ * the `<attached-file>` block keeps its absolute path for the model.
+ *
+ * Comparison reuses normalizeIdePath (the ide-channel lock matcher's
+ * normalizer: backslashes folded to forward slashes, trailing slashes
+ * stripped, case folded on case-insensitive filesystems) so Windows forms
+ * like `d:/x` vs `D:\X` still match. Prefix hits return the remainder
+ * (`src/a.ts`); everything else — outside cwd, empty/undefined cwd, or the
+ * path being the cwd itself — returns the input unchanged. NOT basename:
+ * that would drop the directory context and collide on same-named files.
+ * `caseInsensitive` is parameterized so verifiers can pin either mode on
+ * any host.
+ */
+export function displaySelectionPath(
+  path: string,
+  sessionCwd: string | undefined,
+  caseInsensitive: boolean = process.platform === 'win32' || process.platform === 'darwin',
+): string {
+  if (sessionCwd === undefined || sessionCwd === '') return path
+  // Shared normalizer (lock matching uses the same): backslashes fold to
+  // forward slashes, trailing slashes stripped — transforms that preserve
+  // character positions, so slicing the canonical path at the cwd's length
+  // keeps the file's own casing in the displayed relative string. Folding
+  // decides only WHETHER the prefix matches, never what gets sliced off.
+  const pathNorm = normalizeIdePath(path, false)
+  const cwdNorm = normalizeIdePath(sessionCwd, false)
+  if (cwdNorm === '' || cwdNorm.length >= pathNorm.length) return path
+  // The POSIX root `/` is a prefix of every absolute path without a further
+  // separator — `/repo/file.ts` under cwd `/` displays as `repo/file.ts`.
+  // (A `startsWith('/' + '/')` check would never match; coderabbit review.)
+  if (cwdNorm === '/') {
+    return pathNorm.startsWith('/') ? pathNorm.slice(1) : path
+  }
+  const foldedPath = normalizeIdePath(pathNorm, caseInsensitive)
+  const foldedCwd = normalizeIdePath(cwdNorm, caseInsensitive)
+  if (!foldedPath.startsWith(`${foldedCwd}/`)) return path
+  return pathNorm.slice(cwdNorm.length + 1)
+}
+
+/**
  * Per-kind layout signature PARTS: the O(1) identity of every input that
  * decides a row's rendered HEIGHT (see sigRef in MessageList). Fields are
  * scoped to the row's own renderer — a global flat signature
@@ -137,6 +183,7 @@ function signatureParts(
   failureHintRowId: number | null | undefined,
   failureHint: string | undefined,
   displayTextLen: number,
+  sessionCwd: string | undefined,
 ): Array<string | number | boolean> {
   signatureScratch.length = 0
   // Universal height inputs: width reflows every row; kind switches height
@@ -194,9 +241,37 @@ function signatureParts(
       // Folded one-liner vs full summary text.
       signatureScratch.push(expanded, expandedRows.has(row.id))
       break
+    case 'user':
+      // T06: the selection indicator line above the bubble adds one rendered
+      // row whose text wraps with width — its presence and content length
+      // are height inputs. Missing this would leave offscreen spacer heights
+      // stale when the field arrives (scroll jump, DESIGN R4).
+      // T-FIX-01: the indicator renders the cwd-relative display path, so
+      // the signature hashes THAT string — a cwd switch (/workspace) that
+      // changes the display form must invalidate the cached height too.
+      // width is the display-CELL width (emoji / CJK / combining / ANSI
+      // differ from JS length), not the JS string length — two paths with
+      // equal length but different terminal widths must not share a cached
+      // height (coderabbit review, repo width convention).
+      signatureScratch.push(
+        row.selectionAttached === undefined ? 0 : 1,
+        stringWidth(displaySelectionPath(row.selectionAttached?.path ?? '', sessionCwd)),
+        String(row.selectionAttached?.lines ?? ''),
+      )
+      // Long-line fold: expanding a folded row swaps the folded preview for
+      // the raw line (thousands of rows), so both expansion switches are
+      // height inputs on user rows too — same rationale as the default arm.
+      signatureScratch.push(expanded, expandedRows.has(row.id))
+      break
     default:
-      // user / notice / interrupt / local / local-output: height follows
-      // text + columns alone (selection/background never change height).
+      // notice / interrupt / local / local-output: height follows
+      // text + columns alone (selection/background never change height) —
+      // EXCEPT the long-line fold: expanding a folded row swaps ~10 rows of
+      // folded text for the raw line (thousands), so both expansion switches
+      // are height inputs here too. Without them the stale cached height
+      // feeds topPad/bottomPad and the offsets scan, and the expanded tail
+      // can end up unreachable behind a wrong scroll range.
+      signatureScratch.push(expanded, expandedRows.has(row.id))
       break
   }
   return signatureScratch
@@ -233,6 +308,7 @@ export function MessageList({
   onOpenSubagent,
   onOpenJobs,
   onOpenFile,
+  sessionCwd,
   onPreviewImage,
   suppressImageGraphics = false,
 }: {
@@ -323,6 +399,12 @@ export function MessageList({
   onOpenJobs?: () => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
+  /** Session working directory (fs path, `channel.cwd`): the IDE-selection
+   *  indicator line strips this prefix for display (T-FIX-01). Optional —
+   *  repro/verify harnesses that predate the field render unchanged with
+   *  raw paths. The real fs cwd, NOT displayCwd: remote URI display forms
+   *  can't prefix-match selection paths. */
+  sessionCwd?: string | undefined
   /** 点击 transcript 缩略图（打开共享的大图预览 overlay）。 */
   onPreviewImage?: (image: TranscriptImage) => void
   /** Modal preview owns the terminal-image frame budget while open. */
@@ -581,6 +663,7 @@ export function MessageList({
         failureHintRowId,
         failureHint,
         revealDisplayLen(row, smoothStreaming),
+        sessionCwd,
       )
       const cachedParts = sigs.get(row.id)
       let same = false
@@ -641,6 +724,11 @@ export function MessageList({
   const relBottom = Math.max(scrollTop, scrollTop + pending) + viewport + OVERSCAN_LINES - base
   let start = 0
   while (start < visibleRows.length && offsets[start] + heightOf(visibleRows[start]) <= relTop) start++
+  // Resize invalidates cached heights, so a manual scrollTop can overshoot
+  // the entire estimated list. Keep its last row mounted to re-measure:
+  // an empty window has no measurement wakeup and collapses scrollHeight,
+  // leaving the transcript blank and the gutter believing nothing scrolls.
+  if (start === visibleRows.length && start > 0) start--
   let end = start
   while (end < visibleRows.length && offsets[end] < relBottom) end++
   if (sticky || !scrollHandle) end = visibleRows.length
@@ -808,14 +896,10 @@ export function MessageList({
       end = Math.max(end, idx + 1)
     }
   }
-  // The newest failed tool call carries the trajectory footnote
-  // (failureHint). Virtualization must not unmount it: before the window
-  // clamp the row was always mounted, now keep mounting it explicitly while
-  // the hint is live (verify-trace-scene's footnote check).
-  if (failureHintRowId !== undefined && failureHintRowId !== null) {
-    const idx = visibleRows.findIndex(row => row.id === failureHintRowId)
-    if (idx !== -1) start = Math.min(start, idx)
-  }
+  // The failure footnote is row content, not a seek request. Pinning its
+  // row also mounted EVERY later tool card until the trajectory was opened,
+  // defeating virtualization for the rest of a tool-heavy conversation.
+  // It reappears when scrolled into view; only forceMountRowId widens for a seek.
   const topPad = offsets[start] ?? 0
   const mountedBottom = end < visibleRows.length ? offsets[end] : total
   const bottomPad = total - mountedBottom
@@ -1147,6 +1231,7 @@ export function MessageList({
               images={row.images}
               textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
+              selectionAttached={row.selectionAttached}
               streaming={displayStreaming}
               durationMs={row.durationMs}
               time={row.time}
@@ -1185,6 +1270,7 @@ export function MessageList({
               onOpenSubagent={onOpenSubagent}
               onOpenJobs={onOpenJobs}
               onOpenFile={onOpenFile}
+              sessionCwd={sessionCwd}
               onPreviewImage={onPreviewImage}
               suppressImageGraphics={suppressImageGraphics}
               setRowRef={setRowRef}
@@ -1215,6 +1301,10 @@ type MemoRowProps = {
    *  expanded body shows the revealed slice in `text`. */
   textFull?: string
   executionTarget: string | undefined
+  /** IDE selection indicator (user rows): rendered above the prompt bubble. */
+  selectionAttached: ChatRow['selectionAttached']
+  /** Session cwd for the indicator's display-path relativization (T-FIX-01). */
+  sessionCwd: string | undefined
   streaming: boolean
   durationMs: number | undefined
   time: number | undefined
@@ -1298,6 +1388,8 @@ function TranscriptRow({
   images,
   textFull,
   executionTarget,
+  selectionAttached,
+  sessionCwd,
   streaming,
   durationMs,
   time,
@@ -1349,7 +1441,8 @@ function TranscriptRow({
   // 可折叠行（工具卡/思考/compact 摘要）共用：点击切换展开，全宽行右侧
   // 空白（屏幕缓冲未写入单元格）不触发——点击空白想选字/拖拽时不再误触
   // 展开/收起（审计 C-03/cellIsBlank 零消费）。纯文本行（user/assistant）
-  // 保持不可点：转录是阅读区（用户反馈），折叠语义留给带视觉指示的行。
+  // 平时不可点：转录是阅读区（用户反馈），折叠语义留给带视觉指示的行——
+  // 唯一例外是**被折叠的超长单行**：那时整行就是展开开关（见 foldClickable）。
   const foldOnClick = React.useCallback((event: ClickEvent): void => {
     if (event.cellIsBlank) return
     onToggleRow(rowId)
@@ -1367,13 +1460,46 @@ function TranscriptRow({
   // compact 摘要折叠行 hover 轻指示（∴ 提亮，不刷背景）。
   const [compactHovered, setCompactHovered] = useState(false)
 
+  // Long single lines are clipped before layout (utils/fold-long-lines.ts):
+  // one 300k-char paste or minified-JS line otherwise wraps into thousands of
+  // visual rows and that per-frame wrap — not the row count — dominates the
+  // frame. Ctrl+O (global) AND a row click (per-row, the same `expandedRows`
+  // gesture message-selection mode uses) both paint the raw text again.
+  // Reasoning rows are deliberately excluded: their preview is already a fixed
+  // three-row ticker. Tool cards fold inside their own header/body
+  // (AssistantToolUseMessage), whose text never rides this prop.
+  // `lang` is a dependency because the fold marker is localized: a row that
+  // re-renders unchanged after /lang must not keep the previous language.
+  const lang = getLang()
+  const foldable = kind !== 'reasoning' && kind !== 'tool'
+  const folded = React.useMemo(
+    () => (foldable ? foldLongLines(text) : { text, hiddenChars: 0, foldedLines: 0 }),
+    [foldable, text, lang],
+  )
+  const displayText = expanded || isExpanded ? text : folded.text
+  // Mouse toggle: only a row that ACTUALLY hides something is clickable (an
+  // ordinary message stays inert so plain clicks and drag-selection keep
+  // working there). A streaming row is clickable too — the same contract the
+  // tool card has while running: the click paints the full ARRIVED text, and
+  // the reveal keeps growing it.
+  const foldClickable = foldable && folded.hiddenChars > 0
+
   switch (kind) {
     case 'user':
       return (
-        <Box flexDirection="column" ref={ref}>
+        <Box flexDirection="column" ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          {selectionAttached && (
+            <Text dimColor>
+              {'⧉ '}{t('selection-attached', {
+                lines: selectionAttached.lines,
+                count: selectionAttached.lines,
+                path: displaySelectionPath(selectionAttached.path, sessionCwd),
+              })}
+            </Text>
+          )}
           {text !== '' && (
             <UserPromptMessage
-              text={text}
+              text={displayText}
               marginTopOnTurn={marginTopOnTurn}
               isSelected={isSelected}
             />
@@ -1394,6 +1520,7 @@ function TranscriptRow({
           width="100%"
           backgroundColor={background}
           ref={ref}
+          onClick={foldClickable ? foldOnClick : undefined}
         >
           <Box minWidth={2}>
             <Text color="text">●</Text>
@@ -1402,7 +1529,7 @@ function TranscriptRow({
             {/* The ⏵ self-narration line (working-activity narrate contract)
               is stripped here: the live working line on the status bar
               already shows it. */}
-            <StreamingMarkdown>{stripNarration(text)}</StreamingMarkdown>
+            <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
             {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
           </Box>
         </Box>
@@ -1412,6 +1539,7 @@ function TranscriptRow({
           flexDirection="column"
           backgroundColor={background}
           ref={ref}
+          onClick={foldClickable ? foldOnClick : undefined}
         >
           {expanded && (
             <Box
@@ -1424,7 +1552,7 @@ function TranscriptRow({
             </Box>
           )}
           <AssistantTextMessage
-            text={stripNarration(text)}
+            text={stripNarration(displayText)}
             marginTopOnTurn={marginTopOnTurn}
             isSelected={isSelected}
             isExpanded={isExpanded}
@@ -1505,8 +1633,8 @@ function TranscriptRow({
     }
     case 'notice':
       return (
-        <Box marginTop={1} ref={ref}>
-          <Divider title={` ${text} `} />
+        <Box marginTop={1} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <Divider title={` ${displayText} `} />
         </Box>
       )
     case 'interrupt':
@@ -1518,14 +1646,14 @@ function TranscriptRow({
     case 'local':
       // `!` mode command echo.
       return (
-        <Box marginTop={1} backgroundColor={background} ref={ref}>
-          <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {text}</Text>
+        <Box marginTop={1} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
         </Box>
       )
     case 'local-output':
       return (
-        <Box paddingLeft={2} backgroundColor={background} ref={ref}>
-          <Text dimColor>{text}</Text>
+        <Box paddingLeft={2} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <Text dimColor>{displayText}</Text>
         </Box>
       )
     case 'compact':
@@ -1547,7 +1675,7 @@ function TranscriptRow({
           ) : (
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
-              {' '}{t('compact-summary-folded')} · {compactPreview(text)}{' '}
+              {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
               {t('hint-expand-ctrl-o')}
             </Text>
           )}
