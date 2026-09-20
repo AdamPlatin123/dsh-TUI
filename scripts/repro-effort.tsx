@@ -262,10 +262,12 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
   })
 
   /**
-   * Real bind entry. Later binds go through the binding cell exactly like the
-   * /new, /resume and /bg tails do (`switchTo` = generation bump + cleared
-   * subscriptions + the `bindAgent()` tail), so `selection.current` is reset
-   * precisely as production resets it on a session switch.
+   * Real bind entry. Later binds go through a binding-cell transaction
+   * (`switchTo`), which does the three things every session-switch tail does —
+   * generation bump, cleared subscriptions, then `bindAgent()` — so
+   * `selection.current` is reset precisely as production resets it. /new and
+   * /bg reach the same place through `adopt` instead; only the adoption
+   * transaction differs, not the reset-then-reapply sequence under test.
    */
   const bindOnce = async (first = false): Promise<void> => {
     const before = applies
