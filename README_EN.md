@@ -55,7 +55,15 @@ the interface, and removing it leaves no core modifications behind.
   it and leaving the prompt visible (Esc or click outside closes); its title reads `Image #N — format · size · bytes ·
   file name` and images staged in this session show their source path on the
   card's bottom row. Finder-copied
-  image files paste straight into the attachment store as `[Image #N]`; in the
+  image files paste straight into the attachment store as `[Image #N]`, and every paste is fitted to the
+  profile's image limits before it is handed over: images over the dimension caps (per-side / total
+  pixels) are resampled proportionally, a format the profile does not accept is re-encoded into one it
+  does (transparency is kept whenever an accepted format carries it, otherwise the alpha is composited
+  onto white), and a multi-frame image that would have to be re-encoded is refused rather than losing its
+  frames. An adapted paste says what was stored — dimensions and format — in the paste notice, taken from
+  the attachment store's own report so it matches the preview card. Fitting needs the optional sharp
+  dependency and covers only the step BEFORE the attachment store; the store's own normalization is
+  outside this feature's scope. In the
   composer a staged `[Image #N]` is one unit — the caret steps over it, deletes
   remove it whole, and while the caret sits on it the token inverts and its
   preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also

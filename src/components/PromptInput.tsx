@@ -122,6 +122,11 @@ function sanitizeEditableText(text: string): string {
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
 
+/** Format label for one image media type, matching the image preview card's
+ *  title (`JPEG`, `PNG`, `WEBP`, `GIF`). */
+const mediaTypeLabel = (mediaType: string): string =>
+  mediaType.replace(/^image\//u, '').replace(/\+xml$/u, '').toUpperCase()
+
 /** One `[Image #N]` occurrence: [start, end) offsets into the draft. */
 interface ImageTokenSpan {
   readonly start: number
@@ -1668,6 +1673,34 @@ export function PromptInput({
     return queued
   }
 
+  /** Success notice for one staged image. An adapted paste says what the user
+   *  actually got (stored dimensions, stored format, filled alpha) — naming it
+   *  is the difference between a reported adaptation and a silently rewritten
+   *  image. */
+  const stagedImageNotice = (token: string, handle: StagedImageHandle): string => {
+    const adjustment = handle.adjustment
+    if (adjustment === undefined) return t('input-image-pasted', { token })
+    const details: string[] = []
+    if (adjustment.resized) {
+      details.push(t('input-image-detail-resized', {
+        width: adjustment.width,
+        height: adjustment.height,
+      }))
+    }
+    if (adjustment.mediaType !== adjustment.sourceMediaType) {
+      const from = mediaTypeLabel(adjustment.sourceMediaType)
+      const to = mediaTypeLabel(adjustment.mediaType)
+      details.push(adjustment.flattened
+        ? t('input-image-detail-converted-flattened', { from, to })
+        : t('input-image-detail-converted', { from, to }))
+    }
+    // An adjustment always describes a resize or a conversion; anything else
+    // keeps the plain notice rather than an empty parenthetical. ' · ' joins
+    // the clauses in both shipped languages.
+    if (details.length === 0) return t('input-image-pasted', { token })
+    return t('input-image-pasted-adjusted', { token, detail: details.join(' · ') })
+  }
+
   const discardStagedHandles = (handles: readonly StagedImageHandle[]): void => {
     for (const stageId of new Set(handles.map(handle => handle.stageId))) {
       channel.discardStagedImage(stageId)
@@ -1851,7 +1884,7 @@ export function PromptInput({
           // Bind and insert share this synchronous continuation: setInput's
           // sidecar pruning can never observe a bound-but-not-visible token.
           insertClipboardAtCaret(`${token} `)
-          channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+          channel.notify(stagedImageNotice(token, handle), { timeoutMs: 2500 })
         })
           .catch(() => {
             if (!draftImageLeaseIsCurrent(lease)) return
@@ -1911,7 +1944,7 @@ export function PromptInput({
                   const handle = await stageImagePath(content.path, lease)
                   const token = bindStagedImage(handle, lease)
                   insertClipboardAtCaret(`${token} `)
-                  channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+                  channel.notify(stagedImageNotice(token, handle), { timeoutMs: 2500 })
                 })
               } catch (error: unknown) {
                 if (!draftImageLeaseIsCurrent(lease)) return
@@ -1956,10 +1989,15 @@ export function PromptInput({
                     // All bindings and their visible labels enter together;
                     // typing while an earlier file saves cannot prune one.
                     insertClipboardAtCaret(`${rendered.join(' ')} `)
+                    // A batch cannot itemise every image in one line, but it must
+                    // still say that some of them were not stored as pasted.
+                    const adapted = staged.filter(handle => handle.adjustment !== undefined).length
                     channel.notify(
                       boundTokens.length === 1
-                        ? t('input-image-pasted', { token: boundTokens[0]! })
-                        : t('input-images-staged', { count: boundTokens.length }),
+                        ? stagedImageNotice(boundTokens[0]!, staged[0]!)
+                        : adapted > 0
+                          ? t('input-images-staged-adapted', { count: boundTokens.length, adapted })
+                          : t('input-images-staged', { count: boundTokens.length }),
                       { timeoutMs: 2500 },
                     )
                     return true

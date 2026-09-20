@@ -442,11 +442,31 @@ export interface TranscriptImage {
   read(signal?: AbortSignal): Promise<Uint8Array>
 }
 
+/** What an adapted paste ended up as, so the composer can report it instead of
+ * a re-encode happening silently. Present only when the ingress gate had to
+ * change the bytes. Dimensions and media type are the STORE's report for what
+ * it persisted (it normalizes further on its own), i.e. what the user gets. */
+export interface StagedImageAdjustment {
+  /** Media type the bytes were declared with (the pasted file's type). */
+  readonly sourceMediaType: ChannelImageMediaType
+  /** Media type the store reports for the stored bytes. */
+  readonly mediaType: ChannelImageMediaType
+  /** Stored pixel dimensions as the store reports them. */
+  readonly width: number
+  readonly height: number
+  /** The stored image is smaller than what the gate handed over. */
+  readonly resized: boolean
+  /** This gate composited an alpha channel onto an opaque background. */
+  readonly flattened: boolean
+}
+
 /** Opaque capability returned for one staged composer image. The visible
  * `[Image #N]` label is deliberately absent: PromptInput owns presentation
  * numbering while this id is the non-reusable attachment identity. */
 export interface StagedImageHandle {
   readonly stageId: string
+  /** How the ingress gate adapted the pasted bytes, when it had to. */
+  readonly adjustment?: StagedImageAdjustment
 }
 
 /** One visible composer token bound to its opaque staged-image capability. */
