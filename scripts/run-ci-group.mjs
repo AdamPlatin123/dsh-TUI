@@ -455,6 +455,7 @@ const GROUPS = {
 // 防再腐烂。
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
+    ["verify-context-warning", ['node', '--import', 'tsx/esm', 'scripts/verify-context-warning.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
