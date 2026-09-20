@@ -94,6 +94,19 @@ export function createModelActions(
         lastEffortFallbackNotice = { preferred: preferredEffort, applied: undefined }
         notify(t('effort-preference-unsupported', { preferred: preferredEffort }), { color: 'warning' })
       }
+      // Nothing is pinned, so the ROUTE's model default is what actually ships
+      // and the readout (status line, /effort status) must say so. Every switch
+      // tail clears it before this runs (session-resume.ts / model-switch.ts /
+      // session-live-adoption.ts / background-action.ts), but a resumed log's
+      // replayed `request/header` can leave an older tier behind — neither blank
+      // nor "last route's tier" is the truth. Only the readout moves: pinning
+      // the default into selection.current would put a tier the user never chose
+      // onto the wire, which is exactly what "never up" forbids.
+      const shipped = resolved.defaultEffort
+      if (state.reasoningEffort !== shipped) {
+        state.reasoningEffort = shipped
+        state.emit()
+      }
       return
     }
     // Dedupe gates ONLY the toast: bind resets selection.current on every

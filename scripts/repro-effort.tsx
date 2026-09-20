@@ -292,7 +292,7 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     return proposed.reasoningEffort
   }
 
-  return { state, selection, notices, bindOnce, requestTier }
+  return { state, selection, notices, defaultEffort: options.defaultEffort, bindOnce, requestTier }
 }
 
 // A — downgrade (the C1 shape): preferred `max` on a route that only offers
@@ -329,28 +329,63 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     defaultEffort: 'medium',
   })
   const tiers: (string | undefined)[] = []
+  const readouts: (string | undefined)[] = []
   for (let index = 0; index < 2; index += 1) {
     await rig.bindOnce(index === 0)
     tiers.push(await rig.requestTier())
+    readouts.push(rig.state.reasoningEffort)
   }
   check('rebind: 精确命中档在第二次 bind 的请求里仍在', tiers[0] === 'medium' && tiers[1] === 'medium', `tiers=${JSON.stringify(tiers)}`)
+  check('rebind: 精确命中时读数每次 bind 都是 medium', readouts.every(readout => readout === 'medium'), `readouts=${JSON.stringify(readouts)}`)
   check('rebind: 精确命中不提示', rig.notices.length === 0, `notices=${JSON.stringify(rig.notices)}`)
 }
 
-// C — no lower tier at all: the model default is kept (never pushed up), but
-// loudly, and exactly once across binds.
+// C — no lower tier at all: nothing is pinned, so the ROUTE's model default is
+// what actually ships and the readout (status line, `/effort status`) must say
+// so. Syncing the readout is not licence to put a tier on the wire: the request
+// stays unpinned, which is what keeps "nearest LOWER, never up" intact.
+//
+// The readout reaches this branch non-undefined from two real writers — the
+// constructor seed `state.reasoningEffort = preferredEffort` (model-actions.ts:47,
+// i.e. the first bind after boot) and a resumed log's replayed `request/header`
+// (session-resume.ts:130 → projection.ts:965-968, which runs after the switch
+// tail already cleared the field) — and undefined after any switch tail cleared
+// it (session-resume.ts:129, model-switch.ts:93, session-live-adoption.ts:82,
+// background-action.ts:106). All three have to end on the model default.
 {
   const rig = createRebindRig({
     preferred: 'low',
     efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
     defaultEffort: 'max',
   })
-  const tiers: (string | undefined)[] = []
-  for (let index = 0; index < 2; index += 1) {
-    await rig.bindOnce(index === 0)
-    tiers.push(await rig.requestTier())
-  }
-  check('rebind: 无更低档时请求保持模型默认（不升档）', tiers[0] === undefined && tiers[1] === undefined, `tiers=${JSON.stringify(tiers)}`)
+  // Bind 1: the seeded / replayed tier is on the readout while the default ships.
+  await rig.bindOnce(true)
+  const firstTier = await rig.requestTier()
+  check(
+    'rebind: 无更低档时读数纠正为实际生效档（残留 preferred）',
+    rig.state.reasoningEffort === rig.defaultEffort,
+    `readout=${String(rig.state.reasoningEffort)} default=${rig.defaultEffort}`,
+  )
+  check(
+    'rebind: 无更低档时不把档位伪造进请求',
+    firstTier === undefined && rig.selection.current?.reasoningEffort === undefined,
+    `tier=${String(firstTier)} selection=${JSON.stringify(rig.selection.current)}`,
+  )
+  // Bind 2: a switch tail cleared the readout first; the default still ships and
+  // the notice still must not repeat.
+  rig.state.reasoningEffort = undefined
+  await rig.bindOnce()
+  const secondTier = await rig.requestTier()
+  check(
+    'rebind: 无更低档时请求保持模型默认（不升档）',
+    firstTier === undefined && secondTier === undefined,
+    `tiers=${JSON.stringify([firstTier, secondTier])}`,
+  )
+  check(
+    'rebind: 被切换尾清空过的读数同样回到模型默认档',
+    rig.state.reasoningEffort === rig.defaultEffort,
+    `readout=${String(rig.state.reasoningEffort)} default=${rig.defaultEffort}`,
+  )
   check('rebind: 无更低档只提示一次', rig.notices.length === 1, `notices=${JSON.stringify(rig.notices)}`)
 }
 
