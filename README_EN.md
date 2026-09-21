@@ -238,6 +238,7 @@ CLI subcommands (`dsh-tui help` or `dst help` prints the full usage; the `dst` a
 |---|---|
 | `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
 | `dsh-tui doctor` | Pre-flight environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
+| `dsh-tui safe` | Safe mode: read-only diagnostics, inventory, repair guidance (`safe --rescue` also creates/verifies the clean rescue profile) |
 | `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
 | `dsh-tui help` | Show usage (`--help`/`-h` are equivalent) |
 
@@ -246,6 +247,68 @@ every other argument is still forwarded verbatim to `dsh --profile dsh-tui`.
 The repository-root `dsh-tui.cmd` is a launch wrapper that goes straight to
 `dsh --profile` and carries no subcommands — subcommands belong to the
 npm-installed `dsh-tui` command.
+
+### Safe mode (`dsh-tui safe`)
+
+When dsh exits unexpectedly, safe mode provides read-only environment
+diagnostics, a profile plugin inventory, and repair guidance.
+
+- **Two entries**: run `dsh-tui safe` manually; or accept the prompt offered
+  after dsh exits with a non-zero code. The prompt only appears in interactive
+  terminals — scripts and pipes just get a single appended hint line, and the
+  exit code is preserved. It covers only a non-zero exit of the final dsh
+  child process, not a startup hang (a spawn failure is treated as exit
+  code 1).
+- **Read-only boundary**: the safe-mode control plane is read-only (diagnostics,
+  inventory, and guidance never change state); the two exceptions are
+  "retry normal startup" and "create/reuse blank rescue profile" — the latter is
+  an explicit rescue action whose own install writes only under
+  `$DSH_HOME/profiles/dsh-tui-safe/`. Two more things, stated plainly (neither is
+  a write introduced by safe mode): (a) **every** dsh launch maintains the shared
+  `$DSH_HOME/profiles/node_modules` module-fallback links (upstream dsh's
+  `healProfilesModuleFallback`, no opt-out), and a rescue launch is no exception;
+  (b) the install is performed by pnpm, so pnpm's own global store
+  (`pnpm store path`, outside `$DSH_HOME` by default) is written to or reused.
+- **The rescue profile's cleanliness must be proven first — if it cannot be, the
+  rescue refuses to start**: each of these is checked before entering the rescue,
+  and any one of them blocks it with the reason and the fix printed (the checks
+  themselves are read-only): (1) the candidate directory exists but is not a
+  recognizable profile (never install into an unknown directory); (2) the
+  existing profile's root manifest declares third-party plugins (starting it
+  would not be clean); (3) `$DSH_HOME/cordis.patch.yml` (the home layer) exists —
+  upstream dsh applies it over **every** profile (after the bundle and profile
+  layers); (4) the profile's own `dsh-tui-safe/cordis.patch.yml` (the profile
+  layer) carries entries — dsh composes that one into the profile as well (after
+  the bundle layers). The launcher neither parses YAML nor sees the composed
+  result, so both layers are fail-closed; the "comments + `[]`" file dsh
+  generates by default does not count as entries and does not block reuse. Once
+  the checks pass it creates `dsh-tui-safe` (base + TUI only, pinned to the
+  current version, via the official `dsh plugin add`) and starts it with an
+  explicitly constructed environment (host session-control variables are
+  dropped) — the "use dsh to fix dsh" lane for a broken main profile. When the
+  rescue session ends you are back in the menu. A clean existing profile is
+  reused as-is, never re-installed over; a half-installed or "install reported
+  success but the package is unreadable" rescue profile is removed and rebuilt
+  — **only after checking the top-level entries by name *and* shape**
+  (`package.json`/`pnpm-lock.yaml`/`pnpm-workspace.yaml`/`cordis.patch.yml`/
+  `cordis.yml` must be files, `node_modules`/`.dsh-module-fallback` must be
+  directories; the latter is created by dsh on every profile launch). Any other
+  name, or a wrong shape, makes it refuse and list the entries instead of
+  deleting silently. Note that the **contents** of those generated directories
+  are removed along with them. Manual equivalents are listed in the guidance
+  (option 4).
+- **Non-interactive use**: `dsh-tui safe --rescue` runs the same gate plus
+  create/reuse under scripts and pipes and reports only the verdict (exit 0 when
+  ready, 1 when refused); in an interactive terminal it is equivalent to menu
+  option 5.
+- **Outdated global launcher**: if the profile copy is unreadable or too old,
+  upgrade the launcher first:
+  `npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<version>`.
+- **Example repair commands** (safe mode only lists them — you run them
+  yourself): `dsh plugin --profile dsh-tui remove <third-party plugin>` to
+  remove suspects one by one,
+  `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<version>`
+  to reinstall/align, and `dsh-tui doctor` for environment diagnostics.
 
 ### Herdr
 
