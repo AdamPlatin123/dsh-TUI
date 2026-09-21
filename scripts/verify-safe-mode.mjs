@@ -92,6 +92,10 @@ const run = (args, env = {}) =>
 // 目录」才能保证沙箱里看不到宿主真的 dsh，而 sh/批处理里那些 coreutils
 // （cat/mkdir/cp）恰恰不在里面。第一版把逻辑写在 sh/批处理里就踩了这个坑：
 // Windows 绿、Linux/macOS 红。
+//
+// 替身必须**真的造出半成品**（半装与 no-op 两种模式都写盘），否则「清理」类
+// 断言会因为 `!existsSync(...)` 恒真而空转（变异测试实证：删掉实现的 rmSync，
+// 套件照样全绿——那是假通过）。
 const STUB_MODULE = `import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -102,6 +106,9 @@ const bump = name => {
   const next = Number(read(name) || 0) + 1
   writeFileSync(join(state, name), String(next))
   return next
+}
+const place = (from, to) => {
+  if (existsSync(from)) copyFileSync(from, to)
 }
 bump('calls')
 appendFileSync(join(state, 'argv'), argv.join(' ') + '\\n')
@@ -129,11 +136,18 @@ if (command === 'plugin') {
     process.exit(1)
   }
   if (process.env.DSH_STUB_PLUGIN_EXIT) process.exit(Number(process.env.DSH_STUB_PLUGIN_EXIT))
+  const root = join(process.env.DSH_HOME, 'profiles', 'dsh-tui-safe')
+  // pnpm 的「已是最新」：profile 根 manifest 已经在了就地不再装（issue #209 /
+  // bootstrapUnreadable 记录的正是这个失败模式）。没有这条，半装清理的断言
+  // 就杀不掉「删掉实现」的变异。
+  if (existsSync(join(root, 'package.json'))) process.exit(0)
+  mkdirSync(join(root, 'node_modules'), { recursive: true })
+  place(join(state, 'manifest.json'), join(root, 'package.json'))
+  place(join(state, 'cordis.patch.yml'), join(root, 'cordis.patch.yml'))
+  place(join(state, 'pnpm-workspace.yaml'), join(root, 'pnpm-workspace.yaml'))
   if (process.env.DSH_STUB_NOOP) process.exit(0)
-  const pkgDir = join(process.env.DSH_HOME, 'profiles', 'dsh-tui-safe', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  const pkgDir = join(root, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
   mkdirSync(pkgDir, { recursive: true })
-  const manifest = join(state, 'manifest.json')
-  if (existsSync(manifest)) copyFileSync(manifest, join(pkgDir, '..', '..', '..', 'package.json'))
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: 'stub' }))
   process.exit(0)
 }
@@ -146,6 +160,18 @@ const shellFor = modulePath =>
     ? ['@echo off', `"${process.execPath}" "${modulePath}" %*`, 'exit /b %ERRORLEVEL%', ''].join('\r\n')
     : ['#!/bin/sh', `exec "${process.execPath}" "${modulePath}" "$@"`, ''].join('\n')
 
+// 真实 `dsh plugin add` 在全新 profile 里生成的两个配置文件（本机实测原文，
+// 2026-09-21 抓取）——替身按同样内容落盘，救援的复用路径才是真实形态的回归
+// 夹具：救援门禁必须放过 dsh 自己的默认文件。
+const REAL_PATCH_LAYER = [
+  '# Your patch layer for this dsh profile, applied after every bundle layer:',
+  '# a top-level YAML array of loader patch entries (id-targeted config',
+  '# overrides, disables, and insert lists; `!!js` expressions allowed).',
+  '[]',
+  '',
+].join('\n')
+const REAL_WORKSPACE = ['packages:', '  - .', '', 'nodeLinker: hoisted', 'autoInstallPeers: false', ''].join('\n')
+
 let stubSeq = 0
 const makeStub = () => {
   const dir = join(tmp, `stub-${stubSeq}`)
@@ -157,8 +183,10 @@ const makeStub = () => {
   writeFileSync(module, STUB_MODULE)
   const file = join(dir, isWin ? 'dsh.cmd' : 'dsh')
   writeFileSync(file, shellFor(module))
-  // stub「安装」时复制到 profile 根 manifest 的那份内容（真实 dsh 也写它）。
+  // stub「安装」时落到 profile 里的那几份内容（真实 dsh 也这么写）。
   writeFileSync(join(state, 'manifest.json'), JSON.stringify(cleanManifest))
+  writeFileSync(join(state, 'cordis.patch.yml'), REAL_PATCH_LAYER)
+  writeFileSync(join(state, 'pnpm-workspace.yaml'), REAL_WORKSPACE)
   if (!isWin) chmodSync(file, 0o755)
   return { dir, state }
 }
@@ -330,6 +358,19 @@ const cleanManifest = {
   const r = run(['safe'], { DSH_HOME: join(tmp, 'safe-home') })
   check('safe: 非 TTY 不进入交互菜单（无 safe> 提示符）', r.status === 0 && !r.stdout.includes('safe>'))
 }
+{
+  // 后位 `safe` 不截获：复刻 verify-cli-subcommands.mjs 的同名断言，让它在
+  // Windows 上也有真实执行（那个脚本自身仍在 win32 上整包 skip，见文件头
+  // 「未覆盖」说明）。走到启动路径 → 无 dsh 沙箱里止于预检。
+  const home = join(tmp, 'pos-safe-home')
+  mkdirSync(home, { recursive: true })
+  const r = run(['/no/such/path', 'safe'], { DSH_HOME: home })
+  check(
+    'safe: 后位 safe 不截获（走启动路径，止于 dsh 预检）',
+    r.status !== 0 && !r.stdout.includes('安全模式') && r.stderr.includes('dsh'),
+    `status=${r.status}`,
+  )
+}
 
 // --- 救援动作（`safe --rescue`：门禁 + 创建 + 复用 + 清理）---------------------
 {
@@ -393,17 +434,33 @@ const cleanManifest = {
 }
 {
   // 6) 半装（根 manifest 干净但插件包不可读）→ 清掉重建，而不是让 pnpm
-  //    的「已是最新」把选项 5 永久锁死。
+  //    的「已是最新」把选项 5 永久锁死。夹具按真实半装形态铺：根 manifest +
+  //    dsh 生成的两个配置文件 + node_modules 目录，缺插件包。
   const stub = makeStub()
   const home = join(tmp, 'rescue-half')
   writeRescueManifest(home, cleanManifest)
+  writeFileSync(join(rescueDirOf(home), 'cordis.patch.yml'), REAL_PATCH_LAYER)
+  writeFileSync(join(rescueDirOf(home), 'pnpm-workspace.yaml'), REAL_WORKSPACE)
+  mkdirSync(join(rescueDirOf(home), 'node_modules'), { recursive: true })
+  const halfBefore = snapshot(rescueDirOf(home))
+  check('救援: 半装夹具确实落了盘（断言非空转）', Object.keys(halfBefore).length >= 4, Object.keys(halfBefore).join(','))
   const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: 半装 profile 被清理后重建成功', r.status === 0 && r.stdout.includes('已清理半装的 profile') && r.stdout.includes('救援 profile 已创建'), `status=${r.status}`)
   check('救援: 重建后安装判定文件可读', existsSync(rescuePkgOf(home)))
+  // 重建出来的必须是真实形态（含 dsh 默认补丁层与 pnpm-workspace），
+  // 否则下一次复用会被门禁误拒。
+  check(
+    '救援: 重建后是真实 dsh 形态（默认补丁层 + pnpm-workspace）',
+    readFileSync(join(rescueDirOf(home), 'cordis.patch.yml'), 'utf8') === REAL_PATCH_LAYER &&
+      readFileSync(join(rescueDirOf(home), 'pnpm-workspace.yaml'), 'utf8') === REAL_WORKSPACE,
+  )
+  const again = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  check('救援: 重建后再次运行按现状复用（门禁不误拒默认补丁层）', again.status === 0 && again.stdout.includes('救援 profile 已存在'), `status=${again.status}`)
 }
 {
   // 7) no-op 假成功（add 报成功但包仍不可读）→ 清理半成品并给出路径，
-  //    下一次尝试才能真的从零开始。
+  //    下一次尝试才能真的从零开始。替身在 no-op 模式下**真的建出半成品**，
+  //    否则「已清理」的断言会因为 !existsSync 恒真而空转（变异实证过）。
   const stub = makeStub()
   const home = join(tmp, 'rescue-noop')
   mkdirSync(home, { recursive: true })
@@ -413,6 +470,70 @@ const cleanManifest = {
   // 清理之后紧接着再跑一次必须能成功（旧版这里会一直失败）。
   const retry = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: no-op 清理后重试即可成功', retry.status === 0 && retry.stdout.includes('救援 profile 已创建'), `status=${retry.status}`)
+}
+{
+  // 7b) 变体：no-op 时目录里除了生成物还有别的东西 → 不静默删，改成拒绝。
+  //     （替身的 no-op 半成品 + 一个用户文件）
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-noop-stray')
+  mkdirSync(join(rescueDirOf(home), 'node_modules'), { recursive: true })
+  writeFileSync(join(rescueDirOf(home), 'package.json'), JSON.stringify(cleanManifest))
+  writeFileSync(join(rescueDirOf(home), 'my-notes.txt'), 'keep me\n')
+  const before = snapshot(rescueDirOf(home))
+  const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  const after = snapshot(rescueDirOf(home))
+  check('救援: 目录里有非生成物时拒绝且不删（失败信息可读）', r.status === 1 && r.stderr.includes('my-notes.txt'), `status=${r.status}`)
+  check('救援: 拒绝时目录原样保留', sameSnapshot(before, after), diffOf(before, after).join(','))
+}
+{
+  // 7c) profile 层补丁层里有条目（dsh 会把它组合进 profile）→ 与 home 层
+  //     同款处置：拒绝，一个字节都不写。夹具**真的创建该文件**。
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-patched')
+  const dir = rescueDirOf(home)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(cleanManifest))
+  writeFileSync(join(dir, 'cordis.patch.yml'), [...REAL_PATCH_LAYER.split('\n').slice(0, 3), '- id: cool-plugin', '  disabled: true', ''].join('\n'))
+  mkdirSync(join(dir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui'), { recursive: true })
+  writeFileSync(rescuePkgOf(home), JSON.stringify({ name: PACKAGE, version: ownVersion }))
+  const before = snapshot(home)
+  const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  const after = snapshot(home)
+  check('救援: profile 层补丁有条目时拒绝（退出 1）', r.status === 1 && r.stderr.includes('补丁层里有条目'), `status=${r.status}`)
+  check('救援: 拒绝原因指向 profile 补丁文件', r.stderr.includes(join(dir, 'cordis.patch.yml')))
+  check('救援: profile 补丁拒绝时不写盘、不调用安装', sameSnapshot(before, after) && pluginCalls(stub.state).length === 0, diffOf(before, after).join(','))
+}
+{
+  // 7d) 反向回归：真实 dsh 生成的 profile（含默认补丁层与 pnpm-workspace.yaml）
+  //     必须原样复用——门禁不能把 dsh 自己的默认文件当成脏。
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-real')
+  const dir = rescueDirOf(home)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(cleanManifest))
+  writeFileSync(join(dir, 'cordis.patch.yml'), REAL_PATCH_LAYER)
+  writeFileSync(join(dir, 'pnpm-workspace.yaml'), REAL_WORKSPACE)
+  mkdirSync(join(dir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui'), { recursive: true })
+  writeFileSync(rescuePkgOf(home), JSON.stringify({ name: PACKAGE, version: ownVersion }))
+  const before = snapshot(home)
+  const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  const after = snapshot(home)
+  check('救援: 真实 dsh 形态（默认补丁层/workspace）按现状复用', r.status === 0 && r.stdout.includes('救援 profile 已存在'), `status=${r.status}`)
+  check('救援: 复用真实形态时零写盘零 add', sameSnapshot(before, after) && pluginCalls(stub.state).length === 0, diffOf(before, after).join(','))
+}
+{
+  // 7e) 注释里出现 `#` 的正常 YAML 也算有内容（fail-closed），但不该误伤
+  //     注释 + [] 的默认形态（已由 7d 覆盖）。
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-patched-list')
+  const dir = rescueDirOf(home)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(cleanManifest))
+  writeFileSync(join(dir, 'cordis.patch.yml'), '[\n]\n')
+  mkdirSync(join(dir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui'), { recursive: true })
+  writeFileSync(rescuePkgOf(home), JSON.stringify({ name: PACKAGE, version: ownVersion }))
+  const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  check('救援: 多行空数组（[] 折行）仍算无补丁层', r.status === 0 && r.stdout.includes('救援 profile 已存在'), `status=${r.status}`)
 }
 {
   // 8) pnpm 拒绝写入 workspace 根 → 必须带 -w 重试，且重试真的带上了 -w。
