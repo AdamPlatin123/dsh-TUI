@@ -49,7 +49,7 @@ jobs:
             })
             const DOCS_ONLY = [
               /^docs\//,
-              /^README(_EN)?\.md$/,
+              /^README(_ZH)?\.md$/,
               /^ADAPTER\.md$/,
               /^CHANGELOG\.md$/,
               /^\.github\/ISSUE_TEMPLATE\//,
