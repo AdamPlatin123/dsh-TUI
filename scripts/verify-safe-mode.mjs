@@ -224,6 +224,16 @@ const snapshot = dir => {
 }
 const sameSnapshot = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const diffOf = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => a[k] !== b[k])
+// 断言里的读取一律走它：文件缺失/读不到要变成 FAIL，而不是把套件从「列 FAIL
+// 继续跑」变成「ENOENT 栈中途中止」——复测在 M6 变异下实证过：第 3 条断言抛栈
+// 之后，后面约 34 条断言根本没跑。
+const readTextOr = path => {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
 
 // 取 stdout 里某个区段（排除另一区段的同名串）——分类断言必须落在自己的区段。
 const section = (text, start, end) => {
@@ -435,27 +445,50 @@ const cleanManifest = {
 {
   // 6) 半装（根 manifest 干净但插件包不可读）→ 清掉重建，而不是让 pnpm
   //    的「已是最新」把选项 5 永久锁死。夹具按真实半装形态铺：根 manifest +
-  //    dsh 生成的两个配置文件 + node_modules 目录，缺插件包。
+  //    dsh 生成的两个配置文件 + node_modules 目录 + dsh 每次启动都会建的
+  //    .dsh-module-fallback 目录，缺插件包。
   const stub = makeStub()
   const home = join(tmp, 'rescue-half')
   writeRescueManifest(home, cleanManifest)
   writeFileSync(join(rescueDirOf(home), 'cordis.patch.yml'), REAL_PATCH_LAYER)
   writeFileSync(join(rescueDirOf(home), 'pnpm-workspace.yaml'), REAL_WORKSPACE)
+  writeFileSync(join(rescueDirOf(home), 'cordis.yml'), '# dsh profile root\n[]\n')
   mkdirSync(join(rescueDirOf(home), 'node_modules'), { recursive: true })
+  mkdirSync(join(rescueDirOf(home), '.dsh-module-fallback', 'node_modules'), { recursive: true })
   const halfBefore = snapshot(rescueDirOf(home))
-  check('救援: 半装夹具确实落了盘（断言非空转）', Object.keys(halfBefore).length >= 4, Object.keys(halfBefore).join(','))
+  check('救援: 半装夹具确实落了盘（断言非空转）', Object.keys(halfBefore).length >= 6, Object.keys(halfBefore).join(','))
   const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
-  check('救援: 半装 profile 被清理后重建成功', r.status === 0 && r.stdout.includes('已清理半装的 profile') && r.stdout.includes('救援 profile 已创建'), `status=${r.status}`)
+  // 这一条是功能性的：`.dsh-module-fallback` 是 dsh 每次 profile 启动都会建的
+  // 目录（「装坏了 → 启动过一次 → 再来救援」正长这样）。白名单漏掉它，自愈
+  // 路径就被堵死，而且用户按提示移走后下次启动又会被重新生成。
+  check('救援: 半装且含 .dsh-module-fallback 时走清理重建（不误拒）', r.status === 0 && r.stdout.includes('已清理半装的 profile') && r.stdout.includes('救援 profile 已创建'), `status=${r.status}`)
   check('救援: 重建后安装判定文件可读', existsSync(rescuePkgOf(home)))
   // 重建出来的必须是真实形态（含 dsh 默认补丁层与 pnpm-workspace），
   // 否则下一次复用会被门禁误拒。
   check(
     '救援: 重建后是真实 dsh 形态（默认补丁层 + pnpm-workspace）',
-    readFileSync(join(rescueDirOf(home), 'cordis.patch.yml'), 'utf8') === REAL_PATCH_LAYER &&
-      readFileSync(join(rescueDirOf(home), 'pnpm-workspace.yaml'), 'utf8') === REAL_WORKSPACE,
+    readTextOr(join(rescueDirOf(home), 'cordis.patch.yml')) === REAL_PATCH_LAYER &&
+      readTextOr(join(rescueDirOf(home), 'pnpm-workspace.yaml')) === REAL_WORKSPACE,
   )
   const again = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: 重建后再次运行按现状复用（门禁不误拒默认补丁层）', again.status === 0 && again.stdout.includes('救援 profile 已存在'), `status=${again.status}`)
+}
+{
+  // 6b) 形态不符也要拒绝：把生成物名字做成**目录**再往里放东西，只比名字的
+  //     白名单会把它当生成物一起删掉（复测 S6）。这里 cordis.yml 是目录。
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-shape')
+  const dir = rescueDirOf(home)
+  writeRescueManifest(home, cleanManifest)
+  writeFileSync(join(dir, 'cordis.patch.yml'), REAL_PATCH_LAYER)
+  mkdirSync(join(dir, 'cordis.yml'), { recursive: true })
+  writeFileSync(join(dir, 'cordis.yml', 'mine.txt'), 'keep me\n')
+  mkdirSync(join(dir, 'node_modules'), { recursive: true })
+  const before = snapshot(dir)
+  const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  const after = snapshot(dir)
+  check('救援: 生成物名字形态不符（cordis.yml 是目录）时拒绝且不删', r.status === 1 && r.stderr.includes('cordis.yml'), `status=${r.status}`)
+  check('救援: 形态不符拒绝时目录原样保留', sameSnapshot(before, after), diffOf(before, after).join(','))
 }
 {
   // 7) no-op 假成功（add 报成功但包仍不可读）→ 清理半成品并给出路径，

@@ -238,10 +238,14 @@ diagnostics, a profile plugin inventory, and repair guidance.
   rescue session ends you are back in the menu. A clean existing profile is
   reused as-is, never re-installed over; a half-installed or "install reported
   success but the package is unreadable" rescue profile is removed and rebuilt
-  — **only after checking the directory holds nothing but dsh/pnpm-generated
-  files**; your own files make it refuse and list their names instead of
-  deleting silently — so the entry point cannot deadlock. Manual equivalents are
-  listed in the guidance (option 4).
+  — **only after checking the top-level entries by name *and* shape**
+  (`package.json`/`pnpm-lock.yaml`/`pnpm-workspace.yaml`/`cordis.patch.yml`/
+  `cordis.yml` must be files, `node_modules`/`.dsh-module-fallback` must be
+  directories; the latter is created by dsh on every profile launch). Any other
+  name, or a wrong shape, makes it refuse and list the entries instead of
+  deleting silently. Note that the **contents** of those generated directories
+  are removed along with them. Manual equivalents are listed in the guidance
+  (option 4).
 - **Non-interactive use**: `dsh-tui safe --rescue` runs the same gate plus
   create/reuse under scripts and pipes and reports only the verdict (exit 0 when
   ready, 1 when refused); in an interactive terminal it is equivalent to menu

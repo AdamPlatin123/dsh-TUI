@@ -484,15 +484,22 @@ const rescuePatchFile = join(rescueProfileDir, 'cordis.patch.yml')
 // 启动器既不解析 YAML 也拿不到组合结果 → 该文件存在时「干净救援」不可证明。
 const homePatchFile = join(dshHome, 'cordis.patch.yml')
 // 救援目录里允许存在的条目：全是 dsh / pnpm 为这个 profile 生成的东西。
-// 清理（半装、no-op 假成功）只在没有第 6 种条目时进行——不静默删用户放进去的
+// 清理（半装、no-op 假成功）只在没有别的条目时进行——不静默删用户放进去的
 // 文件：发现未知条目就拒绝，把名字与处置办法交给用户。
-const GENERATED_PROFILE_ENTRIES = new Set([
+// 分成目录/文件两组是因为**形态也要校验**：只比顶层名字的话，「把 cordis.yml
+// 做成目录再往里放东西」会被当成生成物一起删掉（复测 S6 实测）。
+// `.dsh-module-fallback` 不是猜的：dsh 在**每次 profile 启动**时都会建
+// `<profile>/.dsh-module-fallback/node_modules`（dsh-app-boot
+// `healProfileModuleFallback` → mkdirSync(ownedModulesDir)），而「装坏了 →
+// 启动过一次 → 再来救援」正是这条路径要处理的场景；不认它就会把自愈路径堵死，
+// 用户按提示移走后下次启动又会被重新生成。
+const GENERATED_DIR_ENTRIES = new Set(['node_modules', '.dsh-module-fallback'])
+const GENERATED_FILE_ENTRIES = new Set([
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
   'cordis.patch.yml',
   'cordis.yml',
-  'node_modules',
 ])
 
 // ─── 子命令：version / help ──────────────────────────────────────────────────
@@ -903,10 +910,24 @@ const trivialPatchLayer = path => {
     return false
   }
 }
-// 救援目录里除「dsh/pnpm 生成物」之外的条目；读不到目录时按未知处理（拒绝）。
+// 救援目录里除「dsh/pnpm 生成物」之外的条目：名字不在白名单、或形态不符
+// （该是目录的成了文件、该是文件的成了目录或链接）都算未知条目；读不到目录时
+// 同样按未知处理。只查顶层——不递归枚举 `node_modules` 里的内容（那是过度
+// 设计，而 dsh 自己也在里面放链接）；这些目录**内部**的内容会随目录一起删掉，
+// README 已按这个口径写明。
 const rescueDirStrays = () => {
   try {
-    return readdirSync(rescueProfileDir).filter(name => !GENERATED_PROFILE_ENTRIES.has(name))
+    const strays = []
+    for (const entry of readdirSync(rescueProfileDir, { withFileTypes: true })) {
+      if (GENERATED_DIR_ENTRIES.has(entry.name)) {
+        if (!entry.isDirectory()) strays.push(`${entry.name} (expected a directory)`)
+      } else if (GENERATED_FILE_ENTRIES.has(entry.name)) {
+        if (!entry.isFile()) strays.push(`${entry.name} (expected a file)`)
+      } else {
+        strays.push(entry.name)
+      }
+    }
+    return strays
   } catch {
     return ['<unreadable>']
   }
