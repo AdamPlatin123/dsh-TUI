@@ -64,8 +64,17 @@ const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
 // 救援 profile（最小可用）：同 home 下的空白 profile（仅 base+TUI，无第三方
 // 插件），是主 profile 装炸时的干净启动通道——创建走官方 dsh plugin add
-// （钉当前版本，同 bootstrap 语义），写操作只发生在这个新目录。
+// （钉当前版本，同 bootstrap 语义）。
+// 「干净」在这里是启动器必须先证明的断言，不是宣传语：profile 维度由
+// rescueProfileState() 校验根 manifest，home 维度由 homePatchFile 门禁
+// 把关（见 createRescueProfile）。注意：即便救援自身的安装只落在
+// profileDir 这个新目录里，任何一次 dsh 启动都会维护**共享**的
+// `$DSH_HOME/profiles/node_modules` 模块回退链接（上游 dsh 的
+// healProfilesModuleFallback，无开关），救援启动也不例外。
 const RESCUE_PROFILE = 'dsh-tui-safe'
+// 安装钉版本：ownVersion 缺失（bin 被单独拿走、package.json 不可读/改名）
+// 时拼出 `@undefined` 只会让 add 失败得更晚、更难懂——退回 @latest。
+const installVersion = ownVersion ?? 'latest'
 
 // --- 内联小工具（见文件头：零 lib 依赖是迁移契约的一部分）---------------------
 // 与 lib/types/utils/shellQuote.js 同语义的最小实现：cmd.exe 以空格拼接参数
@@ -135,16 +144,16 @@ const MSG = {
     zh: '[dsh-tui] 首次安装需要 pnpm（dsh plugin 会把安装转发给它）：\n  npm install -g pnpm   （或启用 corepack：corepack enable pnpm）',
   },
   bootstrapStart: {
-    en: `[dsh-tui] First run — initializing the ${PROFILE} profile (${PACKAGE}@${ownVersion})…`,
-    zh: `[dsh-tui] 首次运行，正在初始化 ${PROFILE} profile（${PACKAGE}@${ownVersion}）…`,
+    en: `[dsh-tui] First run — initializing the ${PROFILE} profile (${PACKAGE}@${installVersion})…`,
+    zh: `[dsh-tui] 首次运行，正在初始化 ${PROFILE} profile（${PACKAGE}@${installVersion}）…`,
   },
   bootstrapRetryW: {
     en: '[dsh-tui] pnpm refused to add to the workspace root (ERR_PNPM_ADDING_TO_ROOT) — retrying with -w…',
     zh: '[dsh-tui] pnpm 拒绝写入 workspace 根（ERR_PNPM_ADDING_TO_ROOT）——带 -w 重试…',
   },
   installFailed: {
-    en: `[dsh-tui] Plugin install failed. Retry manually later:\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
-    zh: `[dsh-tui] 插件安装失败。可稍后手工重试：\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
+    en: `[dsh-tui] Plugin install failed. Retry manually later:\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${installVersion}`,
+    zh: `[dsh-tui] 插件安装失败。可稍后手工重试：\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${installVersion}`,
   },
   bootstrapUnreadable: {
     en: dir =>
@@ -218,6 +227,51 @@ const MSG = {
     en: detail => `[dsh-tui] Rescue profile creation failed (${detail}). See the diagnostics above and the guidance (option 4).`,
     zh: detail => `[dsh-tui] 救援 profile 创建失败（${detail}）。请看上方诊断与指引（选项 4）。`,
   },
+  // 干净性门禁的三条拒绝文案：救援的前置是「可证明的干净」，证不出就不启动
+  // ——把路径与处置办法交给用户（安全模式只读，不代劳改文件）。
+  safeRescueHomePatch: {
+    en: path =>
+      `[dsh-tui] Rescue refused: the home-level patch layer exists:\n` +
+      `  ${path}\n` +
+      `  dsh applies that file over EVERY profile, so a broken layer here breaks the\n` +
+      `  rescue too — "clean" cannot be proven, and this launcher neither parses YAML\n` +
+      `  nor sees the composed result. Move or fix the file yourself (safe mode is\n` +
+      `  read-only), then retry.`,
+    zh: path =>
+      `[dsh-tui] 救援被拒绝：home 层补丁文件存在：\n` +
+      `  ${path}\n` +
+      `  dsh 把它叠加在每个 profile 之上，home 层坏掉时救援一起坏——「干净」\n` +
+      `  无法证明（启动器既不解析 YAML 也拿不到组合结果）。请先自行移走或修好\n` +
+      `  该文件（安全模式只读），再重试。`,
+  },
+  safeRescueUnrecognized: {
+    en: path =>
+      `[dsh-tui] Rescue refused: ${path} exists but is not a recognizable profile\n` +
+      `  (no valid root package.json), so it may belong to someone else. Refusing to\n` +
+      `  install into an unknown directory. Move or remove it yourself:\n` +
+      `  rm -rf ${path}`,
+    zh: path =>
+      `[dsh-tui] 救援被拒绝：${path} 已存在，但不是可识别的 profile（根\n` +
+      `  package.json 缺失或非法），可能是别的用途的目录。拒绝向未知目录安装。\n` +
+      `  请自行移走或删除后重试：\n` +
+      `  rm -rf ${path}`,
+  },
+  safeRescueUnclean: {
+    en: (path, extras) =>
+      `[dsh-tui] Rescue refused: the existing ${RESCUE_PROFILE} profile declares third-party\n` +
+      `  plugins (${extras}), so starting it would not be clean:\n  ${path}\n` +
+      `  Remove them yourself, or delete the profile and retry:\n` +
+      `  rm -rf ${path}`,
+    zh: (path, extras) =>
+      `[dsh-tui] 救援被拒绝：既有的 ${RESCUE_PROFILE} profile 声明了第三方插件\n` +
+      `  （${extras}），启动它就不是干净环境：\n  ${path}\n` +
+      `  请自行卸载它们，或删除该 profile 后重试：\n` +
+      `  rm -rf ${path}`,
+  },
+  safeRescueCleanup: {
+    en: path => `[dsh-tui] removed the half-installed profile so the next attempt starts clean:\n  ${path}`,
+    zh: path => `[dsh-tui] 已清理半装的 profile，下次尝试将从零开始：\n  ${path}`,
+  },
   safeMenuLabels: {
     en: {
       retry: 'Retry normal startup',
@@ -266,6 +320,9 @@ const MSG = {
       diagnostics: '  # Environment diagnostics:',
       globalUpgrade: '  # Global upgrade when the launcher is too old:',
       rescueProfile: '  # Rescue profile (blank, no third-party plugins; also menu option 5):',
+      homePatch: path =>
+        `  # Note: the home-level patch ${path}\n` +
+        `  #   is applied over every profile, the rescue one included — check it first`,
     },
     zh: {
       missingReason: 'package.json 缺失或损坏',
@@ -278,11 +335,10 @@ const MSG = {
       diagnostics: '  # 环境诊断:',
       globalUpgrade: '  # 启动器过旧时的全局升级:',
       rescueProfile: '  # 救援 profile（空白，无第三方插件；也可用菜单选项 5 一键创建并启动）:',
+      homePatch: path =>
+        `  # 注意：home 层补丁 ${path}\n` +
+        `  #   会叠加到每个 profile（含救援）之上；救援起不来时先查它`,
     },
-  },
-  legacyEnv: {
-    en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
-    zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
   },
   notInstalled: {
     en: '(not installed)',
@@ -331,6 +387,7 @@ const MSG = {
       `  update                 Update the ${PROFILE} profile to the latest release\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
       `  safe                   Safe mode: read-only diagnostics, inventory, repair guidance\n` +
+      `  safe --rescue          Create/verify the clean rescue profile (starts it in a terminal)\n` +
       `  version                Show launcher and profile versions\n` +
       `  help                   Show this help\n\n` +
       `Options:\n` +
@@ -344,6 +401,7 @@ const MSG = {
       `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
       `  safe                   安全模式：只读诊断、插件清单与修复指引\n` +
+      `  safe --rescue          创建/校验干净的救援 profile（有终端时随即启动它）\n` +
       `  version                显示启动器与 profile 版本\n` +
       `  help                   显示本帮助\n\n` +
       `选项：\n` +
@@ -373,6 +431,13 @@ const profilePkgDir = join(profileDir, 'node_modules', '@deepseek-harness-tui', 
 const profileBin = join(profilePkgDir, 'bin', 'dsh-tui.js')
 const installedPkgPath = join(profilePkgDir, 'package.json')
 const runningInsideProfile = sameDir(ownDir, profilePkgDir)
+const rescueProfileDir = join(dshHome, 'profiles', RESCUE_PROFILE)
+const rescueInstalledPkg = join(rescueProfileDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json')
+// 上游 dsh 的 home 层：homePatches 排在 bundle 层与 profile 层**之后**，叠加到
+// **每个** profile 上（dsh profile-boot → composeProfile）；且「存在但解析不了
+// 或不是数组」的补丁文件按设计 fail loud（dsh-app-boot → loadOptionalPatches）。
+// 启动器既不解析 YAML 也拿不到组合结果 → 该文件存在时「干净救援」不可证明。
+const homePatchFile = join(dshHome, 'cordis.patch.yml')
 
 // ─── 子命令：version / help ──────────────────────────────────────────────────
 // 只认第一个参数，且在角色分支之前应答：两种角色都不经过委托与自举——
@@ -480,8 +545,9 @@ const runDoctorChecks = () => {
 // 保护包：组合层模板与 TUI 本体，不进入卸载候选。两维度分类是 PR② 卸载
 // 功能将复用的唯一分类规则，不得合并简化（spec §6.1）。
 const PROTECTED_PLUGINS = new Set(['@deepseek-ai/dsh-base', PACKAGE])
-const readProfileInventory = () => {
-  const pkg = readJson(join(profileDir, 'package.json'))
+// dir 参数供救援 profile 复用同一套解析规则（两处 manifest 契约不许分叉）。
+const readProfileInventory = (dir = profileDir) => {
+  const pkg = readJson(join(dir, 'package.json'))
   if (pkg === undefined || typeof pkg !== 'object') return { error: 'missing' }
   const bundles = Array.isArray(pkg?.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles.filter(x => typeof x === 'string') : undefined
   const deps = pkg?.dependencies && typeof pkg.dependencies === 'object' && !Array.isArray(pkg.dependencies)
@@ -523,6 +589,9 @@ const renderGuide = lines => {
   lines.push(L.rescueProfile)
   lines.push(`  dsh plugin --profile ${RESCUE_PROFILE} add ${PACKAGE}@${L.versionPlaceholder}`)
   lines.push(`  dsh --profile ${RESCUE_PROFILE}`)
+  // home 层是救援唯一的隐藏前置：该文件叠加到每个 profile 上，出问题时
+  // 连救援一起起不来。指引先说清，用户不会把救援失败误判成救援本身坏了。
+  if (existsSync(homePatchFile)) lines.push(L.homePatch(homePatchFile))
 }
 const renderSafeReport = extraLines => {
   const lines = []
@@ -566,11 +635,11 @@ const forwardExit = child => {
 // 或 safe 菜单）。Windows 经 cmd()/shell:true 启动（见 cmd 注释），壳层
 // 观察到的 signal 不保证等同内部 dsh 的中断语义：判定一律只看数值 code，
 // 不从数值反推信号（spec §5.1）。
-const startDshSession = (dshArgs, profile = PROFILE) =>
+const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
   new Promise(resolve => {
     const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
       stdio: 'inherit',
-      env: process.env,
+      env,
       ...shellOpt,
     })
     child.on('error', err => resolve({ kind: 'error', error: err }))
@@ -579,6 +648,19 @@ const startDshSession = (dshArgs, profile = PROFILE) =>
       else resolve({ kind: 'exit', code: code ?? 0 })
     })
   })
+
+// 救援子进程的环境：显式构造，而不是把宿主 process.env 原样交给它。救援的
+// 语义是「干净冷启动」，而启动器自己写进 process.env 的会话控制变量会把刚
+// 崩掉的主 profile 的会话 id / 工作区目标带进救援——救援 profile 里并不存在
+// 那个会话，dsh 会在恢复时再报一次错，正好污染最该干净的通道。其余宿主变量
+// （PATH / DSH_HOME / 凭据…）是救援能工作的前提，照常继承。
+// home 层补丁不在此列：它由 createRescueProfile 的干净性门禁单独把关。
+const RESCUE_DROPPED_ENV = ['DSH_TUI_RESUME_SESSION', 'DSH_TUI_WORKSPACE_TARGET']
+const rescueEnv = () => {
+  const env = { ...process.env }
+  for (const key of RESCUE_DROPPED_ENV) delete env[key]
+  return env
+}
 
 // TTY 判定：询问与菜单都要求 stdin/stdout 均可交互（readline 需要 stdin，
 // 菜单可读需要 stdout）；任一非 TTY（脚本/管道/headless 宿主）走降级。
@@ -615,7 +697,7 @@ const askSafeEntry = async pendingExitCode => {
   return a === '' || a === 'y' || a === 'yes'
 }
 
-const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}) => {
+const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines, rescueFirst = false } = {}) => {
   const L = msg('safeMenuLabels')
   let exitCode = pendingExitCode
   const readline = (await import('node:readline/promises')).default
@@ -626,6 +708,10 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
   // 时，主动交接被误记为用户取消。
   const state = { cancelled: false, handingOff: false }
   const printMenu = () => {
+    // 回到菜单前先恢复终端：选项 1/5 启动的子进程可能带着备用屏/隐藏光标
+    // 异常退出（TUI 的 ink 退出路径不保证跑完，父进程又是非零退出），不恢复
+    // 就是「菜单与诊断一起看不见」——用户最需要看诊断的时刻恰好黑屏。
+    restoreTerminalMinimal()
     console.log(msg('safeTitle')(runningInsideProfile ? 'profile' : 'launcher'))
     for (const l of extraLines ?? []) console.log(l)
     for (const l of doctorLines()) console.log(l)
@@ -672,6 +758,16 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
   }
   // 无效输入重提示上限 3 次，之后重印完整菜单继续等待；有效选择后计数重置。
   const INVALID_LIMIT = 3
+  // `safe --rescue`：进菜单前先执行一次救援动作（与选项 5 同一实现）。
+  if (rescueFirst) {
+    state.handingOff = true
+    const result = await runRescue()
+    state.handingOff = false
+    if (result !== null) {
+      const settled = settleRetry(result)
+      if (settled !== null) return settled
+    }
+  }
   for (;;) {
     printMenu()
     let invalid = 0
@@ -703,15 +799,13 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
     if (choice === '4') { const lines = []; renderGuide(lines); for (const l of lines) console.log(l); continue }
     if (choice === '5') {
       // 救援动作（最小可用）：先展示 doctor 诊断（决策依据），再创建/复用
-      // 空白救援 profile 并干净启动。创建失败回菜单并指向诊断与指引；
-      // 启动结果与重试同一结算语义（exit 0 结束会话，其余回菜单）。
-      for (const l of doctorLines()) console.log(l)
-      const created = createRescueProfile()
-      if (created.kind === 'failed') { console.error(msg('safeRescueFailed')(created.detail)); continue }
-      console.log(created.kind === 'exists' ? msg('safeRescueExists') : msg('safeRescueCreated'))
+      // 空白救援 profile 并干净启动。被干净性门禁拒绝或创建失败时回菜单并
+      // 打印原因；启动结果与重试同一结算语义（exit 0 结束会话，其余回菜单）。
       state.handingOff = true
-      const settled = settleRetry(await startDshSession([], RESCUE_PROFILE))
+      const result = await runRescue()
       state.handingOff = false
+      if (result === null) continue
+      const settled = settleRetry(result)
       if (settled !== null) return settled
       continue
     }
@@ -719,20 +813,70 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines } = {}
   }
 }
 
-// 救援 profile 创建（最小可用的显式救援动作，spec §4 边界的第二个例外——
-// 写操作只发生在全新目录）。已存在时绝不重复 add（固定名 add 不清旧内容，
-// 见调研报告 1.2）；失败返回原因供菜单提示转看诊断与指引。
+// 救援动作本体（菜单选项 5、`safe --rescue` 与首启后的显式救援共用）：
+// 先给 doctor 诊断，再门禁 + 创建/复用，成功才用显式构造的环境启动。
+// 返回子进程结果；被门禁拒绝或创建失败返回 null（原因已就地打印）。
+const runRescue = async () => {
+  for (const l of runDoctorChecks().lines) console.log(l)
+  const created = createRescueProfile()
+  if (created.kind !== 'created' && created.kind !== 'exists') {
+    for (const l of created.lines) console.error(l)
+    return null
+  }
+  console.log(created.kind === 'exists' ? msg('safeRescueExists') : msg('safeRescueCreated'))
+  return startDshSession([], RESCUE_PROFILE, rescueEnv())
+}
+
+// 救援 profile 的干净性判定：profile 维度只看根 manifest——救援的干净性
+// 契约是「只含受保护插件」，而根 manifest 正是这个契约的落点。
+//   absent       目录不存在 → 可创建
+//   unrecognized 目录存在但不是可识别 profile → 拒绝（绝不能往里装）
+//   unclean      根 manifest 声明了第三方插件 → 拒绝（启动它就不干净）
+//   clean        只含受保护插件 → 可安装/可复用
+const rescueProfileState = () => {
+  if (!existsSync(rescueProfileDir)) return { state: 'absent' }
+  const inv = readProfileInventory(rescueProfileDir)
+  if (inv.error) return { state: 'unrecognized' }
+  const extras = [...inv.bundles, ...inv.deps].filter(name => !PROTECTED_PLUGINS.has(name))
+  return extras.length > 0 ? { state: 'unclean', extras } : { state: 'clean' }
+}
+
+/**
+ * Create or reuse the blank rescue profile.
+ *
+ * The rescue is only allowed to start when it can be *proven* clean, so every
+ * refusal path returns `lines` for the caller to print instead of writing:
+ *   - the home-level patch layer exists → it applies over every profile and
+ *     this launcher cannot parse or compose it (see `homePatchFile`);
+ *   - the profile directory exists but carries no valid root manifest → it may
+ *     belong to something else, and `dsh plugin add` into it would mutate that;
+ *   - the existing profile declares third-party plugins → starting it is not a
+ *     clean start.
+ * @returns `{ kind: 'created' | 'exists' }`, or `{ kind: 'failed', lines }`.
+ */
 const createRescueProfile = () => {
+  if (existsSync(homePatchFile)) return { kind: 'failed', lines: [msg('safeRescueHomePatch')(homePatchFile)] }
+  const state = rescueProfileState()
+  if (state.state === 'unrecognized') return { kind: 'failed', lines: [msg('safeRescueUnrecognized')(rescueProfileDir)] }
+  if (state.state === 'unclean') {
+    return { kind: 'failed', lines: [msg('safeRescueUnclean')(rescueProfileDir, state.extras.join(', '))] }
+  }
   // 就绪判定与 bootstrapProfile 同源：安装判定文件在 node_modules 深处
   // （真实 dsh plugin add 与测试 stub 都落这里），不是 profile 根 manifest。
-  const rescueInstalledPkg = join(dshHome, 'profiles', RESCUE_PROFILE, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json')
-  if (readJson(rescueInstalledPkg) !== undefined) return { kind: 'exists' }
+  if (state.state === 'clean') {
+    if (readJson(rescueInstalledPkg) !== undefined) return { kind: 'exists' }
+    // clean 但没装成：pnpm 会把半装状态视为「已是最新」，原地重试永远
+    // no-op（与主 profile 的 bootstrapUnreadable 同一失败模式，issue #209）。
+    // 根 manifest 已证明这里只有 base + TUI，清掉重建比留一个死状态好。
+    rmSync(rescueProfileDir, { recursive: true, force: true })
+    console.log(msg('safeRescueCleanup')(rescueProfileDir))
+  }
   const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
-  if (probe.error || probe.status !== 0) return { kind: 'failed', detail: 'dsh missing' }
+  if (probe.error || probe.status !== 0) return { kind: 'failed', lines: [msg('safeRescueFailed')('dsh missing')] }
   console.log(msg('safeRescueCreating'))
   const runAdd = extraArgs => spawnSync(
-    ...cmd('dsh', ['plugin', '--profile', RESCUE_PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
-    { stdio: ['inherit', 'pipe', 'pipe'], ...shellOpt },
+    ...cmd('dsh', ['plugin', '--profile', RESCUE_PROFILE, 'add', ...extraArgs, `${PACKAGE}@${installVersion}`]),
+    { stdio: ['inherit', 'pipe', 'pipe'], env: rescueEnv(), ...shellOpt },
   )
   let add = runAdd([])
   if (add.status !== 0) {
@@ -740,8 +884,17 @@ const createRescueProfile = () => {
     process.stderr.write(captured)
     if (captured.includes('ERR_PNPM_ADDING_TO_ROOT')) add = runAdd(['-w'])
   }
-  if (add.status !== 0) return { kind: 'failed', detail: `exit ${add.status ?? 1}` }
-  if (readJson(rescueInstalledPkg) === undefined) return { kind: 'failed', detail: 'no-op install' }
+  if (add.status !== 0) return { kind: 'failed', lines: [msg('safeRescueFailed')(`exit ${add.status ?? 1}`)] }
+  if (readJson(rescueInstalledPkg) === undefined) {
+    // no-op 假成功：add 报成功但插件包仍不可读，pnpm 之后每次都「成功」而
+    // 启动照旧失败——半成品会永久锁死选项 5。目录是本函数刚建的，清掉并
+    // 给出路径，让下一次尝试真的从零开始（bootstrapUnreadable 的同款处置）。
+    rmSync(rescueProfileDir, { recursive: true, force: true })
+    return {
+      kind: 'failed',
+      lines: [msg('safeRescueFailed')('no-op install'), msg('safeRescueCleanup')(rescueProfileDir)],
+    }
+  }
   return { kind: 'created' }
 }
 
@@ -800,7 +953,7 @@ const bootstrapProfile = () => {
   }
   console.log(msg('bootstrapStart'))
   const runAdd = (extraArgs, capture) => spawnSync(
-    ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
+    ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${installVersion}`]),
     { stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit', ...shellOpt },
   )
   let add = runAdd([], true)
@@ -877,14 +1030,28 @@ const checkProfileAlignment = installedVersion => {
 // 零 lib 依赖、不委托、不自举（对齐 doctor 的依赖边界，而非 update 的
 // profile-lib 路径）：profile 损坏时它必须仍可达。控制面只读；重试与
 // 修复动作语义见 safe 会话实现（spec §4/§5）。
+// `safe --rescue` 是同一个救援动作的显式入口（不是新动作）：交互终端里
+// 等价于菜单选项 5（门禁 → 创建/复用 → 干净启动），非交互终端里只做
+// 门禁 + 创建/复用并报告结论（没有终端可交接时不启动 TUI），以便脚本与
+// 无头环境也能用上救援通道、并且**有非零退出码**可判。其余附加参数照旧
+// 只提示忽略。
 if (subcommand === 'safe') {
   const extra = process.argv.slice(3)
-  const extraLines = extra.length > 0 ? [msg('safeIgnoredArgs')(extra.length)] : []
+  const rescueOnly = extra.includes('--rescue')
+  const ignored = extra.filter(a => a !== '--rescue')
+  const extraLines = ignored.length > 0 ? [msg('safeIgnoredArgs')(ignored.length)] : []
   if (!isInteractive()) {
     for (const line of renderSafeReport(extraLines)) console.log(line)
+    if (!rescueOnly) process.exit(0)
+    const created = createRescueProfile()
+    if (created.kind !== 'created' && created.kind !== 'exists') {
+      for (const l of created.lines) console.error(l)
+      process.exit(1)
+    }
+    console.log(created.kind === 'exists' ? msg('safeRescueExists') : msg('safeRescueCreated'))
     process.exit(0)
   }
-  process.exit(await runSafeSession({ pendingExitCode: 0, retryDsh: null, extraLines }))
+  process.exit(await runSafeSession({ pendingExitCode: 0, retryDsh: null, extraLines, rescueFirst: rescueOnly }))
 }
 
 // ─── 子命令：update ──────────────────────────────────────────────────────────
