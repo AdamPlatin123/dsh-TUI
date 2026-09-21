@@ -133,8 +133,9 @@ sh install.sh
 dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件清单与修复指引。
 
 - **双入口**：手动运行 `dsh-tui safe`；或在 dsh 以非零退出码结束后按提示进入。该询问仅出现在交互终端——脚本/管道等非交互环境只追加一行提示，且退出码保真；询问只覆盖最终 dsh 子进程的非零退出码，不含启动挂起（dsh 启动失败等同退出码 1 处理）。
-- **只读边界**：安全模式控制面只读（诊断/清单/指引均不改动状态），例外有二："重试正常启动"与"创建空白救援 profile"——后者是显式救援动作，写操作只发生在全新目录。
-- **救援 profile（最小可用的干净启动）**：菜单选项 5 先展示环境诊断，随后创建 `dsh-tui-safe` 空白 profile（仅 base + TUI、无第三方插件，钉当前版本安装）并以它干净启动——主 profile 装炸时用 dsh 修 dsh 的通道；救援会话结束回到菜单。已存在时不重复安装、按现状启动。手动等价命令见指引（选项 4）。
+- **只读边界**：安全模式控制面只读（诊断/清单/指引均不改动状态），例外有二："重试正常启动"与"创建/复用空白救援 profile"——后者是显式救援动作，它自己的安装只写进 `$DSH_HOME/profiles/dsh-tui-safe/`。另外要如实说明：**任何一次 dsh 启动**都会维护共享的 `$DSH_HOME/profiles/node_modules` 模块回退链接（上游 dsh 的 `healProfilesModuleFallback`，没有开关），救援启动同样如此——这不是安全模式引入的新写行为。
+- **救援 profile 的干净性必须先被证明，证不出就拒绝**：进入救援前逐条校验，任一不成立即拒绝启动并打印原因与处置办法（门禁本身只读）：① 候选目录已存在但不是可识别的 profile（拒绝往未知目录安装）；② 既有 profile 的根 manifest 声明了第三方插件（启动它就不是干净环境）；③ `$DSH_HOME/cordis.patch.yml`（home 层）存在——上游 dsh 把它叠加到**每个** profile 之上（排在 bundle 层与 profile 层之后），home 层坏掉时救援一起坏，而启动器既不解析 YAML 也拿不到组合结果。校验通过后：创建 `dsh-tui-safe`（仅 base + TUI，钉当前版本，走官方 `dsh plugin add`）并以显式构造的环境（剥离宿主遗留的会话控制变量）启动——主 profile 装炸时用 dsh 修 dsh 的通道；救援会话结束回到菜单。已存在且干净时按现状复用，绝不重复安装；半装或「安装报成功但包不可读」的救援 profile 会被清掉重建，入口不会锁死。手动等价命令见指引（选项 4）。
+- **非交互环境**：`dsh-tui safe --rescue` 在脚本/管道下执行同一套门禁与创建/复用，只报告结论（就绪退出 0，被拒绝退出 1）；在交互终端里等价于菜单选项 5。
 - **旧全局启动器**：profile 副本不可读或过旧时，先升级启动器：`npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<版本>`。
 - **修复命令示例**（安全模式只列出，需自行执行）：`dsh plugin --profile dsh-tui remove <第三方插件>` 逐个移除可疑插件；`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<版本>` 重装对齐；`dsh-tui doctor` 环境诊断。
 

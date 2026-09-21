@@ -1,6 +1,6 @@
 # dsh-tui 安全模式 PR① 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 给 `bin/dsh-tui.js` 加安全模式：`safe` 手动子命令 + dsh 非零退出后的自动 fallback 询问，内含只读诊断、插件清单与修复指引。
 
@@ -8,7 +8,14 @@
 
 **Tech Stack:** Node ESM（顶层 await 可用，`bin/dsh-tui.js:416` 已有先例）、`node:readline/promises`、POSIX sh stub 沙箱测试。
 
-**Spec:** `/mnt/shared/_Projects/DSH-TUI/repo/docs/superpowers/specs/2026-09-07-dsh-tui-safe-mode-pr1-design.md`（v2）。执行每个任务前先读 spec 对应节。
+**Spec:** `docs/safe-mode-design-pr1.md`（v2）。执行每个任务前先读 spec 对应节。
+
+> **执行后记（2026-09-21，PR review 后由维护者修订）**：本文件是当时的执行计划稿，其中的代码片段**不是**当前实现——一切以 `bin/dsh-tui.js` 与 `scripts/verify-safe-mode.mjs` 的现状为准。相对计划稿的实质偏离：
+> ① 救援写边界修正（"只发生在全新目录"不成立，dsh 启动会写共享的 `$DSH_HOME/profiles/node_modules`）+ 三条干净性门禁（home 层 / 未知目录 / 含第三方插件的既有 profile）；
+> ② 新增非交互入口 `dsh-tui safe --rescue`（门禁与创建可被脚本与无头环境使用，也让这部分逻辑可自动化验证）；
+> ③ 回到菜单前先 `restoreTerminalMinimal()`（重试/救援子进程可能留下备用屏与隐藏光标）；
+> ④ `verify-safe-mode.mjs` 加强并按平台运行（逐文件 sha256 + HOME 双快照、dsh 替身真跑、直接依赖区段内取串、救援矩阵），Windows 整包 `exit 0` 的欺骗性跳过已删除；
+> ⑤ `ownVersion` 缺失时安装钉版本退回 `@latest`（不再拼出 `@undefined`），并删掉无人引用的 `legacyEnv` 文案。
 
 ## Global Constraints
 

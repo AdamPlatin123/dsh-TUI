@@ -1,8 +1,8 @@
 # dsh-tui 安全模式 PR① 设计：safe 入口 + 自动 fallback（v2）
 
-- 日期：2026-09-07（v2：经 codex gpt-6-astra 行级审查修订，审查原文 `/mnt/shared/_Projects/DSH-TUI/safe-mode-spec-audit.out`）
+- 日期：2026-09-07（v2：经独立行级审查修订；审查原文不在本仓库内，故不引路径）
 - 状态：待用户审阅
-- 依据：调研报告 v2（`/mnt/shared/_Projects/DSH-TUI/safe-mode-research-report.md`）。本 spec 明确采纳其"入口先于自举/委托、退出码保真、防死循环"三项；**修改**：纯只读收窄为控制面只读（见 §4）；**延期**：恢复参数与会话选择的完整隔离（B-8）到 PR②（重试语义最小闭环见 §5.3）
+- 依据：PR① 调研报告（本机文档，未随仓库分发）。本 spec 明确采纳其"入口先于自举/委托、退出码保真、防死循环"三项；**修改**：纯只读收窄为控制面只读（见 §4）；**延期**：恢复参数与会话选择的完整隔离（B-8）到 PR②（重试语义最小闭环见 §5.3）
 - 上游参考：anywhere-labs/dsh-desktop v2.0.3 startup recovery（手动入口先于 Host 启动、`relaunch-arguments.ts:5` 一次性恢复参数）
 
 ## 1. 背景与目标
@@ -47,6 +47,7 @@ dsh-tui 是 cordis 插件体系的纯插件：profile 装坏时 dsh 组合起不
 - **重试不得隐式自举**：重试前检查 `profileReady()`；不 ready 时不进入 `bootstrapProfile()`（那会触发插件安装，`bin/dsh-tui.js:359-394`），而是回菜单报告"profile 不完整，无法重试"并指向修复指引中的重装命令。fallback 场景 profile 正是嫌疑对象，隐式自举会掩盖故障且引入写操作
 - **safe 入口跳过旧文件清理**：进入 safe 会话不触发 Windows 旧二进制删除等入口期清理（`bin/dsh-tui.js:36` 附近的既有逻辑只在正常路径执行，safe 截获先于它即可）
 - 非 TTY 降级输出同样只读（一次性打印 §6.2 全量信息后退出）
+- **例外二的写边界修正（2026-09-21）**：原表述把救援动作的写范围写成"只发生在全新目录"，不成立。实测（上游 dsh `dsh-app-boot` `healProfilesModuleFallback`，无开关）：**任何一次 dsh 启动**都会 `mkdir` 并写入共享的 `$DSH_HOME/profiles/node_modules` 回退链接，救援启动不例外。救援自身的安装写入落在 `$DSH_HOME/profiles/dsh-tui-safe/`；共享回退链接属 dsh 启动的固有行为，不是安全模式引入的写类。三条干净性门禁见 §10 范围变更记录
 
 ## 5. fallback 判定与结果语义
 
@@ -126,11 +127,12 @@ MSG 新增 `safeHint`（§5.2，追加语义）；`helpText` 补 safe 一行；s
 
 新增 `scripts/verify-safe-mode.mjs`（先读脚本头部说明的既有要求；手法注明来源）：
 
-1. **零环境可用 + 只读证明**：绝对 Node 路径、空 PATH、隔离 HOME/DSH_HOME（`verify-cli-subcommands.mjs:49` 手法）→ `safe` 非 TTY 降级退出 0；断言输出含标题/诊断/指引标记；断言沙箱 DSH_HOME 内**无目录新增、无文件写入**（前后快照对比——只读的证明靠文件系统差异，不靠退出码）
-2. **清单解析矩阵**：伪 profile package.json 夹具（扩展 `verify-cli-subcommands.mjs:93` 手法）覆盖：正常（两维度+保护包分类）、缺文件、字段缺失、字段类型错误、损坏 JSON——输出断言 + 文件内容不变断言。注意诊断读包安装清单（`installedPkgPath`）与插件清单读 profile 根清单是两个夹具
-3. **fallback 触发矩阵**：dsh 替身用分命令脚本控制（`--version` 成功、实际启动按脚本退出，`verify-launcher.mjs:51/63` 手法）× 结果 {exit 0 / exit 3 / SIGINT / error} × TTY {无}（PTY 见下）：exit 0 无提示且码 0；exit 3 有 safeHint 且码 3；SIGINT 信号透传无提示；error 有 launchFailed+提示且码 1。另测非交互确认拒绝路径、连续失败 pendingExitCode 更新、重试成功以 0 结束、重试不自动二次询问
+1. **零环境可用 + 只读证明**：绝对 Node 路径、空 PATH、隔离 HOME/DSH_HOME（`verify-cli-subcommands.mjs:49` 手法）→ `safe` 非 TTY 降级退出 0；断言输出含标题/诊断/指引标记；断言沙箱 DSH_HOME **与 HOME** 内无目录新增、无文件写入——快照按**逐文件 sha256** 比对（只比 size 会漏掉同尺寸原地改写；已有红绿实验佐证），且另有一条「PATH 上放 dsh 替身 → 探测真的执行并回显版本」的用例，避免「PATH 空目录所以探测必然 ENOENT」把探测分支空跑
+2. **清单解析矩阵**：伪 profile package.json 夹具（扩展 `verify-cli-subcommands.mjs:93` 手法）覆盖：正常（两维度+保护包分类）、缺文件、字段缺失、字段类型错误、损坏 JSON——输出断言 + 文件内容不变断言。注意诊断读包安装清单（`installedPkgPath`）与插件清单读 profile 根清单是两个夹具。分类断言（内置/第三方）必须**限定在「直接依赖」区段内**取串：bundles 区段含同名包，跨区段全文取串会假通过
+3. **fallback 触发矩阵**：dsh 替身用分命令脚本控制（`--version` 成功、实际启动按脚本退出，`verify-launcher.mjs:51/63` 手法）× 结果 {exit 0 / exit 42 / SIGINT / error} × TTY {无}（PTY 见下）：exit 0 无提示且码 0；exit 42 有 safeHint 且码 42；SIGINT 信号透传无提示；error 有 launchFailed+提示且码 1。另测非交互确认拒绝路径、连续失败 pendingExitCode 更新、重试成功以 0 结束、重试不自动二次询问
    勘误（终审）：spawn error 场景在非 TTY 沙箱不可无竞态构造（预检与最终 spawn 共用 PATH），error 分支自动化覆盖延至 PR② 注入点；现由代码评审覆盖
-4. **PTY 交互子集**：`pty-conpty-probe.mjs` 依赖外部原生模块（其头部 `:8` 注明）——脚本探测依赖可用性：可用则驱动询问 Y/n 与菜单动作 1/5（含超时清理），不可用则**报告跳过并留手动证据清单**（不静默跳过）；Windows conpty 路径同法单列；运行时输出 SKIP 行（不静默跳过）——已落地
+   平台注记（2026-09-21）：SIGINT 一项依赖 POSIX 信号语义，Windows 上显式 SKIP 并计入套件结尾的 SKIPPED 汇总（替身脚本按平台分别是 sh 与 dsh.cmd，套件本身在 Windows 全量运行）
+4. **PTY 交互子集**：`scripts/pty-conpty-probe.mjs` 依赖外部原生模块 node-pty（其头部 `:8` 注明），**node-pty 不是本仓库依赖**。2026-09-21 实测该替换方案**未落地**：`verify-safe-mode.mjs` 既没有探测 node-pty 也没有驱动菜单，只在结尾打印一句 NOTE；原「已落地 / PTY 演练 D12（24/24）」的说法不成立，已删除。当前自动覆盖 = 菜单选项 5 与 `safe --rescue` 共用的 `createRescueProfile` 全部门禁与创建/复用/清理分支（非交互入口可驱动）；**未覆盖** = readline 菜单按键、fallback 的 TTY 询问、救援启动后的会话。补齐条件：一个可用的 PTY（node-pty 构建产物 + `DSH_TUI_NODE_PTY`，或 Linux CI 用 `script -qec` 包一层），并配套演练清单
 5. **doctor 等价**：`runDoctorChecks` 提取前后 doctor 输出完整期望值比对（仅规范化临时路径等易变字段；覆盖双语、顺序、换行、退出码；不以 doctor/safe 同源互比充当证明）；同时跑既有 `verify-cli-subcommands.mjs`
 6. **双角色截获**：全局瘦壳角色 + `DSH_TUI_NO_DELEGATE=1` + **真实 profile 内副本运行**（扩展 `verify-launcher.mjs:251` 复制真实入口的夹具，含单文件迁移布局：仅入口文件的安装形态下 safe 仍可用——这是 §3.1 单文件契约的直接断言）
 7. **既有断言更新**：`verify-launcher.mjs:174` 涉及非零退出输出的断言按"追加不替换"更新期望；新脚本登记进 CI 聚合入口（`run-ci-group.mjs`）
@@ -149,9 +151,13 @@ MSG 新增 `safeHint`（§5.2，追加语义）；`helpText` 补 safe 一行；s
 
 ### 范围变更记录（2026-09-10）：救援 profile 提前至本 PR
 
-按维护者"最小可用"定义（创建空白 profile 并以 doctor 指导用户操作），PR③ 的"同 home 救援 profile"以简化版提前进本 PR：菜单选项 5 = 先展示 doctor 诊断 → 创建 `dsh-tui-safe` 空白 profile（`dsh plugin add` 钉当前版本，bootstrap 同款 -w 重试与 no-op 复查；**已存在绝不重复安装**——固定名 add 不清旧内容）→ 以它干净启动（`startDshSession` 参数化 profile），结果与重试同结算（exit 0 结束会话，其余回菜单）。写边界收窄为：**写操作只发生在全新目录**（本 PR §4 的第二个显式例外）。隔离 home 诊断环境与检查点/依赖重建仍留 PR③。验证：非 TTY 指引含救援手动命令（verify-safe-mode 断言）+ PTY 演练 D12（doctor 展示/创建落盘/干净启动 exit 0，24/24）。
+按维护者"最小可用"定义（创建空白 profile 并以 doctor 指导用户操作），PR③ 的"同 home 救援 profile"以简化版提前进本 PR：菜单选项 5 = 先展示 doctor 诊断 → 干净性门禁 → 创建/复用 `dsh-tui-safe` 空白 profile（`dsh plugin add` 钉当前版本，bootstrap 同款 -w 重试与 no-op 复查；**已存在且干净才复用**——固定名 add 不清旧内容）→ 以显式构造的环境干净启动（`startDshSession` 参数化 profile 与环境），结果与重试同结算（exit 0 结束会话，其余回菜单）。隔离 home 诊断环境与检查点/依赖重建仍留 PR③。
+
+**写边界（2026-09-21 修正，取代原「写操作只发生在全新目录」）**：救援自身的安装写入落在 `$DSH_HOME/profiles/dsh-tui-safe/`；但**任何一次 dsh 启动**都会维护共享的 `$DSH_HOME/profiles/node_modules` 模块回退链接（上游 dsh `healProfilesModuleFallback`，无开关），救援启动不例外——原表述不成立，已按实测改写（bin 注释与双语 README 同步）。
+
+**干净性门禁（2026-09-21 新增）**：救援的前置是「可证明的干净」，三条件任一不成立即**拒绝**并给出路径与处置办法（门禁本身只读）：① 候选目录存在但不是可识别 profile（拒绝向未知目录安装）；② 既有 profile 根 manifest 声明了第三方插件；③ `$DSH_HOME/cordis.patch.yml`（home 层）存在——上游 dsh 把它叠加到每个 profile 之上（`dsh profile-boot` 的 `homePatches`），home 层坏掉时救援一起坏，而启动器不解析 YAML、也拿不到组合结果。半装或 no-op 假成功留下的救援 profile 会被清掉重建，入口不会锁死。验证：`scripts/verify-safe-mode.mjs` 的非交互入口 `safe --rescue` 矩阵（创建/复用/三条拒绝/半装清理/no-op 清理/-w 重试/环境剥离），全平台可跑。**未验证**：菜单按键交互、fallback 的 TTY 询问与救援启动后的会话需要真实 PTY，本仓库无 node-pty 依赖，见「开放问题」。
 
 ## 11. 开放问题（实现计划阶段解决，不阻塞本 spec）
 
-- PTY 依赖在 CI 的落位（原生模块安装或专用 runner）
+- PTY 依赖在 CI 的落位（node-pty 构建产物 + `DSH_TUI_NODE_PTY`，或 Linux CI 用 `script -qec` 分配 PTY）——当前套件只覆盖非交互入口，菜单按键/询问/救援会话未验证
 - `runDoctorChecks`/无自举启动函数与现有代码的精确切割线（以实现时文件现状为准，本 spec 只锁行为契约）
