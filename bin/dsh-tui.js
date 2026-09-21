@@ -28,7 +28,7 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -268,9 +268,49 @@ const MSG = {
       `  请自行卸载它们，或删除该 profile 后重试：\n` +
       `  rm -rf ${path}`,
   },
+  // profile 层补丁（dsh 给每个新 profile 都写这个文件，默认只有注释 + []）：
+  // 与 home 层同一类隐藏面，同样不解析 YAML——非默认内容一律拒绝。
+  safeRescuePatched: {
+    en: path =>
+      `[dsh-tui] Rescue refused: the profile's own patch layer carries entries:\n` +
+      `  ${path}\n` +
+      `  dsh composes that file into the profile after the bundle layers, and this\n` +
+      `  launcher neither parses YAML nor sees the composed result, so "clean" cannot\n` +
+      `  be proven. Empty the file (or move it aside) yourself, then retry.`,
+    zh: path =>
+      `[dsh-tui] 救援被拒绝：profile 自带的补丁层里有条目：\n` +
+      `  ${path}\n` +
+      `  dsh 会把该文件组合进 profile（排在 bundle 层之后），而启动器既不解析\n` +
+      `  YAML 也拿不到组合结果——「干净」无法证明。请自行清空该文件（或移走）\n` +
+      `  后重试。`,
+  },
+  safeRescueStray: {
+    en: (path, stray) =>
+      `[dsh-tui] Rescue refused: ${path} holds entries this launcher did not generate\n` +
+      `  (${stray}), so removing the half-installed profile would delete your files.\n` +
+      `  Move them aside yourself, then retry (or delete the whole directory):\n` +
+      `  rm -rf ${path}`,
+    zh: (path, stray) =>
+      `[dsh-tui] 救援被拒绝：${path} 里有不是本启动器生成的条目（${stray}），\n` +
+      `  清理半装状态会连你的文件一起删掉，因此不代劳。请先自行移走，再重试\n` +
+      `  （或整个删除该目录）：\n` +
+      `  rm -rf ${path}`,
+  },
   safeRescueCleanup: {
-    en: path => `[dsh-tui] removed the half-installed profile so the next attempt starts clean:\n  ${path}`,
-    zh: path => `[dsh-tui] 已清理半装的 profile，下次尝试将从零开始：\n  ${path}`,
+    en: path =>
+      `[dsh-tui] removed the half-installed profile (only dsh/pnpm-generated files were\n` +
+      `  present, checked before removing) so the next attempt starts clean:\n  ${path}`,
+    zh: path =>
+      `[dsh-tui] 已清理半装的 profile（删除前已确认目录里只有 dsh/pnpm 生成的文件），\n` +
+      `  下次尝试将从零开始：\n  ${path}`,
+  },
+  safeRescueRemoveFailed: {
+    en: (path, reason) =>
+      `[dsh-tui] could not remove the half-installed profile:\n  ${path}\n  ${reason}\n` +
+      `  Remove it yourself, then retry.`,
+    zh: (path, reason) =>
+      `[dsh-tui] 无法删除半装的 profile：\n  ${path}\n  ${reason}\n` +
+      `  请自行删除后重试。`,
   },
   safeMenuLabels: {
     en: {
@@ -433,11 +473,27 @@ const installedPkgPath = join(profilePkgDir, 'package.json')
 const runningInsideProfile = sameDir(ownDir, profilePkgDir)
 const rescueProfileDir = join(dshHome, 'profiles', RESCUE_PROFILE)
 const rescueInstalledPkg = join(rescueProfileDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json')
+// profile 层补丁文件：dsh 给**每个**新建 profile 都写它（默认只有注释与 `[]`），
+// 并在 bundle 层之后把它组合进 profile（dsh-app-boot `loadProfile` →
+// `composed.profile.patches`）。它与下面的 home 层是同一类隐藏面——见
+// trivialPatchLayer 的判定理由。
+const rescuePatchFile = join(rescueProfileDir, 'cordis.patch.yml')
 // 上游 dsh 的 home 层：homePatches 排在 bundle 层与 profile 层**之后**，叠加到
 // **每个** profile 上（dsh profile-boot → composeProfile）；且「存在但解析不了
 // 或不是数组」的补丁文件按设计 fail loud（dsh-app-boot → loadOptionalPatches）。
 // 启动器既不解析 YAML 也拿不到组合结果 → 该文件存在时「干净救援」不可证明。
 const homePatchFile = join(dshHome, 'cordis.patch.yml')
+// 救援目录里允许存在的条目：全是 dsh / pnpm 为这个 profile 生成的东西。
+// 清理（半装、no-op 假成功）只在没有第 6 种条目时进行——不静默删用户放进去的
+// 文件：发现未知条目就拒绝，把名字与处置办法交给用户。
+const GENERATED_PROFILE_ENTRIES = new Set([
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'cordis.patch.yml',
+  'cordis.yml',
+  'node_modules',
+])
 
 // ─── 子命令：version / help ──────────────────────────────────────────────────
 // 只认第一个参数，且在角色分支之前应答：两种角色都不经过委托与自举——
@@ -827,18 +883,68 @@ const runRescue = async () => {
   return startDshSession([], RESCUE_PROFILE, rescueEnv())
 }
 
-// 救援 profile 的干净性判定：profile 维度只看根 manifest——救援的干净性
-// 契约是「只含受保护插件」，而根 manifest 正是这个契约的落点。
+// profile 层补丁文件的判定：dsh 自己给每个新建 profile 生成的文件形如
+// 「注释 + `[]`」，那是「没有补丁层」；除此以外的任何内容都不可证明干净。
+// 这里不做 YAML 解析，只做一件事：剥掉 `#` 注释行后看剩下什么——`[]`/空
+// 才算无补丁层，其余（含解析不了的残缺内容）一律拒绝。方向是 fail-closed：
+// 判错只会多拒一次，不会放过一个带有条目的层。
+// 与 home 层的差别是有意的：home 层只要存在就拒绝（它是用户手写的、只在这台
+// 机器上生效的偏好层），而 profile 层是 dsh 每次新建 profile 都会写的默认
+// 文件——按存在即拒绝会让救援在第一次创建后就永久不可用。
+const trivialPatchLayer = path => {
+  if (!existsSync(path)) return true
+  try {
+    const body = readFileSync(path, 'utf8')
+      .split('\n')
+      .map(line => line.replace(/#.*$/u, '').trim())
+      .join('')
+    return body === '' || body === '[]'
+  } catch {
+    return false
+  }
+}
+// 救援目录里除「dsh/pnpm 生成物」之外的条目；读不到目录时按未知处理（拒绝）。
+const rescueDirStrays = () => {
+  try {
+    return readdirSync(rescueProfileDir).filter(name => !GENERATED_PROFILE_ENTRIES.has(name))
+  } catch {
+    return ['<unreadable>']
+  }
+}
+/**
+ * Remove the half-installed rescue profile.
+ *
+ * Only called once the directory is known to hold nothing but generated files
+ * (see `rescueDirStrays`) or right after this function created it. A failure
+ * (EBUSY/EPERM — Windows indexers and AV hold directory handles briefly) is
+ * returned for the caller to report instead of throwing a stack: the direction
+ * stays fail-closed, the message stays readable.
+ * @returns The error, or undefined on success.
+ */
+const removeRescueDir = () => {
+  try {
+    rmSync(rescueProfileDir, { recursive: true, force: true })
+    return undefined
+  } catch (error) {
+    return error
+  }
+}
+
+// 救援 profile 的干净性判定：
 //   absent       目录不存在 → 可创建
 //   unrecognized 目录存在但不是可识别 profile → 拒绝（绝不能往里装）
 //   unclean      根 manifest 声明了第三方插件 → 拒绝（启动它就不干净）
-//   clean        只含受保护插件 → 可安装/可复用
+//   patched      自带补丁层里有条目 → 拒绝（与 home 层同款：组合结果不可证明）
+//   clean        只含受保护插件且无补丁条目 → 可安装/可复用
+// 根 manifest 只覆盖「装了什么插件」这一维；补丁层是另一维，两者都要过。
 const rescueProfileState = () => {
   if (!existsSync(rescueProfileDir)) return { state: 'absent' }
   const inv = readProfileInventory(rescueProfileDir)
   if (inv.error) return { state: 'unrecognized' }
   const extras = [...inv.bundles, ...inv.deps].filter(name => !PROTECTED_PLUGINS.has(name))
-  return extras.length > 0 ? { state: 'unclean', extras } : { state: 'clean' }
+  if (extras.length > 0) return { state: 'unclean', extras }
+  if (!trivialPatchLayer(rescuePatchFile)) return { state: 'patched' }
+  return { state: 'clean' }
 }
 
 /**
@@ -851,7 +957,10 @@ const rescueProfileState = () => {
  *   - the profile directory exists but carries no valid root manifest → it may
  *     belong to something else, and `dsh plugin add` into it would mutate that;
  *   - the existing profile declares third-party plugins → starting it is not a
- *     clean start.
+ *     clean start;
+ *   - the profile's own patch layer carries entries, or the directory holds
+ *     files this launcher did not generate → same reason, and removing them
+ *     would destroy user data.
  * @returns `{ kind: 'created' | 'exists' }`, or `{ kind: 'failed', lines }`.
  */
 const createRescueProfile = () => {
@@ -861,14 +970,20 @@ const createRescueProfile = () => {
   if (state.state === 'unclean') {
     return { kind: 'failed', lines: [msg('safeRescueUnclean')(rescueProfileDir, state.extras.join(', '))] }
   }
+  if (state.state === 'patched') return { kind: 'failed', lines: [msg('safeRescuePatched')(rescuePatchFile)] }
   // 就绪判定与 bootstrapProfile 同源：安装判定文件在 node_modules 深处
   // （真实 dsh plugin add 与测试 stub 都落这里），不是 profile 根 manifest。
   if (state.state === 'clean') {
     if (readJson(rescueInstalledPkg) !== undefined) return { kind: 'exists' }
     // clean 但没装成：pnpm 会把半装状态视为「已是最新」，原地重试永远
     // no-op（与主 profile 的 bootstrapUnreadable 同一失败模式，issue #209）。
-    // 根 manifest 已证明这里只有 base + TUI，清掉重建比留一个死状态好。
-    rmSync(rescueProfileDir, { recursive: true, force: true })
+    // 清掉重建——但先确认目录里没有用户自己的东西（见 rescueDirStrays）。
+    const stray = rescueDirStrays()
+    if (stray.length > 0) return { kind: 'failed', lines: [msg('safeRescueStray')(rescueProfileDir, stray.join(', '))] }
+    const failed = removeRescueDir()
+    if (failed !== undefined) {
+      return { kind: 'failed', lines: [msg('safeRescueRemoveFailed')(rescueProfileDir, failed.message)] }
+    }
     console.log(msg('safeRescueCleanup')(rescueProfileDir))
   }
   const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
@@ -887,13 +1002,13 @@ const createRescueProfile = () => {
   if (add.status !== 0) return { kind: 'failed', lines: [msg('safeRescueFailed')(`exit ${add.status ?? 1}`)] }
   if (readJson(rescueInstalledPkg) === undefined) {
     // no-op 假成功：add 报成功但插件包仍不可读，pnpm 之后每次都「成功」而
-    // 启动照旧失败——半成品会永久锁死选项 5。目录是本函数刚建的，清掉并
-    // 给出路径，让下一次尝试真的从零开始（bootstrapUnreadable 的同款处置）。
-    rmSync(rescueProfileDir, { recursive: true, force: true })
-    return {
-      kind: 'failed',
-      lines: [msg('safeRescueFailed')('no-op install'), msg('safeRescueCleanup')(rescueProfileDir)],
-    }
+    // 启动照旧失败——半成品会永久锁死选项 5。此时目录是本函数刚刚建出来的
+    // （或刚通过 rescueDirStrays 检查后重建的），清掉并给出路径，让下一次
+    // 尝试真的从零开始（bootstrapUnreadable 的同款处置）。
+    const failed = removeRescueDir()
+    const lines = [msg('safeRescueFailed')('no-op install')]
+    lines.push(failed === undefined ? msg('safeRescueCleanup')(rescueProfileDir) : msg('safeRescueRemoveFailed')(rescueProfileDir, failed.message))
+    return { kind: 'failed', lines }
   }
   return { kind: 'created' }
 }

@@ -212,11 +212,12 @@ diagnostics, a profile plugin inventory, and repair guidance.
   inventory, and guidance never change state); the two exceptions are
   "retry normal startup" and "create/reuse blank rescue profile" — the latter is
   an explicit rescue action whose own install writes only under
-  `$DSH_HOME/profiles/dsh-tui-safe/`. To be accurate about one more thing:
-  **every** dsh launch maintains the shared
+  `$DSH_HOME/profiles/dsh-tui-safe/`. Two more things, stated plainly (neither is
+  a write introduced by safe mode): (a) **every** dsh launch maintains the shared
   `$DSH_HOME/profiles/node_modules` module-fallback links (upstream dsh's
-  `healProfilesModuleFallback`, no opt-out), and a rescue launch is no
-  exception — that is not a write introduced by safe mode.
+  `healProfilesModuleFallback`, no opt-out), and a rescue launch is no exception;
+  (b) the install is performed by pnpm, so pnpm's own global store
+  (`pnpm store path`, outside `$DSH_HOME` by default) is written to or reused.
 - **The rescue profile's cleanliness must be proven first — if it cannot be, the
   rescue refuses to start**: each of these is checked before entering the rescue,
   and any one of them blocks it with the reason and the fix printed (the checks
@@ -225,16 +226,22 @@ diagnostics, a profile plugin inventory, and repair guidance.
   existing profile's root manifest declares third-party plugins (starting it
   would not be clean); (3) `$DSH_HOME/cordis.patch.yml` (the home layer) exists —
   upstream dsh applies it over **every** profile (after the bundle and profile
-  layers), so a broken home layer breaks the rescue too, and this launcher
-  neither parses YAML nor sees the composed result. Once the checks pass it
-  creates `dsh-tui-safe` (base + TUI only, pinned to the current version, via the
-  official `dsh plugin add`) and starts it with an explicitly constructed
-  environment (host session-control variables are dropped) — the "use dsh to fix
-  dsh" lane for a broken main profile. When the rescue session ends you are back
-  in the menu. A clean existing profile is reused as-is, never re-installed over;
-  a half-installed or "install reported success but the package is unreadable"
-  rescue profile is removed and rebuilt, so the entry point cannot deadlock.
-  Manual equivalents are listed in the guidance (option 4).
+  layers); (4) the profile's own `dsh-tui-safe/cordis.patch.yml` (the profile
+  layer) carries entries — dsh composes that one into the profile as well (after
+  the bundle layers). The launcher neither parses YAML nor sees the composed
+  result, so both layers are fail-closed; the "comments + `[]`" file dsh
+  generates by default does not count as entries and does not block reuse. Once
+  the checks pass it creates `dsh-tui-safe` (base + TUI only, pinned to the
+  current version, via the official `dsh plugin add`) and starts it with an
+  explicitly constructed environment (host session-control variables are
+  dropped) — the "use dsh to fix dsh" lane for a broken main profile. When the
+  rescue session ends you are back in the menu. A clean existing profile is
+  reused as-is, never re-installed over; a half-installed or "install reported
+  success but the package is unreadable" rescue profile is removed and rebuilt
+  — **only after checking the directory holds nothing but dsh/pnpm-generated
+  files**; your own files make it refuse and list their names instead of
+  deleting silently — so the entry point cannot deadlock. Manual equivalents are
+  listed in the guidance (option 4).
 - **Non-interactive use**: `dsh-tui safe --rescue` runs the same gate plus
   create/reuse under scripts and pipes and reports only the verdict (exit 0 when
   ready, 1 when refused); in an interactive terminal it is equivalent to menu
