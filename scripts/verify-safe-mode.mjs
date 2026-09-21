@@ -269,10 +269,12 @@ const cleanManifest = {
     check('fallback: safeHint 双语', r.stderr.includes('Run dsh-tui safe'), `status=${r.status}`)
   }
   if (isWin) {
-    skip('fallback: 信号透传且无 safe 提示', 'POSIX signal semantics (kill -INT $$ has no batch equivalent)')
+    skip('fallback: 信号透传且无 safe 提示', 'Windows has no POSIX signal semantics (Node turns kill into TerminateProcess, so spawnSync reports a code, never a signal)')
   } else {
-    // 信号场景：stub 自杀 SIGINT → 启动器 self-kill 透传，无提示。
-    const r = runFb({ DSH_STUB_PROFILE_SIGNAL: 'INT' })
+    // 信号场景：替身自杀 SIGINT → 启动器 self-kill 透传，无提示。
+    // 信号名必须是 'SIGINT'：Node 的 process.kill 不做前缀补全，裸 'INT' 直接
+    // 抛 ERR_UNKNOWN_SIGNAL（实测）。
+    const r = runFb({ DSH_STUB_PROFILE_SIGNAL: 'SIGINT' })
     check('fallback: 信号透传且无 safe 提示', r.status === null && r.signal === 'SIGINT' && !r.stderr.includes('dsh-tui safe'), `signal=${r.signal}`)
   }
 }
