@@ -2985,8 +2985,8 @@ export function PromptInput({
   // U+30FB is officially Ambiguous too, but get-east-asian-width hardcodes
   // it Wide and mainstream terminals (Western included) paint it 2 cells —
   // the model and the painted width agree in practice. A wcwidth-strict
-  // Western terminal painting it 1 cell would mirror the old misalignment;
-  // DSH_TUI_AMBIGUOUS_WIDE=1 is the escape hatch for either direction.
+  // Western terminal painting it 1 cell would leave a spare column, which
+  // the `- 6` slack below absorbs.
   const foldBadge = `▸ ${stats}`
   const foldHint = t('input-fold-hover')
   const foldPreviewWidth =
