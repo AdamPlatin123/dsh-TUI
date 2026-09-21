@@ -77,101 +77,74 @@ const baseEnv = env => {
 const run = (args, env = {}) =>
   spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: baseEnv(env) })
 
-// --- stub dsh（按平台）--------------------------------------------------------
+// --- stub dsh（一份逻辑，两种外壳）--------------------------------------------
 // 一个 stub 承担三种调用，覆盖启动器真正发出的命令形状：
 //   dsh --version                      → 版本探测（回显可被断言 → 证明真的跑了）
 //   dsh --profile <name> [...]         → 会话启动（退出码由 DSH_STUB_PROFILE_EXIT 控制）
-//   dsh plugin --profile <n> add ...   → 安装（可选真的「装出」插件包与根
-//                                        manifest，见 DSH_STUB_NOOP / DSH_STUB_MANIFEST）
+//   dsh plugin --profile <n> add ...   → 安装（可选真的「装出」插件包与根 manifest）
 // 每次调用把 argv 与「救援控制变量是否被剥离」记录到 state 目录，供断言取证。
-// stub 的「安装」模拟真实 `dsh plugin add` 的两个落点：profile 根
-// package.json（从 state/manifest.json 复制，避免在批处理里手写 JSON）与
-// node_modules 深处的插件包——启动器的就绪判定与救援干净性门禁分别读这两处。
-const POSIX_STUB = [
-  '#!/bin/sh',
-  'state="$DSH_STUB_STATE"',
-  'n=0',
-  '[ -f "$state/calls" ] && n=$(cat "$state/calls")',
-  'n=$((n + 1))',
-  'printf "%s\\n" "$n" > "$state/calls"',
-  'printf "%s\\n" "$*" >> "$state/argv"',
-  'printf "resume=%s\\n" "${DSH_TUI_RESUME_SESSION:-none}" >> "$state/env"',
-  'if [ "$1" = "--version" ]; then',
-  '  printf "%s\\n" "${DSH_STUB_VERSION:-9.9.9}"',
-  '  exit "${DSH_STUB_PROBE_EXIT:-0}"',
-  'fi',
-  'if [ "$1" = "--profile" ]; then',
-  '  [ -n "$DSH_STUB_PROFILE_SIGNAL" ] && kill -"$DSH_STUB_PROFILE_SIGNAL" $$',
-  '  exit "${DSH_STUB_PROFILE_EXIT:-0}"',
-  'fi',
-  'if [ "$1" = "plugin" ]; then',
-  '  a=0',
-  '  [ -f "$state/adds" ] && a=$(cat "$state/adds")',
-  '  a=$((a + 1))',
-  '  printf "%s\\n" "$a" > "$state/adds"',
-  '  if [ -n "$DSH_STUB_ADDING_TO_ROOT" ] && [ "$a" = "1" ]; then',
-  '    printf "%s\\n" "ERR_PNPM_ADDING_TO_ROOT stub" >&2',
-  '    exit 1',
-  '  fi',
-  '  [ -n "$DSH_STUB_PLUGIN_EXIT" ] && exit "$DSH_STUB_PLUGIN_EXIT"',
-  '  if [ -z "$DSH_STUB_NOOP" ]; then',
-  '    root="$DSH_HOME/profiles/dsh-tui-safe"',
-  '    mkdir -p "$root"',
-  '    [ -f "$state/manifest.json" ] && cp "$state/manifest.json" "$root/package.json"',
-  '    d="$root/node_modules/@deepseek-harness-tui/dsh-tui"',
-  '    mkdir -p "$d"',
-  '    printf %s \'{"name":"@deepseek-harness-tui/dsh-tui","version":"stub"}\' > "$d/package.json"',
-  '  fi',
-  '  exit 0',
-  'fi',
-  'exit 0',
-  '',
-].join('\n')
-// 批处理版本刻意不用嵌套括号块：`exit /b` 落在嵌套块里时退出码会被吞掉
-// （实测 `exit /b 1` 在双层 if 块内最终仍以 0 收束），改用 goto 分支——每个
-// 结局都在顶层 `exit /b`，退出码才可信。
-const WIN_STUB = [
-  '@echo off',
-  'set "state=%DSH_STUB_STATE%"',
-  'set n=0',
-  'if exist "%state%\\calls" set /p n=<"%state%\\calls"',
-  'set /a n=%n%+1',
-  '>"%state%\\calls" echo %n%',
-  '>>"%state%\\argv" echo %*',
-  'if "%DSH_TUI_RESUME_SESSION%"=="" (>>"%state%\\env" echo resume=none) else (>>"%state%\\env" echo resume=SET)',
-  'if "%1"=="--version" goto :version',
-  'if "%1"=="--profile" goto :profile',
-  'if "%1"=="plugin" goto :plugin',
-  'exit /b 0',
-  ':version',
-  'if "%DSH_STUB_VERSION%"=="" echo 9.9.9',
-  'if not "%DSH_STUB_VERSION%"=="" echo %DSH_STUB_VERSION%',
-  'if "%DSH_STUB_PROBE_EXIT%"=="" exit /b 0',
-  'exit /b %DSH_STUB_PROBE_EXIT%',
-  ':profile',
-  'if "%DSH_STUB_PROFILE_EXIT%"=="" exit /b 0',
-  'exit /b %DSH_STUB_PROFILE_EXIT%',
-  ':plugin',
-  'set a=0',
-  'if exist "%state%\\adds" set /p a=<"%state%\\adds"',
-  'set /a a=%a%+1',
-  '>"%state%\\adds" echo %a%',
-  'if "%DSH_STUB_ADDING_TO_ROOT%"=="" goto :install',
-  'if not "%a%"=="1" goto :install',
-  'echo ERR_PNPM_ADDING_TO_ROOT stub 1>&2',
-  'exit /b 1',
-  ':install',
-  'if not "%DSH_STUB_PLUGIN_EXIT%"=="" exit /b %DSH_STUB_PLUGIN_EXIT%',
-  'if not "%DSH_STUB_NOOP%"=="" exit /b 0',
-  'set "root=%DSH_HOME%\\profiles\\dsh-tui-safe"',
-  'if not exist "%root%" mkdir "%root%"',
-  'if exist "%state%\\manifest.json" copy /y "%state%\\manifest.json" "%root%\\package.json" >nul',
-  'set "d=%root%\\node_modules\\@deepseek-harness-tui\\dsh-tui"',
-  'if not exist "%d%" mkdir "%d%"',
-  '>"%d%\\package.json" echo {"name":"@deepseek-harness-tui/dsh-tui","version":"stub"}',
-  'exit /b 0',
-  '',
-].join('\r\n')
+// stub 的「安装」模拟真实 `dsh plugin add` 的两个落点：profile 根 package.json
+// 与 node_modules 深处的插件包——启动器的就绪判定与救援干净性门禁分别读这两处。
+//
+// 逻辑只有一份（Node 模块），外壳按平台分两种：POSIX 用 sh 转发，Windows 用
+// 批处理转发。两者都用**绝对路径**调 node（POSIX 用 sh 内建的 exec，Windows 直接
+// 引号调用），因此 stub 不需要 PATH 上有任何东西——PATH 必须保持「只有 stub
+// 目录」才能保证沙箱里看不到宿主真的 dsh，而 sh/批处理里那些 coreutils
+// （cat/mkdir/cp）恰恰不在里面。第一版把逻辑写在 sh/批处理里就踩了这个坑：
+// Windows 绿、Linux/macOS 红。
+const STUB_MODULE = `import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const state = process.env.DSH_STUB_STATE
+const argv = process.argv.slice(2)
+const read = name => (existsSync(join(state, name)) ? readFileSync(join(state, name), 'utf8').trim() : '')
+const bump = name => {
+  const next = Number(read(name) || 0) + 1
+  writeFileSync(join(state, name), String(next))
+  return next
+}
+bump('calls')
+appendFileSync(join(state, 'argv'), argv.join(' ') + '\\n')
+appendFileSync(join(state, 'env'), 'resume=' + (process.env.DSH_TUI_RESUME_SESSION ?? 'none') + '\\n')
+
+const [command] = argv
+if (command === '--version') {
+  process.stdout.write((process.env.DSH_STUB_VERSION ?? '9.9.9') + '\\n')
+  process.exit(Number(process.env.DSH_STUB_PROBE_EXIT ?? 0))
+}
+if (command === '--profile') {
+  const signal = process.env.DSH_STUB_PROFILE_SIGNAL
+  if (signal !== undefined && signal !== '') {
+    process.kill(process.pid, signal)
+    // 信号默认处置会立刻终止本进程；万一没有，限时退出让断言明确失败而不是挂住。
+    setTimeout(() => process.exit(0), 200)
+    await new Promise(() => {})
+  }
+  process.exit(Number(process.env.DSH_STUB_PROFILE_EXIT ?? 0))
+}
+if (command === 'plugin') {
+  const adds = bump('adds')
+  if (process.env.DSH_STUB_ADDING_TO_ROOT && adds === 1) {
+    process.stderr.write('ERR_PNPM_ADDING_TO_ROOT stub\\n')
+    process.exit(1)
+  }
+  if (process.env.DSH_STUB_PLUGIN_EXIT) process.exit(Number(process.env.DSH_STUB_PLUGIN_EXIT))
+  if (process.env.DSH_STUB_NOOP) process.exit(0)
+  const pkgDir = join(process.env.DSH_HOME, 'profiles', 'dsh-tui-safe', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  mkdirSync(pkgDir, { recursive: true })
+  const manifest = join(state, 'manifest.json')
+  if (existsSync(manifest)) copyFileSync(manifest, join(pkgDir, '..', '..', '..', 'package.json'))
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: 'stub' }))
+  process.exit(0)
+}
+process.exit(0)
+`
+// 外壳只做转发，两个平台都不依赖 PATH：POSIX 用 sh 内建 exec，Windows 直接
+// 引号调用（批处理里不要用嵌套括号块——`exit /b` 落在嵌套块里退出码会被吞）。
+const shellFor = modulePath =>
+  isWin
+    ? ['@echo off', `"${process.execPath}" "${modulePath}" %*`, 'exit /b %ERRORLEVEL%', ''].join('\r\n')
+    : ['#!/bin/sh', `exec "${process.execPath}" "${modulePath}" "$@"`, ''].join('\n')
 
 let stubSeq = 0
 const makeStub = () => {
@@ -180,8 +153,10 @@ const makeStub = () => {
   stubSeq++
   mkdirSync(dir, { recursive: true })
   mkdirSync(state, { recursive: true })
+  const module = join(dir, 'stub.mjs')
+  writeFileSync(module, STUB_MODULE)
   const file = join(dir, isWin ? 'dsh.cmd' : 'dsh')
-  writeFileSync(file, isWin ? WIN_STUB : POSIX_STUB)
+  writeFileSync(file, shellFor(module))
   // stub「安装」时复制到 profile 根 manifest 的那份内容（真实 dsh 也写它）。
   writeFileSync(join(state, 'manifest.json'), JSON.stringify(cleanManifest))
   if (!isWin) chmodSync(file, 0o755)
@@ -277,7 +252,9 @@ const cleanManifest = {
   const runFb = (env = {}) => run([], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', ...env })
   {
     const r = runFb()
-    check('fallback: exit 0 无提示', r.status === 0 && !r.stderr.includes('safe'), `status=${r.status}`)
+    // 判「有没有 safe 提示」必须断真正的提示串：沙箱临时目录叫 verify-safe-*，
+    // 用 includes('safe') 会把任何带路径的子进程噪声当成提示（假敏感）。
+    check('fallback: exit 0 无提示', r.status === 0 && !r.stderr.includes('dsh-tui safe'), `status=${r.status}`)
   }
   {
     const r = runFb({ DSH_STUB_PROFILE_EXIT: '42' })
@@ -296,7 +273,7 @@ const cleanManifest = {
   } else {
     // 信号场景：stub 自杀 SIGINT → 启动器 self-kill 透传，无提示。
     const r = runFb({ DSH_STUB_PROFILE_SIGNAL: 'INT' })
-    check('fallback: 信号透传且无 safe 提示', r.status === null && r.signal === 'SIGINT' && !r.stderr.includes('safe'), `signal=${r.signal}`)
+    check('fallback: 信号透传且无 safe 提示', r.status === null && r.signal === 'SIGINT' && !r.stderr.includes('dsh-tui safe'), `signal=${r.signal}`)
   }
 }
 
