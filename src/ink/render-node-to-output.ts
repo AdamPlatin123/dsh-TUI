@@ -6,7 +6,7 @@ import getMaxWidth from './get-max-width.js'
 import type { Rectangle } from './layout/geometry.js'
 import type { CachedLayout } from './node-cache.js'
 import { LayoutDisplay, LayoutEdge, type LayoutNode } from './layout/node.js'
-import { nodeCache, pendingClears } from './node-cache.js'
+import { nodeCache, pendingClears, textPaintCache } from './node-cache.js'
 import type Output from './output.js'
 import renderBorder from './render-border.js'
 import type { Screen } from './screen.js'
@@ -932,6 +932,14 @@ function renderNodeToOutput(
       return
     }
 
+    // Text is a paint leaf: unlike boxes, it cannot own an escaping overlay.
+    // Keep the old-position cleanup above, but cull before squash/wrap/style.
+    if (node.nodeName === 'ink-text' && width > 0 && height > 0 && !output.isRectVisible(x, y, width, height)) {
+      nodeCache.delete(node)
+      node.dirty = false
+      return
+    }
+
     if (node.nodeName === 'ink-raw-ansi') {
       // Pre-rendered ANSI content. The producer already wrapped to width and
       // emitted terminal-ready escape codes. Skip squash, measure, wrap, and
@@ -941,83 +949,101 @@ function renderNodeToOutput(
         output.write(x, y, text)
       }
     } else if (node.nodeName === 'ink-text') {
-      const segments = squashTextNodesToSegments(
-        node,
-        inheritedBackgroundColor
-          ? { backgroundColor: inheritedBackgroundColor }
-          : undefined,
-      )
+      // A partially visible long block moves on every scroll/stream frame.
+      // Node blits cannot reuse it at a new y, but its prepared lines can.
+      // Keep one current preparation, independent of the shared wrap LRU
+      // (a single large tool/code block can overflow that cache by itself).
+      const maxWidth = Math.min(getMaxWidth(yogaNode), output.width - x)
+      const paddingNode = node.childNodes[0]?.yogaNode
+      const paddingLeft = paddingNode?.getComputedLeft() ?? 0
+      const paddingTop = paddingNode?.getComputedTop() ?? 0
+      const prepared = textPaintCache.get(node)
+      if (
+        prepared !== undefined &&
+        prepared.maxWidth === maxWidth &&
+        prepared.background === inheritedBackgroundColor &&
+        prepared.paddingLeft === paddingLeft &&
+        prepared.paddingTop === paddingTop
+      ) {
+        output.write(x, y, prepared.text, prepared.softWrap, prepared.lines)
+      } else {
+        const segments = squashTextNodesToSegments(
+          node,
+          inheritedBackgroundColor
+            ? { backgroundColor: inheritedBackgroundColor }
+            : undefined,
+        )
 
-      // First, get plain text to check if wrapping is needed
-      const plainText = segments.map(s => s.text).join('')
+        // First, get plain text to check if wrapping is needed
+        const plainText = segments.map(s => s.text).join('')
 
-      if (plainText.length > 0) {
-        // Upstream Ink uses getMaxWidth(yogaNode) unclamped here. That
-        // width comes from Yoga's AtMost pass and can exceed the actual
-        // screen space (see getMaxWidth docstring). Yoga's height for this
-        // node already reflects the constrained Exactly pass, so clamping
-        // the wrap width here keeps line count consistent with layout.
-        // Without this, characters past the screen edge are dropped by
-        // setCellAt's bounds check.
-        const maxWidth = Math.min(getMaxWidth(yogaNode), output.width - x)
-        const textWrap = node.style.textWrap ?? 'wrap'
+        if (plainText.length > 0) {
+          // Use the same content constraint as measurement, not the rounded
+          // pixel-grid box. Offscreen overflow still clips at the terminal edge.
+          const textWrap = node.style.textWrap ?? 'wrap'
 
-        // Check if wrapping is needed
-        const needsWrapping = widestLine(plainText) > maxWidth
+          // Check if wrapping is needed
+          const needsWrapping = widestLine(plainText) > maxWidth
 
-        let text: string
-        let softWrap: boolean[] | undefined
-        if (needsWrapping && segments.length === 1) {
-          // Single segment: wrap plain text first, then apply styles to each line
-          const segment = segments[0]!
-          const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
-          softWrap = w.softWrap
-          text = w.wrapped
-            .split('\n')
-            .map(line => {
-              let styled = applyTextStyles(line, segment.styles)
-              // Apply OSC 8 hyperlink per-line so each line is independently
-              // clickable. output.ts splits on newlines and tokenizes each
-              // line separately, so a single wrapper around the whole block
-              // would only apply the hyperlink to the first line.
-              if (segment.hyperlink) {
-                styled = wrapWithOsc8Link(styled, segment.hyperlink)
-              }
-              return styled
-            })
-            .join('\n')
-        } else if (needsWrapping) {
-          // Multiple segments with wrapping: wrap plain text first, then re-apply
-          // each segment's styles based on character positions. This preserves
-          // per-segment styles even when text wraps across lines.
-          const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
-          softWrap = w.softWrap
-          const charToSegment = buildCharToSegmentMap(segments)
-          text = applyStylesToWrappedText(
-            w.wrapped,
-            segments,
-            charToSegment,
-            plainText,
-            textWrap === 'wrap-trim',
-          )
-          // Hyperlinks are handled per-run in applyStylesToWrappedText via
-          // wrapWithOsc8Link, similar to how styles are applied per-run.
-        } else {
-          // No wrapping needed: apply styles directly
-          text = segments
-            .map(segment => {
-              let styledText = applyTextStyles(segment.text, segment.styles)
-              if (segment.hyperlink) {
-                styledText = wrapWithOsc8Link(styledText, segment.hyperlink)
-              }
-              return styledText
-            })
-            .join('')
+          let text: string
+          let softWrap: boolean[] | undefined
+          if (needsWrapping && segments.length === 1) {
+            // Single segment: wrap plain text first, then apply styles to each line
+            const segment = segments[0]!
+            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            softWrap = w.softWrap
+            text = w.wrapped
+              .split('\n')
+              .map(line => {
+                let styled = applyTextStyles(line, segment.styles)
+                // Apply OSC 8 hyperlink per-line so each line is independently
+                // clickable. output.ts splits on newlines and tokenizes each
+                // line separately, so a single wrapper around the whole block
+                // would only apply the hyperlink to the first line.
+                if (segment.hyperlink) {
+                  styled = wrapWithOsc8Link(styled, segment.hyperlink)
+                }
+                return styled
+              })
+              .join('\n')
+          } else if (needsWrapping) {
+            // Multiple segments with wrapping: wrap plain text first, then re-apply
+            // each segment's styles based on character positions. This preserves
+            // per-segment styles even when text wraps across lines.
+            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            softWrap = w.softWrap
+            const charToSegment = buildCharToSegmentMap(segments)
+            text = applyStylesToWrappedText(
+              w.wrapped,
+              segments,
+              charToSegment,
+              plainText,
+              textWrap === 'wrap-trim',
+            )
+            // Hyperlinks are handled per-run in applyStylesToWrappedText via
+            // wrapWithOsc8Link, similar to how styles are applied per-run.
+          } else {
+            // No wrapping needed: apply styles directly
+            text = segments
+              .map(segment => {
+                let styledText = applyTextStyles(segment.text, segment.styles)
+                if (segment.hyperlink) {
+                  styledText = wrapWithOsc8Link(styledText, segment.hyperlink)
+                }
+                return styledText
+              })
+              .join('')
+          }
+
+          text = applyPaddingToText(node, text, softWrap)
+
+          const lines = text.split('\n')
+          textPaintCache.set(node, {
+            maxWidth, background: inheritedBackgroundColor, paddingLeft, paddingTop,
+            text, lines, softWrap,
+          })
+          output.write(x, y, text, softWrap, lines)
         }
-
-        text = applyPaddingToText(node, text, softWrap)
-
-        output.write(x, y, text, softWrap)
       }
     } else if (
       node.nodeName === 'ink-image' &&
@@ -1029,13 +1055,26 @@ function renderNodeToOutput(
       // rect, though, and those non-default-background cells would also hide
       // the image itself. Replace only the image-owned cells with default-
       // background spaces; layout and surrounding inherited color stay intact.
+      //
+      // Sixel paints the raster OVER the cells instead, so its backing may
+      // (and must) carry the surface background: the raster covers those
+      // cells anyway, and terminal-default blanks would show as black holes
+      // wherever the raster misses a cell — aspect rounding at the right
+      // edge, or a suppressed placement whose cells the frame no longer
+      // repaints.
       const imageWidth = Math.floor(width)
       const imageHeight = Math.floor(height)
+      const backingColor = output.opaqueImageBacking
+        ? node.style.backgroundColor ?? inheritedBackgroundColor
+        : undefined
       const imageLine = ' '.repeat(imageWidth)
+      const fillLine = backingColor === undefined
+        ? imageLine
+        : applyTextStyles(imageLine, { backgroundColor: backingColor })
       output.write(
         Math.floor(x),
         Math.floor(y),
-        Array(imageHeight).fill(imageLine).join('\n'),
+        Array(imageHeight).fill(fillLine).join('\n'),
       )
       output.imageBacking(node)
       for (const child of node.childNodes) {
@@ -1148,10 +1187,27 @@ function renderNodeToOutput(
         // Capture previous scroll bounds BEFORE overwriting — the at-bottom
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight
-        const prevInnerHeight = node.scrollViewportHeight ?? innerHeight
+        const prevViewportHeight = node.scrollViewportHeight
+        const prevInnerHeight = prevViewportHeight ?? innerHeight
         const prevViewportTop = node.scrollViewportTop
         node.scrollHeight = scrollHeight
         node.scrollViewportHeight = innerHeight
+        // Viewport-height change is the one geometry move no scroll notify
+        // covers: chrome above/below the box mounts or unmounts (pill,
+        // pinned header, recap row) or the terminal changes row count —
+        // the viewport resizes with no scroll delta and no sticky flip,
+        // while subscribers that paint from the handle's bounds still hold
+        // the previous pass's geometry. Fire only on a real transition
+        // between two passes: a first frame (`undefined`) observed no
+        // change, and scrollTop/scrollViewportTop motion is excluded on
+        // purpose (see DOMElement.onViewportHeightChange). Called in the
+        // render pass like onStickyRestore below.
+        if (
+          prevViewportHeight !== undefined &&
+          prevViewportHeight !== innerHeight
+        ) {
+          node.onViewportHeightChange?.()
+        }
         // Absolute screen-buffer row where the scrollable area (inside
         // padding) begins. Exposed via ScrollBoxHandle.getViewportTop() so
         // drag-to-scroll can detect when the drag leaves the scroll viewport.
@@ -1643,11 +1699,12 @@ function renderNodeToOutput(
                   Math.floor(contentY + childBottom),
                   Math.floor((y1 ?? y) + padTop + innerHeight),
                 )
-                if (screenY < screenBottom) {
-                  const fill = Array(screenBottom - screenY)
+                const fillTop = Math.max(screenY, top)
+                if (fillTop < screenBottom) {
+                  const fill = Array(screenBottom - fillTop)
                     .fill(spaces)
                     .join('\n')
-                  output.write(Math.floor(x), screenY, fill)
+                  output.write(Math.floor(x), fillTop, fill)
                   output.clip({
                     x1: undefined,
                     x2: undefined,
@@ -1774,7 +1831,18 @@ function renderNodeToOutput(
         }
         const ownBackgroundColor =
           node.style.backgroundColor ?? occlusionBackground
-        if (ownBackgroundColor || node.style.opaque) {
+        // A Sixel image node owns cells the raster normally paints over. When
+        // no placement is admitted — the modal suppressed graphics, the decode
+        // is still pending, or it failed — those cells must still read as the
+        // enclosing surface: the admitted branch above painted them with the
+        // same inherited color, so leaving them unwritten would diff them back
+        // to terminal-default blanks and punch black holes in the card.
+        const imageSurfaceColor =
+          output.opaqueImageBacking && node.nodeName === 'ink-image'
+            ? ownBackgroundColor ?? inheritedBackgroundColor
+            : undefined
+        const fillColor = ownBackgroundColor ?? imageSurfaceColor
+        if (fillColor || node.style.opaque) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
           const borderRight = yogaNode.getComputedBorder(LayoutEdge.Right)
           const borderTop = yogaNode.getComputedBorder(LayoutEdge.Top)
@@ -1783,8 +1851,8 @@ function renderNodeToOutput(
           const innerHeight = Math.floor(height) - borderTop - borderBottom
           if (innerWidth > 0 && innerHeight > 0) {
             const spaces = ' '.repeat(innerWidth)
-            const fillLine = ownBackgroundColor
-              ? applyTextStyles(spaces, { backgroundColor: ownBackgroundColor })
+            const fillLine = fillColor
+              ? applyTextStyles(spaces, { backgroundColor: fillColor })
               : spaces
             const fill = Array(innerHeight).fill(fillLine).join('\n')
             output.write(x + borderLeft, y + borderTop, fill)
@@ -1822,7 +1890,17 @@ function renderNodeToOutput(
       // Render border AFTER children to ensure it's not overwritten by child
       // clearing operations. When a child shrinks, it clears its old area,
       // which may overlap with where the parent's border now is.
-      renderBorder(x, y, node, output)
+      // A border's cells belong to the surface it frames: pass the node's
+      // effective background so they never fall back to the terminal default
+      // (a black frame around a colored surface, and a black hole where a
+      // Sixel raster is otherwise exposed by a border row or column).
+      renderBorder(
+        x,
+        y,
+        node,
+        output,
+        node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor,
+      )
     } else if (node.nodeName === 'ink-root') {
       renderChildren(
         node,

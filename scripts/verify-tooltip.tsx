@@ -14,6 +14,12 @@
  *   7. an anchor at the top of the screen drops the tooltip BELOW instead
  *   8. terminal resize hides the shown tooltip (stale geometry)
  *   9. a narrow terminal clamps the card inside the screen width
+ *  10. an ultra-narrow terminal still renders a bounded card
+ *  11. copy interference: a wrapped user prompt never arms a tooltip (its
+ *      text is fully visible; the card would also REPLACE its cells, so a
+ *      drag-copy crossing it yields the tooltip fragment), and any active
+ *      text selection forces the whole layer dark until the selection
+ *      settles — then hover behavior recovers
  *
  * Run: `node --import tsx/esm scripts/verify-tooltip.tsx`
  * Exits 1 on any failed assertion.
@@ -31,13 +37,17 @@ const dataDir = mkdtempSync(join(tmpdir(), 'verify-tooltip-data-'))
 process.env.HOME = dataDir
 process.env.USERPROFILE = dataDir
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest, userPrompt, instancesMod, { PageMargin }, displayPrefs] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/Tooltip.js'),
   import('./lib/term-test.mjs'),
+  import('../src/components/messages/UserPromptMessage.js'),
+  import('../src/ink/instances.js'),
+  import('../src/components/PageMargin.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
 
 const { sleep, settle, settled, screenHas, findText, viewportLines } = termTest
@@ -90,6 +100,25 @@ function TinyProbe(): React.ReactNode {
   return (
     <Box flexDirection="column">
       <Target label="T" content={'\x1b[31mWIDE\x1b[0m'} delayMs={0} />
+      <KeySink />
+      <tooltip.TooltipLayer />
+    </Box>
+  )
+}
+
+/** Scenario 11 rig: two plain targets, a real wrapped user prompt, and the
+ * layer. No useCopyOnSelect here — the released selection must SURVIVE so
+ * the dark-while-selected path is observable. */
+function SelectionProbe(): React.ReactNode {
+  return (
+    <Box flexDirection="column">
+      <Target label="SEL-ONE" content="SEL-TIP-ONE" />
+      <Target label="SEL-TWO" content="SEL-TIP-TWO" />
+      <userPrompt.UserPromptMessage
+        text={'PROMPT-A-PART-ONE\nPROMPT-B-PART-TWO'}
+        marginTopOnTurn={false}
+      />
+      <Text>PROMPT-TAIL</Text>
       <KeySink />
       <tooltip.TooltipLayer />
     </Box>
@@ -155,6 +184,28 @@ try {
   const tipTopRow = findText(term, 'TIP-TOP-MARKER')?.row ?? -1
   check('top-of-screen anchor drops the tooltip below', tipTopRow > topRow,
     `anchor=${topRow} tip=${tipTopRow}`)
+
+  // The card's border ring belongs to the same surface as its interior. A ring
+  // left at the terminal default is the black frame around the popup — and on
+  // Windows Terminal it is what showed through the old Sixel preview card.
+  {
+    const borderRow = term.buffer.active.getLine(tipTopRow - 1)
+    const contentRow = term.buffer.active.getLine(tipTopRow)
+    const contentX = findText(term, 'TIP-TOP-MARKER')?.col ?? -1
+    const borderLeft = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => borderRow?.getCell(x)?.getChars() === '╭')
+    const borderRight = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => borderRow?.getCell(x)?.getChars() === '╮')
+    const surface = contentRow?.getCell(contentX)?.getBgColor()
+    check('tooltip interior paints a surface color', surface !== undefined && surface !== 0,
+      `bg=${surface?.toString(16)}`)
+    let ringOk = borderLeft !== undefined && borderRight !== undefined
+    for (let x = borderLeft ?? 0; ringOk && x <= (borderRight ?? -1); x++) {
+      if (borderRow?.getCell(x)?.getBgColor() !== surface) ringOk = false
+    }
+    check('tooltip border ring keeps the surface background', ringOk,
+      `border=${borderLeft}..${borderRight} surface=${surface?.toString(16)}`)
+  }
 
   // 3. Leaving hides it.
   hover(stdin, COLS - 1, ROWS - 1)
@@ -251,6 +302,119 @@ try {
       !viewportLines(rig3.term).some(line => /\[(?:31|0)m/u.test(line)),
     JSON.stringify(tinyLines))
   await instance3.unmount()
+
+  // 11. Copy interference (the drag-copy reads the PAINTED screen; a tooltip
+  // card replaces the cells it covers, so any card alive during a selection
+  // drag corrupts the clipboard).
+  const R4 = 30
+  const rig4 = makeRig(COLS, R4)
+  const instance4 = await render(
+    <AlternateScreen>
+      <SelectionProbe />
+    </AlternateScreen>,
+    { stdout: rig4.stdout, stdin: rig4.stdin, stderr: new (class extends Writable {
+      isTTY = true
+      _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+    })(), exitOnCtrlC: false, patchConsole: false },
+  )
+  // useSelection resolves the Ink instance via instances.get(process.stdout);
+  // this rig renders to a fake stdout, so alias the key and re-render, or
+  // TooltipLayer's selection subscription silently binds to the no-op stub
+  // (same workaround as verify-copy-on-select.mjs).
+  const ink4 = instancesMod.default.get(rig4.stdout)
+  if (ink4) instancesMod.default.set(process.stdout, ink4)
+  instance4.rerender(
+    <AlternateScreen>
+      <SelectionProbe />
+    </AlternateScreen>,
+  )
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
+  const r4 = { term: rig4.term, stdin: rig4.stdin }
+  const selOneRow = findText(r4.term, 'SEL-ONE')?.row ?? -1
+  const selTwoRow = findText(r4.term, 'SEL-TWO')?.row ?? -1
+  const promptRow = findText(r4.term, 'PROMPT-A-PART-ONE')?.row ?? -1
+  check('selection probe rows are laid out', selOneRow >= 0 && selTwoRow > selOneRow && promptRow > selTwoRow,
+    `one=${selOneRow} two=${selTwoRow} prompt=${promptRow}`)
+
+  // 11a. A wrapped user prompt is fully visible — dwelling on it must never
+  // even write the tooltip store (pre-fix it armed a card that repeated the
+  // on-screen text and hijacked drag-copies crossing it).
+  hover(r4.stdin, 3, promptRow + 1)
+  await sleep(800) // 固定窗:墙钟 停满默认 dwell，验证用户消息永不写悬浮 store
+  check('wrapped user prompt never arms a tooltip', tooltip.getTooltipSnapshot() === null)
+  hover(r4.stdin, COLS - 1, R4 - 1)
+
+  // 11b. A shown tooltip dies the moment a selection drag starts.
+  hover(r4.stdin, 3, selOneRow + 1)
+  check('tooltip shows before the drag', await settled(() => screenHas(r4.term, 'SEL-TIP-ONE')))
+  r4.stdin.write(`\x1b[<0;3;${selOneRow + 1}M`) // press → selection drag starts
+  check('drag start hides the shown tooltip', await settled(() => !screenHas(r4.term, 'SEL-TIP-ONE')))
+  check('drag start cleared the tooltip store', tooltip.getTooltipSnapshot() === null)
+
+  // While the button is held, no dwell may paint: drag onto SEL-TWO and
+  // hold — the store must stay empty (every motion re-clears it).
+  r4.stdin.write(`\x1b[<32;3;${selTwoRow + 1}M`) // drag motion
+  await sleep(200) // 固定窗:pacing 等拖动帧上屏，给中途 dwell 留出触发窗
+  check('no tooltip paints mid-drag', !screenHas(r4.term, 'SEL-TIP-TWO') &&
+    tooltip.getTooltipSnapshot() === null)
+
+  // Release settles the selection (no copy hook mounted in this probe, so
+  // the selection survives). A dwell armed AFTER the release must really
+  // fire (store written) yet stay unpainted while the selection exists —
+  // that is the render guard doing its job, not a dead probe.
+  r4.stdin.write(`\x1b[<0;3;${selTwoRow + 1}m`) // release
+  // The renderer's hovered node never moved during the drag (button events
+  // don't dispatch hover), so re-entering SEL-ONE would fire nothing — hop
+  // to the OTHER target so a real mouseenter arms a fresh dwell.
+  hover(r4.stdin, 5, selTwoRow + 1)
+  await sleep(800) // 固定窗:墙钟 停满默认 dwell，验证计时器触发也画不上屏
+  check('an active selection keeps the fired dwell off the screen',
+    !screenHas(r4.term, 'SEL-TIP-TWO') && !screenHas(r4.term, 'SEL-TIP-ONE'))
+  check('the dwell really fired (the guard held it back)',
+    tooltip.getTooltipSnapshot()?.content === 'SEL-TIP-TWO')
+
+  // Clearing the selection (what copy-on-select does after copying) wipes
+  // the pending card instead of popping it, and hover behavior recovers.
+  instancesMod.default.get(rig4.stdout)?.clearTextSelection()
+  check('selection settle wipes the pending tooltip', tooltip.getTooltipSnapshot() === null)
+  hover(r4.stdin, COLS - 1, R4 - 1)
+  await sleep(150) // 固定窗:pacing 离开目标触发 mouseleave，再折返重新进入
+  hover(r4.stdin, 3, selTwoRow + 1)
+  check('layer recovers after the selection clears', await settled(() => screenHas(r4.term, 'SEL-TIP-TWO')))
+  await instance4.unmount()
+  instancesMod.default.delete(process.stdout)
+
+  // 12. Page margin: the pointer anchor is screen geometry while the absolute
+  // card lives in the inset content area (useTerminalSize() already reports the
+  // content size). Adding the inset instead of subtracting it pushed the card
+  // one row low and two columns right on the default margin, so its bottom
+  // border landed ON the hovered row and that row's glyphs showed beside it.
+  displayPrefs.applyPageMargin('normal')
+  const MARGIN_COLS = 60
+  const MARGIN_ROWS = 20
+  const rig5 = makeRig(MARGIN_COLS, MARGIN_ROWS)
+  const instance5 = await render(
+    <AlternateScreen>
+      <PageMargin><Probe /></PageMargin>
+    </AlternateScreen>,
+    { stdout: rig5.stdout, stdin: rig5.stdin, stderr: new (class extends Writable {
+      isTTY = true
+      _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+    })(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
+  const anchorRow = findText(rig5.term, 'ROW-TWO')?.row ?? -1
+  hover(rig5.stdin, 5, anchorRow + 1)
+  const marginShown = await settled(() => screenHas(rig5.term, 'multi-first-line'))
+  check('page margin: tooltip appears', marginShown)
+  const markerRow = findText(rig5.term, 'multi-first-line')?.row ?? -1
+  const bottomRow = Array.from({ length: MARGIN_ROWS }, (_, y) => y).find(y =>
+    y > markerRow && (rig5.term.buffer.active.getLine(y)?.translateToString(true) ?? '').includes('╰')) ?? -1
+  const bottomLine = rig5.term.buffer.active.getLine(bottomRow)?.translateToString(true) ?? ''
+  check('page margin: card rests directly above the hovered row',
+    marginShown && bottomRow === anchorRow - 1 && bottomLine.includes('╰'),
+    `anchor=${anchorRow} marker=${markerRow} bottom=${bottomRow} line=${JSON.stringify(bottomLine.trim())}`)
+  await instance5.unmount()
 } finally {
   rmSync(dataDir, { recursive: true, force: true })
 }

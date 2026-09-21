@@ -31,6 +31,7 @@ import {
   type CellRun,
 } from './screen.js'
 import { stringWidth } from './stringWidth.js'
+import { expandTabs } from './tabstops.js'
 import type { DOMElement } from './dom.js'
 import {
   TERMINAL_IMAGE_MAX_CELLS,
@@ -186,6 +187,14 @@ type Options = {
   /** Paint image fallbacks as blank backing cells and collect placements. */
   terminalImages?: boolean
   imageReady?: (placement: TerminalImagePlacement) => boolean
+  /**
+   * True when the active protocol paints rasters OVER the cell grid (Sixel)
+   * instead of behind it (Kitty). Image-owned cells must then carry the
+   * surface background: the raster covers them anyway, and terminal-default
+   * blanks would show as black holes wherever a raster fails to cover a cell
+   * (aspect rounding, suppressed/occluded placements).
+   */
+  opaqueImageBacking?: boolean
   /** Image requests from the diff baseline, reused by clean subtree blits. */
   previousImages?: readonly TerminalImagePlacement[]
 }
@@ -217,6 +226,8 @@ type WriteOperation = {
   x: number
   y: number
   text: string
+  /** Prepared physical lines, reused by unchanged Text nodes across scrolls. */
+  lines?: readonly string[]
   /**
    * Per-line soft-wrap flags, parallel to text.split('\n'). softWrap[i]=true
    * means line i is a continuation of line i-1 (the `\n` before it was
@@ -482,6 +493,79 @@ function buildClusteredChars(
 }
 
 /**
+ * The screen rect a paint operation covers, when it can occlude a raster
+ * painted earlier in the same frame. `clip`/`unclip`/`noSelect` paint nothing.
+ */
+function imageOcclusionRect(op: Operation, width: number): Rectangle | undefined {
+  if (op.type === 'write') {
+    return { x: op.x, y: op.y, width: widestLine(op.text), height: op.lines?.length ?? op.text.split('\n').length }
+  }
+  if (op.type === 'blit') return op
+  if (op.type === 'clear' || op.type === 'shade') return op.region
+  if (op.type === 'shift') return { x: 0, y: op.top, width, height: op.bottom - op.top + 1 }
+  return undefined
+}
+
+/**
+ * The union of two rects, but only when that union covers no cell the pair did
+ * not already cover between them. Two rects qualify when one contains the
+ * other, or when they are bands sharing a full edge span (same x-span and
+ * abutting/overlapping rows, or the transpose) — exactly the pairs whose union
+ * is itself a rectangle. An L-shaped pair does not qualify: the bounding box of
+ * its two arms covers cells neither arm covers, and the caller would erase
+ * pixels that are still visible.
+ * @param a - the first rectangle.
+ * @param b - the second rectangle.
+ * @returns their union, or undefined when folding them would add cells.
+ */
+function exactUnion(a: Rectangle, b: Rectangle): Rectangle | undefined {
+  const contains = (outer: Rectangle, inner: Rectangle): boolean =>
+    outer.x <= inner.x && outer.y <= inner.y &&
+    outer.x + outer.width >= inner.x + inner.width &&
+    outer.y + outer.height >= inner.y + inner.height
+  if (contains(a, b)) return a
+  if (contains(b, a)) return b
+  const sameColumns = a.x === b.x && a.width === b.width &&
+    a.y <= b.y + b.height && b.y <= a.y + a.height
+  const sameRows = a.y === b.y && a.height === b.height &&
+    a.x <= b.x + b.width && b.x <= a.x + a.width
+  return sameColumns || sameRows ? unionRect(a, b) : undefined
+}
+
+/**
+ * Fold occluder rects that can be folded without covering anything new, so an
+ * image protocol that has to erase them (Sixel) does not repeat the same cells.
+ * One overlay usually contributes several rects for the same area (interior
+ * fill, border row, text row), and an overlay that covers several placements
+ * would otherwise erase the shared cells once per placement.
+ *
+ * Folding stops at exact unions on purpose. The erasure has to match the cells
+ * an overlay really covers: merging any two intersecting rects into their
+ * bounding box would take down the pixels beside an L-shaped cover, which are
+ * still on screen.
+ */
+function mergeOcclusionRects(rects: readonly Rectangle[]): Rectangle[] {
+  const merged: Rectangle[] = []
+  for (const rect of rects) {
+    let current = rect
+    let joined = true
+    while (joined) {
+      joined = false
+      for (let index = merged.length - 1; index >= 0; index--) {
+        const other = merged[index]!
+        const union = exactUnion(current, other)
+        if (union === undefined) continue
+        current = union
+        merged.splice(index, 1)
+        joined = true
+      }
+    }
+    merged.push(current)
+  }
+  return merged
+}
+
+/**
  * Collects write/blit/clear/clip operations from the render tree, then
  * applies them to a Screen buffer in get(). The Screen is what gets
  * diffed against the previous frame to produce terminal updates.
@@ -494,6 +578,7 @@ export default class Output {
   private readonly stylePool: StylePool
   private screen: Screen
   terminalImagesEnabled: boolean
+  opaqueImageBacking: boolean
   private imageReady: ((placement: TerminalImagePlacement) => boolean) | undefined
 
   private readonly operations: Operation[] = []
@@ -560,6 +645,7 @@ export default class Output {
     this.stylePool = stylePool
     this.screen = screen
     this.terminalImagesEnabled = options.terminalImages ?? false
+    this.opaqueImageBacking = options.opaqueImageBacking ?? false
     this.imageReady = options.imageReady
     this.previousImages = options.previousImages ?? []
 
@@ -583,11 +669,13 @@ export default class Output {
     terminalImages = false,
     previousImages: readonly TerminalImagePlacement[] = [],
     imageReady?: (placement: TerminalImagePlacement) => boolean,
+    opaqueImageBacking = false,
   ): void {
     this.width = width
     this.height = height
     this.screen = screen
     this.terminalImagesEnabled = terminalImages
+    this.opaqueImageBacking = opaqueImageBacking
     this.imageReady = imageReady
     this.previousImages = previousImages
     this.operations.length = 0
@@ -794,18 +882,34 @@ export default class Output {
       const end = this.imageBackingEnds.get(placement.node)
       if (end === undefined) return placement
       const visible = placement.clip ?? placement
-      const overlaps = (rect: Rectangle): boolean => rect.x < visible.x + visible.columns &&
-        rect.x + rect.width > visible.x && rect.y < visible.y + visible.rows &&
-        rect.y + rect.height > visible.y
-      const occluded = this.operations.slice(end).some(op => {
-        if (op.type === 'write') return overlaps({ x: op.x, y: op.y,
-          width: widestLine(op.text), height: op.text.split('\n').length })
-        if (op.type === 'blit') return overlaps(op)
-        if (op.type === 'clear' || op.type === 'shade') return overlaps(op.region)
-        if (op.type === 'shift') return overlaps({ x: 0, y: op.top, width: this.width, height: op.bottom - op.top + 1 })
-        return false
-      })
-      return { ...placement, occluded }
+      const right = visible.x + visible.columns
+      const bottom = visible.y + visible.rows
+      const overlaps = (rect: Rectangle): boolean => rect.x < right &&
+        rect.x + rect.width > visible.x && rect.y < bottom && rect.y + rect.height > visible.y
+      // A later paint that covers the whole visible rect makes the raster
+      // unreachable and erasing is the only correct outcome (a blank `opaque`
+      // overlay would otherwise be pierced by the pixels beneath it). A paint
+      // that covers only part of it must not take the rest of the raster down
+      // with it — SixelGraphicsManager keeps those pixels instead.
+      const covers = (rect: Rectangle): boolean =>
+        rect.x <= visible.x && rect.y <= visible.y &&
+        rect.x + rect.width >= right && rect.y + rect.height >= bottom
+      let occluded = false
+      let covered = false
+      const occluders: Rectangle[] = []
+      for (const op of this.operations.slice(end)) {
+        const rect = imageOcclusionRect(op, this.width)
+        if (rect === undefined || !overlaps(rect)) continue
+        occluded = true
+        if (covers(rect)) {
+          covered = true
+          break
+        }
+        occluders.push(rect)
+      }
+      if (!occluded) return placement
+      if (covered) return { ...placement, occluded, occludedFully: true }
+      return { ...placement, occluded, coveredRects: mergeOcclusionRects(occluders) }
     })
   }
 
@@ -825,8 +929,9 @@ export default class Output {
    * @param y - the top row.
    * @param text - the text to write.
    * @param softWrap - per-line soft-wrap flags parallel to text.split('\n').
+   * @param lines - optional pre-split physical lines, exactly text.split('\n').
    */
-  write(x: number, y: number, text: string, softWrap?: boolean[]): void {
+  write(x: number, y: number, text: string, softWrap?: boolean[], lines?: readonly string[]): void {
     if (!text) {
       return
     }
@@ -837,7 +942,17 @@ export default class Output {
       y,
       text,
       softWrap,
+      lines,
     })
+  }
+
+  /** Whether a rectangle can contribute cells under the current paint clip. */
+  isRectVisible(x: number, y: number, width: number, height: number): boolean {
+    const clip = this.imageClips.at(-1)
+    return x < Math.min(this.width, clip?.x2 ?? this.width) &&
+      x + width > Math.max(0, clip?.x1 ?? 0) &&
+      y < Math.min(this.height, clip?.y2 ?? this.height) &&
+      y + height > Math.max(0, clip?.y1 ?? 0)
   }
 
   /**
@@ -1010,86 +1125,45 @@ export default class Output {
         case 'write': {
           const { text, softWrap } = operation
           let { x, y } = operation
-          let lines = text.split('\n')
-          let swFrom = 0
+          let lines = operation.lines ?? text.split('\n')
           let prevContentEnd = 0
 
           const clip = clips.at(-1)
-
-          if (clip) {
-            const clipHorizontally =
-              typeof clip?.x1 === 'number' && typeof clip?.x2 === 'number'
-
-            const clipVertically =
-              typeof clip?.y1 === 'number' && typeof clip?.y2 === 'number'
-
-            // If text is positioned outside of clipping area altogether,
-            // skip to the next operation to avoid unnecessary calculations
-            if (clipHorizontally) {
-              const width = widestLine(text)
-
-              if (x + width <= clip.x1! || x >= clip.x2!) {
-                continue
-              }
-            }
-
-            if (clipVertically) {
-              const height = lines.length
-
-              if (y + height <= clip.y1! || y >= clip.y2!) {
-                continue
-              }
-            }
-
-            if (clipHorizontally) {
-              lines = lines.map(line => {
-                const from = x < clip.x1! ? clip.x1! - x : 0
-                const width = stringWidth(line)
-                const to = x + width > clip.x2! ? clip.x2! - x : width
-                // Fast path: the line sits entirely inside the clip — no
-                // slice needed. sliceAnsi re-tokenizes the line (the
-                // dominant per-frame cost of long sessions otherwise:
-                // every settled line, every frame).
-                if (from === 0 && to === width) return line
-                let sliced = sliceAnsi(line, from, to)
-                // Wide chars (CJK, emoji) occupy 2 cells. When `to` lands
-                // on the first cell of a wide char, sliceAnsi includes the
-                // entire glyph and the result overflows clip.x2 by one cell,
-                // writing a SpacerTail into the adjacent sibling. Re-slice
-                // one cell earlier; wide chars are exactly 2 cells, so a
-                // single retry always fits.
-                if (stringWidth(sliced) > to - from) {
-                  sliced = sliceAnsi(line, from, to - 1)
-                }
-                return sliced
-              })
-
-              if (x < clip.x1!) {
-                x = clip.x1!
-              }
-            }
-
-            if (clipVertically) {
-              const from = y < clip.y1! ? clip.y1! - y : 0
-              const height = lines.length
-              const to = y + height > clip.y2! ? clip.y2! - y : height
-
-              // If the first visible line is a soft-wrap continuation, we
-              // need the clipped previous line's content end so
-              // screen.softWrap[lineY] correctly records the join point
-              // even though that line's cells were never written.
-              if (softWrap && from > 0 && softWrap[from] === true) {
-                prevContentEnd = x + stringWidth(lines[from - 1]!)
-              }
-
-              lines = lines.slice(from, to)
-              swFrom = from
-
-              if (y < clip.y1!) {
-                y = clip.y1!
-              }
-            }
+          // Clip vertically BEFORE measuring or slicing ANSI lines. A long
+          // tool result/code block may intersect the viewport by one row;
+          // horizontal work over its entire history is still O(transcript).
+          // Screen bounds apply even without an explicit overflow clip.
+          const from = Math.max(0, Math.max(0, clip?.y1 ?? 0) - y)
+          const to = Math.min(lines.length, Math.min(screenHeight, clip?.y2 ?? screenHeight) - y)
+          if (from >= to) continue
+          const swFrom = from
+          const clipHorizontally = typeof clip?.x1 === 'number' && typeof clip?.x2 === 'number'
+          if (clipHorizontally && x >= clip.x2!) continue
+          const clipLine = (line: string): string => {
+            // Width/slicing treat raw tabs as zero cells. Expand at the
+            // ORIGINAL x before clipping, also for the soft-wrap predecessor.
+            line = expandTabs(line, undefined, x)
+            if (!clipHorizontally) return line
+            const start = Math.max(0, clip.x1! - x)
+            const width = stringWidth(line)
+            const end = Math.min(width, clip.x2! - x)
+            if (start >= end) return ''
+            if (start === 0 && end === width) return line
+            let sliced = sliceAnsi(line, start, end)
+            // Do not leave a wide glyph's SpacerTail outside the clip.
+            if (stringWidth(sliced) > end - start) sliced = sliceAnsi(line, start, end - 1)
+            return sliced
           }
+          const writeX = clipHorizontally ? Math.max(x, clip.x1!) : x
+          // Copy joins need only the preceding (horizontally clipped) line,
+          // not every discarded line. Preserve its content-end coordinate.
+          if (softWrap && from > 0 && softWrap[from] === true) {
+            prevContentEnd = writeX + stringWidth(clipLine(lines[from - 1]!))
+          }
+          lines = lines.slice(from, to)
+          if (clipHorizontally) lines = lines.map(clipLine)
+          x = writeX
+          y += from
 
           const swBits = screen.softWrap
           let offsetY = 0

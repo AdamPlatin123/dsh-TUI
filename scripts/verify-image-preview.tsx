@@ -811,7 +811,12 @@ function makeChannel() {
     discardStagedImage() {},
     hasStagedImage: (stageId: string) => staged.has(stageId),
     stagedImage: (stageId: string) => staged.get(stageId),
-    stagedImageLimits: () => ({ maxImageBytes: 1024 * 1024, maxImagesPerMessage: 4 }),
+    stagedImageLimits: () => ({
+      maxImageBytes: 1024 * 1024,
+      maxImagesPerMessage: 4,
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
+    }),
     listModels: () => Promise.resolve([]),
     listSessions: () => [],
     setResumeTarget: () => {},
@@ -863,6 +868,62 @@ function makeChannel() {
     check('draft gallery: disabled graphics never read attachment bytes',
       [...draftGallery.values()].every(image => (readCounts.get(image.id) ?? 0) === 0))
   } finally { stdout.isTTY = false; await app.unmount(); terminal.dispose() }
+}
+
+// #885: a channel whose `stagedImage()` hands out a FRESH facade for the same
+// attachment on every call must not send the preview into a render loop.
+// Every per-commit reporter (PromptInput's caret report, the overlay's zoom
+// view, the inspection session) keys on `image.id`, not facade identity.
+// Needs terminal graphics: the loop only closes through the inspection
+// request path, so this block answers the Kitty/cell-size probes itself.
+{
+  const disabled = process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
+  delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdin = new FakeStdin()
+  const stdout = new (class extends FakeStdout {
+    override _write(chunk: unknown, encoding: BufferEncoding, callback: () => void): void {
+      const text = String(chunk)
+      const replies: string[] = []
+      if (text.includes('\x1b_Gi=31,')) replies.push('\x1b_Gi=31;OK\x1b\\')
+      if (text.includes('\x1b[16t')) replies.push('\x1b[6;20;10t')
+      if (text.includes('\x1b[14t')) replies.push(`\x1b[4;${ROWS * 20};${COLS * 10}t`)
+      if (text.includes('\x1b[c')) replies.push('\x1b[?62;22c')
+      super._write(chunk, encoding, () => { for (const reply of replies) stdin.write(reply); callback() })
+    }
+  })(terminal)
+  const channel = { ...makeChannel(),
+    // No transcript images: with graphics live they would decode and count
+    // reads against the shared fixtures the later graphics-disabled cases audit.
+    rows: [{ id: 0, kind: 'user', text: '§ unstable facade probe', images: [] }] as ChatRow[],
+    // Same attachment, new facade every time — the identity-unstable shape.
+    stagedImage: (id: string) => id === 'stage-1' ? fakeImage('sha256:unstable', 'unstable.png') : undefined,
+  }
+  const imagePath = `${process.env.HOME}/unstable.png`
+  writeFileSync(imagePath, png)
+  const app = await render(<AlternateScreen>
+    <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} fullscreen />
+  </AlternateScreen>, { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false })
+  const screen = screenOf(terminal, ROWS)
+  try {
+    await settled(() => screen.text().includes('model-00'))
+    stdin.write(`\x1b[200~${imagePath}\x1b[201~`)
+    check('unstable facade: the staged token is live', await settled(() => screen.text().includes('[Image #1]')), screen.text())
+    const token = screen.find('[Image #1]')!
+    stdin.write(`\x1b[<0;${token.col + 1};${token.row + 1}M\x1b[<0;${token.col + 1};${token.row + 1}m`)
+    check('unstable facade: the token click opens the preview',
+      await settled(() => screen.text().includes('unstable.png')), screen.text())
+    // The loop tears the tree down within a few ms of opening (React #185);
+    // a preview still standing after the commits settle is the assertion.
+    await sleep(300)
+    check('unstable facade: the preview survives the settled commits (no nested-update loop)',
+      screen.text().includes('unstable.png'), screen.text())
+  } finally {
+    stdout.isTTY = false
+    await app.unmount()
+    terminal.dispose()
+    if (disabled !== undefined) process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = disabled
+  }
 }
 
 // Inline frames grow into scrollback. Center the preview in the visible
@@ -1645,6 +1706,54 @@ for (const columns of [32, 80]) {
   check('chat: unmount revokes and reclaims a late staged capability',
     await settled(() => discarded.includes('unmounted-draft-stage')),
     JSON.stringify(discarded))
+  terminal.dispose()
+}
+
+// --- Prompt ingress notice: an adapted paste says what changed -------------
+{
+  const notices: string[] = []
+  const adaptedImagePath = `${process.env.HOME}/adapted.png`
+  writeFileSync(adaptedImagePath, png)
+  const channel = {
+    ...makeChannel(),
+    notify(text: string) { notices.push(text) },
+    hasStagedImage: () => true,
+    // The ingress gate resampled AND converted this paste (alpha filled with
+    // white). The composer must surface all three facts, not just the token —
+    // a silently rewritten image is what issue #938 exists to prevent.
+    stageComposerImage: async () => ({
+      stageId: 'stage-adapted',
+      adjustment: {
+        sourceMediaType: 'image/png',
+        mediaType: 'image/jpeg',
+        width: 1024,
+        height: 768,
+        resized: true,
+        flattened: true,
+      },
+    }),
+  }
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const app = await render(
+    <PromptInput
+      channel={channel as never}
+      helpOpen={false}
+      onToggleHelp={() => {}}
+      onRunCommand={() => false}
+      selectionActive={false}
+    />,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  stdin.write(`\x1b[200~${adaptedImagePath}\x1b[201~`)
+  check('prompt: an adapted paste names the resize, the conversion and the alpha fill',
+    await settled(() => notices.some(text => text.includes('[Image #1]')
+      && text.includes('resized to 1024')
+      && text.includes('PNG converted to JPEG')
+      && text.includes('transparency filled white'))),
+    JSON.stringify(notices))
+  await app.unmount()
   terminal.dispose()
 }
 

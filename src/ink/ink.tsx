@@ -42,7 +42,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -218,6 +218,9 @@ export default class Ink {
   // one full-render frame; steady-state frames after clear it and regain
   // the blit + narrow-damage fast path.
   private prevFrameContaminated = false;
+  // A ConPTY resize may discard terminal cells without changing the grid.
+  // Consume once at the next scheduled paint, not once per resize event.
+  private needsSurfaceRepaint = false;
   // Set by handleResize: prepend ERASE_SCREEN to the next onRender's patches
   // INSIDE the BSU/ESU block so clear+paint is atomic. Writing ERASE_SCREEN
   // synchronously in handleResize would leave the screen blank for the ~80ms
@@ -403,13 +406,21 @@ export default class Ink {
   private handleResize = () => {
     const cols = this.options.stdout.columns || 80;
     const rows = this.options.stdout.rows || 24;
-    // Terminals often emit 2+ resize events for one user action (window
-    // settling). Same-dimension events are no-ops; skip to avoid redundant
-    // frame resets and renders.
+    // Duplicate resize events normally leave both layout and surface intact.
+    // ConPTY can rebuild the alt buffer during maximize with the SAME grid,
+    // though: the cached frame then hides lost static cells forever (#891).
     if (cols === this.terminalColumns && rows === this.terminalRows) {
       // A font zoom or DPI move can change cell pixels without changing the
       // row/column grid. The in-flight guard coalesces duplicate events.
       this.refreshTerminalCellMetrics();
+      if (
+        (process.platform === 'win32' || !!process.env.WT_SESSION) &&
+        this.altScreenActive && this.options.stdout.isTTY &&
+        !this.isPaused && !this.isUnmounted && !this.needsSurfaceRepaint
+      ) {
+        this.needsSurfaceRepaint = true;
+        this.scheduleRender();
+      }
       return;
     }
     noteFrameCause('resize');
@@ -660,6 +671,15 @@ export default class Ink {
     if (this.isUnmounted || this.isPaused) {
       return;
     }
+    if (this.needsSurfaceRepaint) {
+      this.needsSurfaceRepaint = false;
+      if (this.altScreenActive) {
+        noteFrameCause('resize');
+        // Repaint from an empty diff baseline without an early erase or
+        // DECSET 1049: neither may interrupt an external-editor handoff.
+        this.resetFramesForAltScreen();
+      }
+    }
     if (GEOMETRY_TRACE_ENABLED) beginGeometryFrame(this.renderGeneration);
     // Entering a render cancels any pending drain tick — this render will
     // handle the drain (and re-schedule below if needed). Prevents a
@@ -706,9 +726,20 @@ export default class Ink {
       altScreen: this.altScreenActive,
       terminalImages: this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported),
       imageReady: sixelActive ? this.sixelGraphicsManager.prepare : undefined,
+      // Sixel paints rasters over the cells: an image's own cells must then
+      // carry the surface background instead of terminal-default blanks.
+      opaqueImageBacking: sixelActive,
       prevFrameContaminated: this.prevFrameContaminated
     });
     const rendererMs = performance.now() - renderStart;
+    // Whether THIS frame ran a selection-coordinate translation (viewport
+    // resize/follow-shift). A covered-rows fingerprint change in such a
+    // frame is the coordinated kind — content moved WITH the highlight.
+    // An UNcoordinated change means the rows under a stationary highlight
+    // were replaced in place (streaming transcript overwrite), and the
+    // selection is marked stale so commit-time copy refuses (see
+    // refreshSelectionFingerprint below the overlay block).
+    let selectionCoordinated = false;
     this.maybeProbeKittyGraphics(frame.images ?? []);
 
     // Viewport-shrink translation (companion to the follow block below):
@@ -751,6 +782,7 @@ export default class Ink {
             resize.top,
             resize.bottom,
           );
+          selectionCoordinated = true;
           if (cleared) for (const cb of this.selectionListeners) cb();
         } else {
           shiftSelectionForViewportResize(
@@ -761,6 +793,7 @@ export default class Ink {
             resize.top,
             resize.bottom,
           );
+          selectionCoordinated = true;
           // Both-ends-covered clear must notify React-land so useHasSelection
           // re-renders and the footer copy/escape hint disappears — direct
           // listener fire (notifySelectionChange would re-enter onRender).
@@ -831,6 +864,7 @@ export default class Ink {
         // allowClear=false: both ends clamp to the edge; the ghost guard
         // runs at release via dragBounds above.
         shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom, false);
+        selectionCoordinated = true;
       } else if (
       // Flag-3 guard: the anchor check above only proves ONE endpoint is
       // on scrollbox content. A drag from row 3 (scrollbox) into the
@@ -849,6 +883,7 @@ export default class Ink {
           captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
         }
         const cleared = shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom);
+        selectionCoordinated = true;
         // Auto-clear (both ends overshot an edge — off the top via
         // follow/wheel-down, off the bottom via wheel-up) must notify
         // React-land so useHasSelection re-renders and the footer
@@ -886,6 +921,13 @@ export default class Ink {
       if (selActive) {
         applySelectionOverlay(frame.screen, this.selection, this.stylePool);
       }
+      // Commit-consistency guard: hash the rows under the highlight on the
+      // frame the copy would actually read. An uncoordinated change since
+      // the previous frame latches selection.stale; copySelectionNoClear
+      // then refuses rather than shipping whatever text now occupies the
+      // highlight coordinates. Runs on frame.screen (post-render, pre-swap)
+      // with this frame's coordinated selection coordinates.
+      refreshSelectionFingerprint(this.selection, frame.screen, selectionCoordinated);
       // Scan-highlight: inverse on ALL visible matches (less/vim style).
       // Position-highlight (below) overlays CURRENT (yellow) on top.
       hlActive = applySearchHighlight(frame.screen, this.searchHighlightQuery, this.stylePool);
@@ -1937,6 +1979,7 @@ export default class Ink {
    * matches the physical cursor after ENTER_ALT_SCREEN + CSI H (home).
    */
   private resetFramesForAltScreen(): void {
+    this.needsSurfaceRepaint = false;
     const rows = this.terminalRows;
     const cols = this.terminalColumns;
     const blank = (): Frame => ({
@@ -1972,6 +2015,19 @@ export default class Ink {
    */
   copySelectionNoClear(): string {
     if (!hasSelection(this.selection)) return '';
+    // Commit-consistency guard: the rows under the highlight changed
+    // without follow coordination during the selection's lifetime, so
+    // these coordinates now hold text the user never highlighted.
+    // Shipping it would copy visibly wrong content (the "mojibake-looking"
+    // paste of another line); refuse, clear the stale highlight, and let
+    // the caller surface it (React callers enter through copySelection /
+    // useCopyOnSelect's onRefused — the direct no-clear entry must not
+    // leave the misleading highlight up either).
+    if (this.selection.stale) {
+      clearSelection(this.selection);
+      this.notifySelectionChange();
+      return '';
+    }
     const text = getSelectedText(this.selection, this.frontFrame.screen);
     if (text) {
       // Raw OSC 52, or DCS-passthrough-wrapped OSC 52 inside tmux (tmux

@@ -2,6 +2,8 @@ import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ChannelState, ChannelGoal, ChatRow, ToolCallView, ToolResultView, ToolsRegistryLike } from './types.js'
+import type { SelectionAttachment } from '../../adapter/ports/channel-view.js'
+import { replaySelectionAttachment } from './ide-selection.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
 import type { TuiRendererHost } from '../renderers.js'
@@ -31,6 +33,9 @@ interface ProjectionDependencies {
  /** DSH attachment service, resolved at call time (a late-mounted provider
   *  must still serve images for rows projected earlier). */
  attachments(): unknown
+ /** What a submitted message's IDE selection attached (keyed by the message
+  *  id the durable event carries), for the user row's indicator line. */
+ selectionAttached(messageId: string): SelectionAttachment | undefined
 }
 /** One authoritative reducer for both durable replay and live session events. */
 export function createChannelProjection(state: ProjectionState, deps: ProjectionDependencies) {
@@ -543,11 +548,22 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const text = firstTextOf(event.data.content)
         const images = transcriptImages(event.data.content)
         if (text || images.length > 0) {
+          // IDE selection indicator: the delivery path remembered what this
+          // message attached; the durable event carries the same message id.
+          // On replay (session resumed in a NEW process) the in-memory map
+          // starts empty, so the indicator falls back to the durable content
+          // itself — the `<attached-file … selection>` block IS part of the
+          // persisted event, and the session log is the source of truth
+          // (maintainer review round 3: the indicator used to vanish after a
+          // restart because nothing re-derived it from the event).
+          const selectionAttached = deps.selectionAttached(event.data.id)
+            ?? replaySelectionAttachment(event.data.content)
           appendRow({
             id: deps.rowIds.value,
             kind: 'user',
             text,
             ...(images.length === 0 ? {} : { images }),
+            ...(selectionAttached === undefined ? {} : { selectionAttached }),
             seq: event.seq,
           })
           state.lastUserText = text || t('transcript-image-message', { count: images.length })
@@ -898,7 +914,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         }
         const reason = event.data.reason
         if (reason.kind === 'completed') {
-          deps.checkContextWarning()
+          // Replay drains a resumed session's history through the projector;
+          // its totals describe the past, not a live context-low state.
+          if (!replaying) deps.checkContextWarning()
           break
         }
         if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
@@ -920,7 +938,10 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         appendRow({ id: deps.rowIds.value, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         deps.rowIds.value += 1
-        deps.notify(
+        // Historical failure notices belong to the transcript row above;
+        // re-raising them as a live toast on every /resume re-alarmes the
+        // user over a turn that already ended.
+        if (!replaying) deps.notify(
           t('turn-failed', { detail: detail ? ` · ${detail}` : '' }),
           { color: 'error', timeoutMs: 8000 },
         )
