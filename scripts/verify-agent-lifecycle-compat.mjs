@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -112,6 +113,39 @@ try {
   assert.equal(resumed.ok, true, JSON.stringify(resumed))
   assert.ok(channel.rows.some(row => row.text === 'after tool'), 'resume replays persisted V4 messages')
   assert.equal(requests, 4, 'rewind/new/resume do not replay claimed prompts into the model')
+  // Keep the real registry entry and JSONL writer alive while disposal drains.
+  // Agent View must wait, then resume from disk rather than adopt that dying Agent.
+  const retiring = await ctx.agents.create({ sessionId: 'retiring-view', cwd: root })
+  retiring.agent.session.append('session/title', { title: 'Retiring session', messageSeqs: [], source: { kind: 'user' } })
+  const close = Promise.withResolvers()
+  const enteredClose = Promise.withResolvers()
+  let closed = false
+  const delayedHandle = { agent: retiring.agent, async dispose() {
+    enteredClose.resolve()
+    await close.promise
+    await retiring.dispose()
+    closed = true
+  } }
+  const switching = createChannel(ctx, retiring.agent, {
+    handle: delayedHandle, cwd: root, provider: 'scripted', model: 'scripted', activity: false,
+  })
+  try {
+    assert.equal(await switching.newSession(), true)
+    await enteredClose.promise
+    let attached = false
+    const attachment = switching.attachToAgent('retiring-view').then(result => { attached = true; return result })
+    await setImmediate() // Drain runnable continuations while close is explicitly gated.
+    assert.equal(closed, false)
+    assert.equal(attached, false, 'Agent View must not report success before the target has closed')
+    close.resolve()
+    const attachedResult = await attachment
+    assert.equal(attachedResult.ok, true, JSON.stringify(attachedResult))
+    assert.equal(closed, true)
+    assert.notEqual(ctx.agents.get('retiring-view'), retiring.agent, 'attach resumes a fresh Agent after close')
+  } finally {
+    close.resolve()
+    switching.releaseContributions()
+  }
   console.log('agent lifecycle OK (real async factory, streaming, tool, cancel, rewind, new, JSONL resume)')
 } finally {
   firstStream.resolve()

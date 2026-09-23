@@ -78,6 +78,8 @@ try {
         } }])
         assert.equal(channel.rows.find(row => row.kind === 'compact')?.text, 'Durable summary')
         assert.equal(extractEntries('s', events).find(entry => entry.kind === 'compact')?.text, 'Durable summary')
+        assert.deepEqual(extractEntries('s', events).filter(entry => entry.kind === 'tool').map(entry => entry.toolStatus),
+          ['error', 'ok', 'error'], `${api}/${mode}: tree failure status follows the message payload`)
         const exported = channel.exportSession()
         assert.ok(exported)
         const markdown = readFileSync(exported, 'utf8')

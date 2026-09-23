@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
-import { settle } from './lib/term-test.mjs'
+import { settled } from './lib/term-test.mjs'
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-shell-'))
 process.env.HOME = home
@@ -25,8 +25,7 @@ const request = { command: 'echo ok', workdir: home, timeoutMs: 30000 }
 async function submitShell(channel, command, includeInContext) {
   const rowCount = channel.rows.length
   channel.submit(`${includeInContext ? '!!' : '!'}${command}`)
-  await settle(() => channel.rows.length === rowCount + 2)
-  assert.equal(channel.rows.length, rowCount + 2)
+  assert.ok(await settled(() => channel.rows.length === rowCount + 2))
 }
 
 function channelFor(shell) {
@@ -63,8 +62,7 @@ try {
     }
     const { channel, messages } = channelFor(shell)
     try {
-      await settle(() => channel.gitBranch === 'main')
-      assert.equal(channel.gitBranch, 'main', `${api}: boot resolves git branch`)
+      assert.ok(await settled(() => channel.gitBranch === 'main'), `${api}: boot resolves git branch`)
       assert.deepEqual(requests[0], { command: 'git branch --show-current', workdir: home, timeoutMs: 3000 })
       result = output(' ok\n')
       await submitShell(channel, request.command, true)
@@ -102,13 +100,24 @@ try {
 
   // Late shell output cannot mutate a released Channel or inject a followup.
   const { promise, resolve } = Promise.withResolvers()
-  const delayed = { resolve: value => value, async execute() { return { result: () => promise } } }
+  const started = []
+  const completed = []
+  const delayed = { resolve: value => value, async execute(spec) {
+    return { async result() {
+      started.push(spec.command)
+      const result = await promise
+      completed.push(spec.command)
+      return result
+    } }
+  } }
   const stale = channelFor(delayed)
   stale.channel.submit('!!late')
-  await setImmediate()
+  assert.ok(await settled(() => started.includes('late')), 'the submitted command must start before release')
+  assert.deepEqual(started, ['git branch --show-current', 'late'])
   stale.channel.releaseContributions()
   const rowCount = stale.channel.rows.length
   resolve(output('late output'))
+  assert.ok(await settled(() => completed.length === 2), 'both in-flight results must complete')
   await setImmediate()
   assert.equal(stale.channel.rows.length, rowCount)
   assert.equal(stale.messages.length, 0)

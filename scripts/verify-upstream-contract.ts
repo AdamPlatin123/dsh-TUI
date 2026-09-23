@@ -56,6 +56,19 @@ assert.deepEqual(upstreamDriftSummary(mixedVersions), {
 })
 
 const installedLines = installedUpstreamLines()
+// Runtime notices tolerate version-specific optional capabilities, while CI
+// still requires the complete development dependency tree.
+const legacyVersions: Record<string, string | undefined> = { ...mixedVersions,
+  '@deepseek-ai/dsh-agent': '0.1.1-rc.2',
+  '@deepseek-ai/dsh-agent-preset-registry': undefined,
+  '@deepseek-ai/dsh-ptc-runtime-node': undefined,
+}
+assert.equal(upstreamDriftSummary(legacyVersions), undefined, 'absent optional capabilities are not a broken host')
+assert.equal(upstreamDrift(legacyVersions).length, 2, 'CI must still catch missing development packages')
+assert.equal(upstreamDriftSummary({ ...legacyVersions, '@deepseek-ai/dsh-agent': undefined })?.kind, 'broken',
+  'missing core runtime remains broken')
+assert.equal(upstreamDriftSummary({ ...legacyVersions, '@deepseek-ai/dsh-agent-preset-registry': 'invalid' })?.kind, 'broken',
+  'installed but invalid optional package must still warn')
 const drift = upstreamDrift()
 if (installedLines.length > 1) {
   console.error(`Upstream contract violated (mixed harness lines: ${installedLines.join(', ')})`)

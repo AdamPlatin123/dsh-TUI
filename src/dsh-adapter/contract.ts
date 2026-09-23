@@ -100,6 +100,14 @@ export interface UpstreamDriftEntry {
   validated: string
 }
 
+// These capabilities are loaded dynamically and did not exist on every
+// supported host line. Their absence is valid at runtime, not in the CI tree.
+const OPTIONAL_RUNTIME_PACKAGES = new Set<string>([
+  '@deepseek-ai/dsh-agent-preset-registry',
+  '@deepseek-ai/dsh-ptc-runtime-node',
+  '@deepseek-ai/dsh-web-app',
+])
+
 /** Supported upstream prerelease channels in ascending precedence order. */
 export type UpstreamPrereleaseChannel = 'alpha' | 'beta' | 'rc'
 
@@ -277,7 +285,8 @@ export function upstreamDriftSummary(
 ): UpstreamDriftSummary | undefined {
   const installedLines = installedUpstreamLines(installedVersions)
   if (installedLines.length > 1) return { kind: 'mixed', versions: installedLines }
-  const drift = upstreamDrift(installedVersions)
+  const drift = upstreamDrift(installedVersions).filter(entry =>
+    entry.installed !== undefined || !OPTIONAL_RUNTIME_PACKAGES.has(entry.package))
   if (drift.length === 0) return undefined
   const harness = drift.filter(entry => UPSTREAM_FRAMEWORK_MAJORS[entry.package] === undefined)
   const versions = [...new Set(drift.map(entry => entry.installed ?? 'missing'))]
