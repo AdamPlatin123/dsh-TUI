@@ -28,7 +28,10 @@ interface SettingsScope<T> {
   watch(callback: (next: T) => void): () => void
 }
 
-/** 0.1.7 owns settings in Config; older hosts still own registered scopes. */
+/**
+ * 0.1.7 owns settings in Config; older hosts still own registered scopes.
+ * Pass the Config owner's context, and dispose watch with the consumer's lifecycle.
+ */
 export function createSettingsScope<T>(
   ctx: Context,
   service: unknown,

@@ -113,7 +113,7 @@ export function foldBack(rows: ChatRow[], events: readonly SessionEvent[], views
       const result = resultsByCall.get(row.tool.callId)
       if (result !== undefined) restoreToolResult(row, result)
       row.tool.callView = views?.call(call.data.name, call.data.arguments)
-      row.tool.resultView = result !== undefined && result.data.error === undefined
+      row.tool.resultView = result !== undefined && row.tool.status === 'ok'
         ? views?.result(call.data.name, call.data.arguments, result.data)
         : undefined
       row.folded = false
@@ -249,8 +249,7 @@ export function toolErrorText(event: SessionEvent<'tool/result'>): string {
 /** Restore a folded tool row's result text from its tool/result event. */
 export function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result'>): void {
   if (row.tool === undefined) return
-  const failure = event.data.error
-  if (failure !== undefined) {
+  if (event.data.error !== undefined || toolResultPayload(event.data.message).isError) {
     row.tool.status = 'error'
     row.tool.errorText = toolErrorText(event)
     return

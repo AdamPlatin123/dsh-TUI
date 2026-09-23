@@ -1,6 +1,6 @@
 /**
  * V3/V4 message projection through a real Channel: live/replay, call-ID pairing,
- * presenters, errors, goal/todo cards, export, subagents and compact checkpoints.
+ * presenters, errors, folding, goal/todo cards, export, subagents and compact checkpoints.
  * Run after compile: node scripts/verify-message-compat.mjs
  */
 import assert from 'node:assert/strict'
@@ -82,6 +82,31 @@ try {
         assert.ok(exported)
         const markdown = readFileSync(exported, 'utf8')
         for (const text of ['second result', 'permission denied', 'detail']) assert.ok(markdown.includes(text))
+
+        // Cross the real channel's retained-row limit, then restore through
+        // loadOlder. Failure semantics and success-only presenters must agree
+        // with the initial projection for both message formats and entry paths.
+        const expectedPresentations = [...presented]
+        for (let index = 0; index < 605; index++) {
+          const event = { seq: log.length, time: 2000 + index, type: 'user/message', data: {
+            id: `padding-${index}`, role: 'user', source: { kind: 'user' },
+            content: [{ type: 'text', text: `prompt ${index}` }],
+          } }
+          log.push(event)
+          handlers.get('session/event')(agent.session, event)
+        }
+        assert.ok(channel.rows.filter(row => row.kind === 'tool').every(row => row.folded))
+        assert.ok(channel.loadOlder() > 0)
+        const restored = channel.rows.filter(row => row.kind === 'tool')
+        assert.ok(restored.every(row => !row.folded))
+        assert.deepEqual(restored.map(row => row.tool.status), ['error', 'ok', 'error'], `${api}/${mode}: restored statuses`)
+        assert.equal(restored[0].tool.errorText, 'permission denied')
+        assert.equal(restored[0].tool.resultFull, undefined)
+        assert.equal(restored[0].tool.resultView, undefined)
+        assert.equal(restored[1].tool.resultFull, 'second result')
+        assert.equal(restored[2].tool.errorText, 'ToolError: DENIED — detail')
+        assert.equal(restored[2].tool.resultView, undefined)
+        assert.deepEqual(presented, [...expectedPresentations, ...expectedPresentations], 'only successful results reach the presenter on restore')
       } finally { channel.releaseContributions() }
 
       const subagents = new SubagentActivityStore()
@@ -98,5 +123,5 @@ try {
     assert.match(todos.content[1].text, /Verify/)
     assert.equal(toolErrorText({ data: { message: result(api, 'e', 'explanation', true) } }), 'explanation')
   }
-  console.log('PASS: V3/V4 messages in live and replay projections, export, subagents and compact checkpoints')
+  console.log('PASS: V3/V4 messages in live/replay/folded projections, export, subagents and compact checkpoints')
 } finally { rmSync(home, { recursive: true, force: true }) }

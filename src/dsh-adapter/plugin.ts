@@ -617,7 +617,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>):
     // against both lines and the runtime value is identical ('dsh-tui' always
     // satisfied the namespace pattern).
     const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
-    const scope = createSettingsScope<SettingsValue>(settingsCtx, settingsCtx.settings,
+    // Loader targets the Config owner's fiber, not the injected child fiber.
+    const scope = createSettingsScope<SettingsValue>(ctx, settingsCtx.settings,
       tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
@@ -775,13 +776,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>):
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
-    // Shortcut overrides resolve per action: settings user layer wins over
-    // cordis.yml's `shortcuts` (same precedence as every other field);
-    // unset everywhere keeps the registry default. Applied live into the
-    // keymap module — the very next keypress matches the new combos.
+    // Legacy user scopes layer over cordis.yml. Modern Config is already
+    // resolved: an unset action must not revive its startup override.
+    // Applied live so the very next keypress matches the new combos.
     const applyShortcuts = (value: SettingsValue): void => {
       const userLayer = value.shortcuts ?? {}
-      const configLayer = config.shortcuts ?? {}
+      const configLayer = scope.legacy ? config.shortcuts ?? {} : {}
       const merged: Partial<Record<ShortcutActionId, string>> = {}
       for (const action of SHORTCUT_ACTIONS) {
         const user = userLayer[action.id]
@@ -842,7 +842,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>):
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
-    scope.watch(next => {
+    settingsCtx.effect(() => scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
         notifyChannel(t('settings-fullscreen-restart'), { color: 'warning' })
@@ -852,7 +852,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>):
         channel.notify(t('settings-terminal-images-restart'), { color: 'warning' })
       }
       lastTerminalImages = terminalImages
-    })
+    }))
     resolveSettingsReady?.()
   })
   // The /settings screen's own section: the dsh-tui namespace comes from
