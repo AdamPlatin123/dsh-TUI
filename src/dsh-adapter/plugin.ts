@@ -144,7 +144,7 @@ export function resolveTuiHostMode(
   return explicitTuiLaunch ? 'invalid-explicit-launch' : 'headless-host'
 }
 
-export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>): Promise<void> {
+export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
@@ -618,7 +618,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>):
     // satisfied the namespace pattern).
     const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
     // Loader targets the Config owner's fiber, not the injected child fiber.
-    const scope = createSettingsScope<SettingsValue>(ctx, settingsCtx.settings,
+    const scope = createSettingsScope<SettingsValue>(configOwner, settingsCtx.settings,
       tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
@@ -2259,6 +2259,13 @@ function runUpdate(
       },
     )
   })
+}
+
+/** Deferred runtime failures must restore the terminal and fail the process. */
+export function handleStartupError(ctx: Context, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  void finishExit(ctx, undefined, lastBootedFullscreen ?? true, undefined,
+    `dsh-tui startup failed: ${message}`, () => disposeRootAndExit(ctx, 1))
 }
 
 /**

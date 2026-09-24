@@ -65,6 +65,10 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 失败不重试执行。`compat/messages.ts` 读取 V4 嵌套消息及旧事件载荷，不改变持久化
 序列与 call-ID。Agent 创建/恢复始终等待异步生命周期完成。
 
+Loader 行只调度 TUI runtime：Host 加载完成后由 Cordis 子插件启动，避免 preset
+诊断等待 Loader 时反过来等待自身。启动失败经终端清理路径非零退出；volatile
+Config 仍由原 Loader 行拥有，runtime 的设置监听显式使用该 owner。
+
 `compat/settings.ts` 在新 host 消费 Config 的 volatile 字段与 Loader 更新事件，
 旧 host 保留 scope 注册/watch。设置由 DSH 写入当前 profile 配置；TUI 不维护第二份
 设置文件。历史 Session 转换及子会话 catalog 仍交给官方 format catalog。

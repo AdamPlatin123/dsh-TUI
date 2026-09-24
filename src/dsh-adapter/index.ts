@@ -235,7 +235,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
  * in `./plugin.tsx` (see its module doc for the full contract).
  * @param ctx - the plugin context.
  * @param config - the validated dsh-tui configuration.
- * @returns a promise settling when the TUI teardown completes.
+ * @returns a promise settling when the Loader entry has scheduled its runtime.
  */
 export async function apply(ctx: Context, config: RuntimeConfig<Config>): Promise<void> {
   // Upstream drift is NO LONGER spammed to stderr here: per-package
@@ -244,6 +244,20 @@ export async function apply(ctx: Context, config: RuntimeConfig<Config>): Promis
   // natural-language notice now renders in the logo header under the
   // startup tip (LogoV2 ← upstreamDriftSummary); CI keeps the hard gate
   // via scripts/verify-upstream-contract.ts.
-  const { apply: tuiApply } = await import('./plugin.js')
-  return tuiApply(ctx, config)
+  const { apply: tuiApply, handleStartupError } = await import('./plugin.js')
+  let disposed = false
+  ctx.effect(() => () => { disposed = true })
+  // Registry diagnostics can await the whole Loader. Do not make this Host
+  // row await the runtime in return. Let Host providers settle before starting
+  // a Cordis-owned child; the original row still owns volatile Config.
+  const loader = ctx.get('loader') as { await(): Promise<unknown> } | undefined
+  void (loader?.await() ?? ctx.fiber.await()).then(() => {
+    if (disposed) return
+    return ctx.plugin({
+      name: 'dsh-tui-runtime',
+      apply: (runtimeCtx: Context) => tuiApply(runtimeCtx, config, ctx),
+    })
+  }).catch(error => {
+    if (!disposed) handleStartupError(ctx, error)
+  })
 }

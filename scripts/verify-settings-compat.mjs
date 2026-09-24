@@ -118,13 +118,15 @@ if (modernSchema) {
     root.loader.builtins.fixture = { Config, async apply(ctx, runtimeConfig) {
       owner = ctx
       runtime = runtimeConfig
-      await bindSettings({
-        ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
-        DEFAULT_STATUS_BAR, normalizePageMargin, isLang, configValues, createSettingsScope, setKeymapOverrides,
-        bootedFullscreen: true, bootedTerminalImages: true,
-        t: key => key, notifyChannel: message => notices.push(message), channel: { notify: message => notices.push(message) },
-        observe: value => observed.push(value),
-        capture(settingsCtx, scope, apply) { child = settingsCtx; liveScope = scope; applyShortcuts = apply },
+      await ctx.plugin(async runtimeCtx => {
+        await bindSettings({
+          ctx: runtimeCtx, configOwner: ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
+          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, configValues, createSettingsScope, setKeymapOverrides,
+          bootedFullscreen: true, bootedTerminalImages: true,
+          t: key => key, notifyChannel: message => notices.push(message), channel: { notify: message => notices.push(message) },
+          observe: value => observed.push(value),
+          capture(settingsCtx, scope, apply) { child = settingsCtx; liveScope = scope; applyShortcuts = apply },
+        })
       })
     } }
     await root.loader.create({ id: 'fixture', name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: { paste: 'alt+v' } } })
