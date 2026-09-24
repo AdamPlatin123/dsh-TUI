@@ -1,17 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { PresetDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse } from 'yaml'
 import { packagedPresetRoot } from './packaged-presets.js'
-
-interface PresetDefinition {
-  id: string
-  name?: string
-  order?: number
-  plugins: unknown[]
-}
 
 interface DeclarativePresets {
   register(definition: PresetDefinition): Promise<() => Promise<void>>
@@ -77,15 +71,17 @@ export async function registerBundledPresets(ctx: Context): Promise<boolean> {
     ctx.effect(() => dispose)
   }
   if (!declared.has('liangshen')) {
-    const path = join(packagedPresetRoot(), 'liangshen', 'agent.cordis.yml')
+    const root = join(packagedPresetRoot(), 'liangshen')
+    const metadata: Pick<PresetDefinition, 'name' | 'description' | 'order'> = parse(readFileSync(join(root, 'preset.yml'), 'utf8'))
     const dispose = await declarativePresets(ctx)!.register({
       id: 'liangshen',
-      name: '梁神模式',
-      order: 5,
+      name: metadata.name,
+      description: metadata.description,
+      order: metadata.order,
       plugins: [{
         id: 'liangshen-plugins',
         name: '@deepseek-ai/cordis-plugin-include',
-        config: { path },
+        config: { path: pathToFileURL(join(root, 'agent.cordis.yml')).href },
       }],
     })
     ctx.effect(() => dispose)

@@ -141,7 +141,10 @@ try {
     const attachedResult = await attachment
     assert.equal(attachedResult.ok, true, JSON.stringify(attachedResult))
     assert.equal(closed, true)
-    assert.notEqual(ctx.agents.get('retiring-view'), retiring.agent, 'attach resumes a fresh Agent after close')
+    const restored = ctx.agents.get('retiring-view')
+    assert.ok(restored, 'attach registers the restored Agent')
+    assert.notEqual(restored, retiring.agent, 'attach resumes a fresh Agent after close')
+    assert.equal(switching.agentId, String(restored.session.id), 'the restored Agent is attached to the channel')
   } finally {
     close.resolve()
     switching.releaseContributions()
