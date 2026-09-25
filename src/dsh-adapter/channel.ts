@@ -205,7 +205,7 @@ function createChannelWithOwner(
     agent: () => binding.agent,
     subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as { interrupt?(target: string, reason: unknown): void } | undefined,
     lookupChild: id => {
-      const agents = ctx.get('agents') as { get(id: string): { session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
+      const agents = ctx.get('agents') as { get(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
       return agents?.get(id)
     },
   })
@@ -703,8 +703,15 @@ function createChannelWithOwner(
     notify,
   })
 
-  // Replay the durable transcript first, then follow live events.
-  projector.replayEvents(snapshotLiveSessionEvents(binding.agent.session))
+  // Replay the durable transcript first, then follow live events. The same
+  // seed re-populates the subagent dashboard's durable discovery facts
+  // (`subagent/catalog`, workflow member edges) so a resumed session keeps
+  // its dispatched-children history (issue #966).
+  const replaySessionSeed = (events: readonly SessionEvent[]): void => {
+    projector.replayEvents(events)
+    subagentProjection.bootstrapFromLog(events)
+  }
+  replaySessionSeed(snapshotLiveSessionEvents(binding.agent.session))
   projector.settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
@@ -743,7 +750,7 @@ function createChannelWithOwner(
     resetProjector: () => projector.reset(),
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
-    replay: events => projector.replayEvents(events),
+    replay: replaySessionSeed,
     settleReplay: projector.settleStreaming,
     bindAgent: () => bindAgent(),
     refreshCommands: refreshCommandList,
@@ -802,7 +809,7 @@ function createChannelWithOwner(
     resetProjector: () => projector.reset(),
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
-    replay: events => projector.replayEvents(events),
+    replay: replaySessionSeed,
     settleReplay: projector.settleStreaming,
     bindAgent,
     refreshCommands: refreshCommandList,
@@ -820,7 +827,7 @@ function createChannelWithOwner(
     resetProjector: () => projector.reset(),
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
-    replay: events => projector.replayEvents(events),
+    replay: replaySessionSeed,
     settleReplay: projector.settleStreaming,
     describeWorkspace: cwd => workspaceService.describe(cwd),
     refreshGitBranch: () => refreshGitBranch(),
@@ -852,7 +859,7 @@ function createChannelWithOwner(
     resetProjector: () => projector.reset(),
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
-    replay: events => projector.replayEvents(events),
+    replay: replaySessionSeed,
     settleReplay: projector.settleStreaming,
     describeWorkspace: cwd => workspaceService.describe(cwd),
     refreshGitBranch: () => refreshGitBranch(),
