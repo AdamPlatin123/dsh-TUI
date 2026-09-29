@@ -43,6 +43,7 @@ const GATES = [
   'verify:plugin-negotiation',
   'verify:plugin-lifecycle',
   'verify:runtime-themes',
+  'verify:theme-preview',
   'verify:packaged-presets',
   'verify:history-search',
   'verify:initial-prompt',
