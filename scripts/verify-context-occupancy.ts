@@ -16,6 +16,7 @@
 import assert from 'node:assert/strict'
 import { ContextOccupancyStore, CONTEXT_PRESSURE_PROJECTION_KEY, attachContextPressureProjection, resolveContextOccupancy } from '../src/dsh-adapter/context-occupancy.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
+import { estimateTokens } from '../src/dsh-adapter/channel/usage.js'
 import { contextPressurePct } from '../src/components/ActivityLine.js'
 import { channelContextOccupancy } from '../src/screens/StatusMetrics.js'
 
@@ -245,7 +246,7 @@ const isLowContext = (item: { text: string }): boolean => /Context low|上下文
     pressureTokens: 96_000, projectedTokens: 20_000, contextWindow: 100_000,
   })
   assert.equal(channel.contextOccupancy?.usedTokens, 20_000, '压缩后占用 = 官方重算值（含 retainRatio 保留尾巴）')
-  assert.notEqual(channel.contextOccupancy?.usedTokens, Math.ceil(summary.length / 4), '不是摘要的 chars/4')
+  assert.notEqual(channel.contextOccupancy?.usedTokens, estimateTokens(summary), '不是摘要的分段估算（estimateTokens 只描述分段构成，不参与占用）')
   assert.equal(channel.lastUsage, undefined, '检查点不再伪造 lastUsage')
   assert.equal(channel.tokens.input, 647_808, '检查点不再改写累计 tokens 计数器')
   assert.equal(channel.contextSegments.assistant, 0, '分段条的分段清零保留')

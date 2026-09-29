@@ -35,6 +35,11 @@ const toPlain = s =>
     .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
     .replace(/\x1b\]9;[^\x07]*\x07/g, '')
 
+// Independent ASCII-only oracle for the channel's segment estimate: the shared
+// `estimateTokens` (src/dsh-adapter/channel/usage.ts) charges pure ASCII at
+// exactly this rate, and every fixture below is ASCII, so this stays an exact
+// expectation. The CJK-aware semantics (and the rates themselves) are pinned
+// separately by scripts/verify-cjk-token-estimate.ts.
 const est = text => Math.ceil(text.length / 4)
 
 // ---- channel-level: seed a pre-compact context, then compact it
@@ -160,6 +165,20 @@ check(
   'empty summary clears the prompt segment',
   channel.contextSegments.prompt === 0 && channel.lastUsage?.input === 5000,
   JSON.stringify(channel.lastUsage),
+)
+
+// The segment estimate is CJK-aware (#1170): a Chinese prompt must land in the
+// measured 1–1.5 chars/token band instead of the old ASCII chars/4 — the defect
+// was Chinese sessions being under-counted ~3x, and the projection wiring above
+// is what has to carry the new rate to the bar.
+const CJK_PROMPT = '这是一段中文提问，用来验证分段估算按中文口径计费，而不是英文的四字符一枚。'
+emit({ type: 'user/message', seq: 7, data: { source: { kind: 'user' }, content: [{ type: 'text', text: CJK_PROMPT }] } })
+check(
+  'segments charge Chinese text above the old chars/4 rate',
+  channel.contextSegments.prompt >= Math.ceil(CJK_PROMPT.length / 1.5) &&
+    channel.contextSegments.prompt <= Math.ceil(CJK_PROMPT.length) &&
+    channel.contextSegments.prompt > Math.ceil(CJK_PROMPT.length / 4),
+  `prompt=${channel.contextSegments.prompt} chars=${CJK_PROMPT.length}`,
 )
 
 // ---- render-level: folded by default, full text when expanded
