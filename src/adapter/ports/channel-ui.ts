@@ -2,6 +2,7 @@
 import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
+import type { AgentCapabilities } from './channel-capabilities.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
 import type { ProviderSetupHost, OAuthProviderStatus, SettingsHost, TuiSettingsSection } from './channel-settings.js'
@@ -255,6 +256,19 @@ export interface ChannelUi {
   readonly commandList: readonly LocalCommand[]
   /** Context-aware slash completions, including plugin subcommands. */
   commandCompletions(input: string): readonly CommandCompletion[]
+  /**
+   * What the CURRENT agent's composition actually serves (compaction, pruning,
+   * questionnaire, skills, and the route `/compact` and `/plan` take), with
+   * the evidence for each fact documented in
+   * `dsh-adapter/channel/capabilities.ts`.
+   *
+   * Resolved from live services through the agent's own preset scope chain —
+   * never from a preset-id table — so a user preset that adds a service back
+   * gets the full feature set with no consumer change. Consumers use it to
+   * refuse-with-reason instead of failing on use, and to mark an entry whose
+   * capability is missing in Help and `/` completion.
+   */
+  capabilities(): AgentCapabilities
   /**
    * Run a plugin-registered slash command against the live agent (DSH
    * `dsh-commands` registry): logs `command/run`/`command/done` and returns

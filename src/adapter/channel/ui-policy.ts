@@ -31,6 +31,10 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   // Deprecated pre-rename alias of setMinimalUi (see the port's doc comment).
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
+  // Pure description of the agent's mounted capabilities: no service is
+  // acquired, no cache warmed, no notice published (see
+  // dsh-adapter/channel/capabilities.ts).
+  'capabilities': 'read-only',
   'runExternalCommand': 'mutate',
   'runExternalCommandOutcome': 'mutate',
   'openPluginScene': 'mutate',

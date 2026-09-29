@@ -1,6 +1,9 @@
 import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
+import { t } from '../../i18n.js'
+import { runningPresetOf } from '../presets.js'
+import { agentCapabilityEvidence, resolveAgentCapabilities } from './capabilities.js'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -51,6 +54,38 @@ export function createBindingEvents(ctx: Context, deps: {
   retireAttachment?(messageId: string): void
 }) {
   let subagentsInstalled = false
+  /**
+   * Preset of the last binding we announced a capability gap for. The gap is a
+   * property of the agent's PRESET, so it is reported once per entry into a
+   * preset that lacks it (a rebind to the SAME preset — /model, /rewind —
+   * stays quiet; switching away and back reports again). Facts come from
+   * `channel/capabilities.ts`, never from a preset-id list: a user preset that
+   * adds compaction/pruning back gets no warning at all.
+   *
+   * A session recording NO preset (rosterless bare `cordis.yml`, or an embed
+   * that composes its own leaf) stays silent: nothing there attributes the
+   * missing services to a preset choice, and the command-list annotation plus
+   * the use-time refusal already say it when it matters. Only the id, not its
+   * contents, is read here.
+   */
+  let announcedPreset: string | undefined
+  let announced = false
+  const announceCapabilityGap = (): void => {
+    const agent = deps.binding.agent
+    const presetId = runningPresetOf(agent.session)
+    if (presetId === undefined) return
+    if (announced && presetId === announcedPreset) return
+    announced = true
+    announcedPreset = presetId
+    const capabilities = resolveAgentCapabilities(agentCapabilityEvidence(ctx, agent))
+    if (capabilities.compaction && capabilities.pruner) return
+    const key = capabilities.compaction
+      ? 'capability-gap-pruner'
+      : capabilities.pruner
+        ? 'capability-gap-compaction'
+        : 'capability-gap-compaction-pruner'
+    deps.state.notify(t(key), { color: 'warning', timeoutMs: 12000 })
+  }
   const installSubagents = (): void => {
     if (subagentsInstalled) return
     subagentsInstalled = true
@@ -101,6 +136,10 @@ export function createBindingEvents(ctx: Context, deps: {
       }
       void deps.modelActions.applyPreferredEffort()
       deps.modeActions.refreshMode()
+      // Entering/resuming a session whose preset serves neither automatic
+      // compaction nor tool-result pruning changes what the user can expect
+      // from a long session; say it once, here, before the turn starts.
+      announceCapabilityGap()
       const capture = deps.binding.capture()
       const session = capture.agent.session
       const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(capture)
