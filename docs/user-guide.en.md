@@ -364,7 +364,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 | `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes; a session nobody has typed into records no branch, keeping automatic titles for its first prompt), choice persisted to `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
-| `/tokens` | none | token usage + context percentage |
+| `/tokens` | none | three separate figures, never two different quantities side by side: **this request**'s upload (input + cache read + cache write — the harness's four buckets are disjoint), the **session totals** (uncached input / output / cache read / cache write), and **context occupancy** |
 | `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon8`. Persisted to `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | agent preset: `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **cannot switch an already-started session**. Persisted to `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | theme: no-arg selector; `<名字>` switch directly; `status` current theme (auto appends the OSC 11 result). Persisted to `~/.dsh-tui/theme.json` |
@@ -546,7 +546,12 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Hover the whole bar for the legend: color block + name + token count (narrow screens shorten the names).
 
 **Row 2 — status field row** (each field toggled separately, see `/settings`)
-- left group: model → TPS → thinking → mode → ctx → cache hit rate → tokens (`1.2k→340` input→output) →
+- left group: model → TPS → thinking → mode → ctx (**context occupancy** `19.5% (13k/64k)`: the SAME
+  value the segmented bar, the working line's pressure prefix, `/tokens`, `/status` and the context-low
+  warning read, sourced from the harness's own `contextPressure` projection — `projectedTokens ??
+  pressureTokens`, i.e. what the NEXT request would occupy, so a compaction or a rejected request shows
+  up immediately instead of waiting for one successful request; a bare `cordis.yml` composition without
+  the meter falls back to the last request's billed usage) → cache hit rate → tokens (`1.2k→340` input→output) →
   cost (`≈¥0.05 谷`, **a session estimate** that includes subagent usage, priced per
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
@@ -558,7 +563,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 
 **Row 3 — hints / working activity + mini trace bar**
 - Idle shows `? for shortcuts`, running `esc to interrupt`, selecting `esc to return to input`.
-- Idle also shows the working-activity animation (`statusBar.activity` on), context ≥80% amber, ≥95% red.
+- Idle also shows the working-activity animation (`statusBar.activity` on), context ≥80% amber, ≥95% red (the same occupancy reading as the ctx field).
 - Right-side **mini trace bar MiniWake** (`statusBar.trajectory`, default off): session projected as density glyphs, color per channel, failures red;
   degrades/hides on narrow screens.
 
