@@ -640,6 +640,11 @@ const GROUPS = {
 // #1030：隔离 locale、持久化 /lang 与环境变量，不能靠 CI 的 zh 默认掩盖脚本依赖。
     ['verify-regression-language', ['node', 'scripts/verify-regression-language.mjs']],
     ["verify-context-warning", ['node', '--import', 'tsx/esm', 'scripts/verify-context-warning.mjs']],
+// 占用单一真源回归（PR2）：官方 `contextPressure` 投影在场时占用 = `projectedTokens ??
+// pressureTokens`（与会话累计未缓存输入解耦、随投影变更重发、非 completed 回合也评估
+// 告警、压缩检查点不改写本地量），投影缺席（裸 cordis.yml 无 token-meter）时回退到
+// 上次成功请求的计费采样且软失败不抛。
+    ["verify-context-occupancy", ['node', '--import', 'tsx/esm', 'scripts/verify-context-occupancy.ts']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
