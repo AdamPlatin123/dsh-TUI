@@ -498,10 +498,12 @@ const dict = {
   'supervisor-foreign-failed-not-a-session': { zh: '不是可导入的会话', en: 'not an importable session' },
   'supervisor-foreign-failed-write-failed': { zh: '写入会话失败', en: 'writing the session failed' },
   'supervisor-foreign-failed-unknown-source': { zh: '未知来源', en: 'unknown source' },
-  'cost-cache-rate': { zh: '缓存率 {{rate}}% · {{read}} 读 / {{write}} 写', en: 'Cache rate {{rate}}% · {{read}} read / {{write}} write' },
-  'cost-context': { zh: '上下文 {{pct}}%', en: 'Context {{pct}}%' },
+  'cost-cache-rate': { zh: '本次请求缓存率 {{rate}}% · {{read}} 读 / {{write}} 写', en: 'Cache rate of this request: {{rate}}% · {{read}} read / {{write}} write' },
+  // 占用只有一个真源（官方 contextPressure 投影，见 dsh-adapter/context-occupancy.ts）：
+  // 与 /tokens、状态栏 ctx 字段、告警共用同一读数。
+  'context-occupancy': { zh: '上下文占用 {{percent}}%（{{used}}/{{window}}）', en: 'Context occupancy {{percent}}% ({{used}}/{{window}})' },
   'status-title': { zh: '标题   {{title}}', en: 'Title   {{title}}' },
-  'cost-cache-hit-rate': { zh: '缓存命中率 {{rate}}% · 缓存 {{read}} 读 / {{write}} 写', en: 'Cache hit rate {{rate}}% · cache {{read}} read / {{write}} write' },
+  'cost-cache-hit-rate': { zh: '本次请求缓存命中率 {{rate}}% · 缓存 {{read}} 读 / {{write}} 写', en: 'Cache hit rate of this request: {{rate}}% · cache {{read}} read / {{write}} write' },
   // /cost 末尾口径：有金额 → 本地估算（官方单价 × 用量）、非平台账单；
   // 无金额（无用量 / 全部未计价）→ 只解释 token，不套用金额口径。
   // 旧文案"DSH 不提供 API 费用计量"与 T01/T03 的新展示/文档矛盾（#1089）。
@@ -686,8 +688,21 @@ const dict = {
   'thinking-toggled': { zh: '思考过程：{{state}}', en: 'Thinking display: {{state}}' },
   'thinking-on': { zh: '显示', en: 'shown' },
   'thinking-off': { zh: '隐藏', en: 'hidden' },
-  'tokens-usage': { zh: 'Tokens：{{in}} 输入 · {{out}} 输出', en: 'Tokens: {{in}} in · {{out}} out' },
-  'tokens-usage-context': { zh: '{{usage}} · 上下文 {{percent}}%', en: '{{usage}} · {{percent}}% of context' },
+  // /tokens、/status、/cost 的 token 口径：provider 的四个桶是互斥计数，
+  // 「本次请求上传量」= input+cacheRead+cacheWrite（= prompt 大小），
+  // 「会话累计」才是 tokens 计数器。两者不得再并列成一句。
+  'tokens-request-upload': {
+    zh: '本次请求：上传 {{upload}}（输入 {{input}} · 缓存读 {{read}} · 缓存写 {{write}}）· 命中率 {{rate}}%',
+    en: 'This request: {{upload}} uploaded (input {{input}} · cache read {{read}} · cache write {{write}}) · hit rate {{rate}}%',
+  },
+  'tokens-session-total': {
+    zh: '会话累计：未缓存输入 {{input}} · 输出 {{output}}',
+    en: 'Session total: {{input}} uncached input · {{output}} output',
+  },
+  'tokens-session-breakdown': {
+    zh: '会话累计：未缓存输入 {{input}} · 输出 {{output}} · 缓存读 {{read}} · 缓存写 {{write}}',
+    en: 'Session total: {{input}} uncached input · {{output}} output · {{read}} cache read · {{write}} cache write',
+  },
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
   'update-aborted-no-profile': { zh: 'dsh-tui 更新中止：未解析到 dsh profile。', en: 'dsh-tui update aborted: no dsh profile resolved.' },
