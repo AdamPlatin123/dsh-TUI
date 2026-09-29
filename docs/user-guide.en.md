@@ -463,7 +463,7 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 - `/model`: selector. **Switching = fork the session** (history kept, only routing changes, the old session stays in `/resume`);
   persisted to `~/.dsh-tui/model.json`.
 - Switching is rejected mid-turn.
-- `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode),
+- `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode — and therefore no compaction and no tool-result pruning, so a long session can hit the context limit and `/compact` plus questions are unavailable; Help and `/` completion mark the command, and entering the preset says so once),
   `cordis`, `liangshen` (Liangshen mode).
   **A session that already has messages can't switch** (blank-only): the choice only becomes the default for the next `/new`.
   This is a **kernel agent preset** deciding which tools the model can use; `/settings → Minimal UI` (极简界面) on the display side is unrelated.

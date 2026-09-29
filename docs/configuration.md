@@ -132,7 +132,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | --- | --- | --- |
 | `standard` | 标准模式（默认） | 编辑、Shell、检索、Skills、计划、Goals、子代理与工作流 |
 | `ptc`（0.1.2）/ `code`（旧 0.1.1） | PTC 模式 | 标准能力，加 PTC SDK 呈现工具，可用 TypeScript 组合多步操作；两个名字可跨版本兼容解析 |
-| `minimal` | 极简模式 | 内核 Agent 预设：只暴露一个持久 shell 工具（POSIX 为 bash，Windows 为 pwsh），不带 compaction、计划模式与运行时上下文。`str_replace_editor` 自 0.1.3-alpha.2 起是 opt-in，该预设不含它 |
+| `minimal` | 极简模式 | 内核 Agent 预设：只暴露一个持久 shell 工具（POSIX 为 bash，Windows 为 pwsh），不带 compaction、计划模式与运行时上下文。`str_replace_editor` 自 0.1.3-alpha.2 起是 opt-in，该预设不含它。代价也如实说：没有压缩、也不剪枝工具结果（长会话可能撞上下文上限，超长工具输出整段留在上下文里），`/compact` 与问卷在该预设下不可用——Help 与 `/` 补全标注「不可用」，进入/恢复该预设时提示一次 |
 | `cordis` | 创造模式 | 标准能力，加运行时检查与插件实验工具 |
 | `liangshen` | 梁神模式 | 主 Agent 与子 Agent 首轮均保持极简模式的最小工具面，首次工具调用后开放完整目录，压缩后重新锚定 |
 
