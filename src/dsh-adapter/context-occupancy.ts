@@ -79,21 +79,26 @@ function finiteNumber(value: unknown): number | undefined {
 /**
  * Narrow one projection value: anything that is not a context-pressure view is
  * dropped rather than rendered half-formed.
+ *
+ * A well-formed value is passed THROUGH (not copied), the same discipline
+ * `activity-store.ts` applies: the host reuses the wire object while its state
+ * is unchanged, so identity is the store's change test, and a copy would make
+ * every read look like a change.
  * @param value - Raw projection value.
  * @returns the value as a context-pressure view, or `undefined`.
  */
 export function asContextPressureView(value: unknown): ContextPressureView | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  const pressureTokens = finiteNumber(record.pressureTokens)
-  const projectedTokens = finiteNumber(record.projectedTokens)
-  const contextWindow = finiteNumber(record.contextWindow)
-  if (pressureTokens === undefined && projectedTokens === undefined && contextWindow === undefined) return undefined
-  return {
-    ...(pressureTokens === undefined ? {} : { pressureTokens }),
-    ...(projectedTokens === undefined ? {} : { projectedTokens }),
-    ...(contextWindow === undefined ? {} : { contextWindow }),
+  const fields = ['pressureTokens', 'projectedTokens', 'contextWindow'] as const
+  let known = false
+  for (const field of fields) {
+    const raw = record[field]
+    if (raw === undefined) continue
+    if (finiteNumber(raw) === undefined) return undefined
+    known = true
   }
+  return known ? value as ContextPressureView : undefined
 }
 
 /**
