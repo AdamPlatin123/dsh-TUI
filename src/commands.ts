@@ -2,10 +2,16 @@ import type { LocalCommand, LocalizedDescriptions, CommandCompletion } from './a
 export type { LocalCommand, LocalizedDescriptions, CommandCompletion } from './adapter/ports/channel-catalog.js'
 /**
  * Local slash commands for dsh-tui, presented as `/name — description`.
- * The built-in set is merged with plugin-registered
- * commands (plan/goal/…) from the DSH command registry (`dsh-commands`) —
- * `runCommand` in the Chat screen dispatches either kind, with the registry
- * handler winning for names both sides declare.
+ * The built-in set is merged with plugin-registered commands (plan/goal/…)
+ * from the DSH command registry (`dsh-commands`); `runCommand` in the Chat
+ * screen dispatches either kind.
+ *
+ * Locals win on name collisions: the merge skips a registry descriptor whose
+ * name a local command already declares (`channel/skill-catalog.ts`), and the
+ * Chat switch answers the local name before the registry path. `/compact` is
+ * the live case — the TUI's own transaction is the primary route and the
+ * official `dsh-command-compact` handler is only the fallback when the local
+ * path cannot run (see `dsh-adapter/channel/capabilities.ts`).
  */
 
 import { getLang, tOr } from './i18n.js'
