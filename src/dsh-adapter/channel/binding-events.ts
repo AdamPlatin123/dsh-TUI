@@ -24,6 +24,12 @@ export function createBindingEvents(ctx: Context, deps: {
    *  The line's semantics live in the working-activity plugin: this app folds
    *  nothing itself and forwards no events. */
   seedActivity?(session: unknown): void
+  /** Read the context-occupancy projection's current value for a freshly bound
+   *  session, for the same reason (and with the same plumbing) as
+   *  `seedActivity`: the value only arrives when it changes, so a resumed
+   *  session needs one baseline read to show its occupancy before the next
+   *  request reports usage. */
+  seedContextOccupancy?(session: unknown): void
   inputConvergence: InputConvergence
   selection: ModelSelectionRef
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
@@ -87,6 +93,7 @@ export function createBindingEvents(ctx: Context, deps: {
       deps.inputConvergence.cancelInFlight = false
       deps.inputConvergence.interruptSeq += 1
       deps.seedActivity?.(deps.binding.agent.session)
+      deps.seedContextOccupancy?.(deps.binding.agent.session)
       deps.modelActions.selection.current = undefined
       deps.modelActions.selection.assembled = undefined
       if (deps.binding.agent.options?.model === undefined && deps.state.provider !== '' && deps.state.model !== '') {

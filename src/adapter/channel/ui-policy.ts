@@ -165,6 +165,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'reasoningEffort',
   'effortLevels',
   'lastUsage',
+  'contextOccupancy',
   'tps',
   'tpsSamples',
   'activityFrames',

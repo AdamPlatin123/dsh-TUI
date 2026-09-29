@@ -59,6 +59,7 @@ import { reserveMount } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { createActivityStore } from './activity-store.js'
+import { createContextOccupancyStore } from './context-occupancy.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
@@ -546,6 +547,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // (the runtime `/activity` command only changes the preset), so a hidden
   // line attaches nothing at all — no feed, no 500ms tick.
   const activityStore = createActivityStore(ctx, config.activity !== false)
+  // Read side of the token meter's `contextPressure` unit: the ONE occupancy
+  // source for the footer, the segmented bar, the status commands and the
+  // context-low warning. Created unconditionally (unlike the activity store,
+  // there is no config gate: hiding the bar must not make the warning or the
+  // footer read a stale sample). A composition without the meter leaves it
+  // empty and the channel falls back to the last-request sample.
+  const contextOccupancyStore = createContextOccupancyStore(ctx)
   const rawChannel = createChannel(ctx, agent, {
     // The namespace this boot actually registered the settings section under
     // (the Config owner's Loader id; custom ids are supported). Chat and the
@@ -556,6 +564,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // soon as this session binds so a resumed or reattached session renders its
     // line immediately instead of waiting for the next event.
     seedActivity: session => activityStore.seed(session),
+    // Same reason as the activity line: the occupancy projection only pushes on
+    // change, so a resumed session reads one baseline at bind time.
+    contextPressure: contextOccupancyStore,
+    seedContextOccupancy: session => contextOccupancyStore.seed(session),
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
     // from the current launch directory would split @ expansion / file

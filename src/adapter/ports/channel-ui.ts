@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
@@ -112,6 +112,24 @@ export interface ChannelUi {
   readonly lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number }
     | undefined
+  /**
+   * Context occupancy — the ONE source of truth for the footer's `ctx` field,
+   * the segmented context bar, the working-activity line's `⚠ ctx N%` prefix,
+   * `/tokens` + `/status`, and the context-low warning. Read from DSH's own
+   * `contextPressure` session projection (`projectedTokens ?? pressureTokens`,
+   * the same number the Web UI shows) and refreshed by that projection's change
+   * feed — never by a per-render fold.
+   *
+   * `undefined` only before anything is known: no request yet AND no meter (a
+   * bare `cordis.yml` composition). {@link ContextOccupancy.source} says which
+   * path answered; see `dsh-adapter/context-occupancy.ts` for the deliberate
+   * divergence from the official "render nothing" behavior.
+   *
+   * Required-and-undefined rather than optional, matching `compaction`: the
+   * effect inventory in `adapter/channel/ui-policy.ts` maps over
+   * `keyof ChannelUi`, and an optional member would widen that union.
+   */
+  readonly contextOccupancy: ContextOccupancy | undefined
   /** Output tokens per second of the current/last turn's response, when known. */
   readonly tps: number | undefined
   /** Per-turn tps samples (sparkline history), oldest first. */
