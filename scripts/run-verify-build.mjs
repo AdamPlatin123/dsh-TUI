@@ -110,6 +110,7 @@ const GATES = [
   'verify:semantic-copy',
   'verify:btw',
   'verify:session-mounts',
+  'verify:handoff-stdin',
 ]
 
 const root = new URL('..', import.meta.url)
