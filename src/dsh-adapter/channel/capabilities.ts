@@ -81,8 +81,15 @@ const COMMAND_CAPABILITIES = new Map<string, (capabilities: AgentCapabilities) =
  */
 export function resolveAgentCapabilities(evidence: CapabilityEvidence): AgentCapabilities {
   const { agent, commandService, presetId } = evidence
-  const registered = (name: string): boolean =>
-    agent !== undefined && commandService?.find(agent, name) !== undefined
+  // The command service can be a partial shape (script fixtures, hosts whose row
+  // does not expose the whole surface), so read `find` structurally and call it
+  // as a method: a detached registry method loses `this` (see #864). An unusable
+  // service means "no registry route", never a throw out of the capability read.
+  const registered = (name: string): boolean => {
+    if (agent === undefined || commandService === undefined) return false
+    const { find } = commandService
+    return typeof find === 'function' && find.call(commandService, agent, name) !== undefined
+  }
   const compaction = hasCompactNow(evidence.service('compaction'))
   return {
     compact: compaction
