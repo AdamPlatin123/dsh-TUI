@@ -263,4 +263,34 @@ for (const [presetId, services, expected] of [
   channel.releaseContributions()
 }
 
+// ── 标注必须真的挂在「已发布」的命令表上（红队盲点 N4b）─────────────────
+// 只断言纯函数 annotateCommandCapabilities 的输出是不够的：把接线删掉（构造时
+// 不标注、或刷新时不标注），上面所有断言仍然全绿，而用户看到的 Help 里
+// `/compact` 又变回「看起来可用」。这里从 bind 出来的真实 channel 上读
+// `commandList`，并要求正反两侧都对。
+{
+  const unavailable = bindFixtureChannel(undefined, [])
+  const compactEntry = unavailable.commandList.find(command => command.name === 'compact')
+  ok(
+    compactEntry?.descriptionKey === 'cmd-desc-compact-unavailable',
+    'the published command list annotates /compact when no route exists',
+  )
+  unavailable.releaseContributions()
+
+  const available = bindFixtureChannel('standard', ['compaction'])
+  ok(
+    available.commandList.find(command => command.name === 'compact')?.descriptionKey === undefined,
+    'the published command list leaves /compact unannotated when the local route exists',
+  )
+  available.releaseContributions()
+
+  // 刷新路径（skill catalog 的 setCommands 回调）同样必须经过标注：删掉那一行
+  // 不会被任何既有门禁拦住，所以在这里按源码钉住这条接线。
+  const source = readFileSync(new URL('../src/dsh-adapter/channel.ts', import.meta.url), 'utf8')
+  ok(
+    source.includes('annotateCommandCapabilities(commands, capabilitiesOf())'),
+    'the command-list refresh path annotates through the shared capability facts',
+  )
+}
+
 console.log(`agent capability resolution OK (${checks} checks)`)

@@ -83,12 +83,19 @@ export function resolveAgentCapabilities(evidence: CapabilityEvidence): AgentCap
   const { agent, commandService, presetId } = evidence
   // The command service can be a partial shape (script fixtures, hosts whose row
   // does not expose the whole surface), so read `find` structurally and call it
-  // as a method: a detached registry method loses `this` (see #864). An unusable
-  // service means "no registry route", never a throw out of the capability read.
+  // as a method: a detached registry method loses `this` (see #864). A missing
+  // member and a throwing one both mean "no registry route", never a throw out
+  // of the capability read — this runs on the render path and inside bind()'s
+  // gap notice, where an exception disposes the whole channel.
   const registered = (name: string): boolean => {
     if (agent === undefined || commandService === undefined) return false
     const { find } = commandService
-    return typeof find === 'function' && find.call(commandService, agent, name) !== undefined
+    if (typeof find !== 'function') return false
+    try {
+      return find.call(commandService, agent, name) !== undefined
+    } catch {
+      return false
+    }
   }
   const compaction = hasCompactNow(evidence.service('compaction'))
   return {
@@ -133,7 +140,22 @@ export function agentCapabilityEvidence(ctx: Context, agent: Agent | undefined):
         return false
       }
     },
-    presetId: agent === undefined ? undefined : runningPresetOf(agent.session),
+    presetId: agent === undefined ? undefined : recordedPresetId(agent),
+  }
+}
+
+/**
+ * The preset recorded for the agent, or undefined when the session cannot be
+ * read. `runningPresetOf` walks the live session contract and throws on a
+ * session that violates it; this bag must stay descriptive, so a bad read
+ * degrades to "no preset recorded" rather than escaping into the caller (where
+ * it would dispose the channel through bind()'s catch).
+ */
+function recordedPresetId(agent: Agent): string | undefined {
+  try {
+    return runningPresetOf(agent.session)
+  } catch {
+    return undefined
   }
 }
 

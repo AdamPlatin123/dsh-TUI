@@ -540,7 +540,10 @@ function createChannelWithOwner(
         state.contextWindow,
       )
     },
-    commandList: LOCAL_COMMANDS,
+    // Annotated from the start: Help and `/` completion read `commandList`
+    // before the first skill-catalog refresh publishes a new one, and a command
+    // whose capability is missing must never look usable in that window.
+    commandList: annotateCommandCapabilities(LOCAL_COMMANDS, capabilitiesOf()),
     capabilities: capabilitiesOf,
     ...actionMethods,
     subagentControl,

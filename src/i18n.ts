@@ -1502,6 +1502,10 @@ const dict = {
     zh: '压缩会话历史（当前 agent 预设未挂载压缩服务，不可用）',
     en: 'Summarize earlier turns to free context space (unavailable: this agent preset mounts no compaction service)',
   },
+  'cmd-desc-plan-unavailable': {
+    zh: '切换计划模式（当前 agent 未注册 /plan 命令，不可用）',
+    en: 'Toggle plan mode (unavailable: this agent has no /plan command registered)',
+  },
   'cmd-desc-resume': { zh: '恢复历史会话' },
   'cmd-desc-agentview': { zh: '打开会话总览' },
   'cmd-desc-bg': { zh: '当前会话转入后台并打开总览' },
