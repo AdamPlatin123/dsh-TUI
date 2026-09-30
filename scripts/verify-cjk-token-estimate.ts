@@ -85,7 +85,7 @@ for (const sample of ALL_SAMPLES) {
   assert.ok(value >= 1, `${label}: 非空文本至少 1 token，得到 ${value}`)
 }
 
-// ── 2. 纯 ASCII：与旧口径逐字节相同 + 落在英文容差带 ────────────────────
+// ── 2. 纯 ASCII：单条调用与旧口径完全一致 + 落在英文容差带 ──────────────
 for (const sample of [ASCII_TEXT, ASCII_HEAD, ASCII_LONG, ANSI]) {
   assert.equal(
     estimateTokens(sample),
@@ -180,7 +180,30 @@ assert.equal(
   '包在转义里的中文正文分类不变，只有转义序列按 ASCII 计入',
 )
 
-// ── 7. 单调性：逐前缀增长（更长输入不小于更短） ─────────────────────────
+// ── 7. 东亚文字的扩展/半宽区段：必须与正体同档（红队发现的分类器缺口） ──
+// 同一视觉字符的 precomposed 与 half-width / 扩展 jamo 变体不能被分成两档，
+// 否则同一段韩文/日文按写法不同会得到 1.43x 的估值差。
+const HALFWIDTH_KANA = '\uff71\uff72\uff73\uff74\uff75' // ｱｲｳｴｵ
+const HALFWIDTH_HANGUL = '\uffa1\uffa2\uffa3\uffa4\uffa5' // ﾡﾢﾣﾤﾥ
+const JAMO_EXT_A = '\ua960\ua961\ua962\ua963\ua964' // Hangul Jamo Extended-A
+const JAMO_EXT_B = '\ud7b0\ud7b1\ud7b2\ud7b3\ud7b4' // Hangul Jamo Extended-B
+const SMALL_FORM = '\ufe50\ufe51\ufe52\ufe53\ufe54' // 小写变体（CJK 标点变体）
+for (const [label, sample] of [
+  ['半宽片假名', HALFWIDTH_KANA],
+  ['半宽谚文', HALFWIDTH_HANGUL],
+  ['谚文 Jamo 扩展-A', JAMO_EXT_A],
+  ['谚文 Jamo 扩展-B', JAMO_EXT_B],
+  ['小写变体标点', SMALL_FORM],
+] as const) {
+  assert.equal(Array.from(sample).length, 5, `${label}：样本前提是 5 个码点`)
+  assert.equal(
+    estimateTokens(sample),
+    Math.ceil(5 / 1.4),
+    `${label} 必须按 CJK 档计（5 码点 = 4 token），而不是 other 档的 3`,
+  )
+}
+
+// ── 8. 单调性：逐前缀增长（更长输入不小于更短） ─────────────────────────
 for (const [label, text] of [
   ['ASCII', ASCII_LONG],
   ['中文', CJK_PARAGRAPH],
@@ -201,6 +224,7 @@ for (const [label, text] of [
 }
 
 console.log(
-  'verify-cjk-token-estimate OK (ASCII == chars/4, CJK ≈1.4 chars/token, mixed weighted, '
-  + 'emoji code points, ANSI as ASCII, monotonicity + non-negativity)',
+  'verify-cjk-token-estimate OK (ASCII == chars/4 per call, CJK ≈1.4 chars/token incl. '
+  + 'half-width and extended jamo ranges, mixed weighted, emoji code points, ANSI as ASCII, '
+  + 'monotonicity + non-negativity)',
 )

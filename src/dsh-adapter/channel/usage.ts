@@ -62,10 +62,14 @@ function isDenseScript(codePoint: number): boolean {
     || (codePoint >= 0x3400 && codePoint <= 0x4dbf) // CJK unified ideographs extension A
     || (codePoint >= 0x4e00 && codePoint <= 0x9fff) // CJK unified ideographs
     || (codePoint >= 0xa000 && codePoint <= 0xa4cf) // Yi syllables and radicals
+    || (codePoint >= 0xa960 && codePoint <= 0xa97f) // Hangul Jamo Extended-A
     || (codePoint >= 0xac00 && codePoint <= 0xd7af) // Hangul syllables
+    || (codePoint >= 0xd7b0 && codePoint <= 0xd7ff) // Hangul Jamo Extended-B
     || (codePoint >= 0xf900 && codePoint <= 0xfaff) // CJK compatibility ideographs
     || (codePoint >= 0xfe30 && codePoint <= 0xfe4f) // CJK compatibility forms
+    || (codePoint >= 0xfe50 && codePoint <= 0xfe6f) // small form variants (CJK punctuation variants)
     || (codePoint >= 0xff00 && codePoint <= 0xff60) // full-width forms
+    || (codePoint >= 0xff61 && codePoint <= 0xffdc) // half-width kana, half-width Hangul, half-width CJK punctuation
     || (codePoint >= 0xffe0 && codePoint <= 0xffe6) // full-width signs
     || (codePoint >= 0x1f200 && codePoint <= 0x1f2ff) // enclosed ideographic supplement
     || (codePoint >= 0x20000 && codePoint <= 0x3fffd) // CJK extensions B–G
@@ -77,11 +81,14 @@ function isDenseScript(codePoint: number): boolean {
  * count by script class (see the rates above), rounded up.
  *
  * Pure and deterministic: non-negative, zero only for the empty string, and
- * monotonic — appending characters never lowers the result. Pure ASCII input is
- * bit-for-bit the old `ceil(length / 4)` (there is an explicit fast path), so
- * English sessions keep their existing readings while CJK sessions stop being
- * underestimated by ~3x. ANSI escapes are NOT stripped: they are ASCII, and the
- * provider tokenizes the literal message bytes rather than the rendered cells.
+ * monotonic — appending characters never lowers the result. A single call on
+ * pure ASCII input is exactly the old `ceil(length / 4)` (there is an explicit
+ * fast path), so per-message English numbers are unchanged; note that a caller
+ * which used to sum characters and round once now rounds per call, so summing
+ * this estimator over messages can differ from the legacy total by at most one
+ * token per call (ASCII-only sums included). ANSI escapes are NOT stripped: they
+ * are ASCII, and the provider tokenizes the literal message bytes rather than
+ * the rendered cells.
  *
  * @param text - Model-visible text (a prompt, an assistant block, a tool
  *   result); widths are irrelevant here, this counts characters, not cells.
