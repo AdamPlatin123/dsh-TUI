@@ -52,6 +52,8 @@
 
 ## 官方收录
 
+**DeepSeek Harness 官方负责人**推荐的社区插件中，dsh-TUI 是首个被推荐的插件。
+
 本插件被 **DeepSeek Harness 官方公众号**推文收录，也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录，并登上 [GitHub Trending](https://trendshift.io/repositories/146168) 日榜第七（TypeScript 口径）。
 
 <div align="center">
