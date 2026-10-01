@@ -53,6 +53,9 @@ Keys and commands: [Interaction and commands](docs/interaction.en.md). Everythin
 
 ## Featured & Listed
 
+Among the community plugins recommended by the **official lead of DeepSeek
+Harness**, dsh-TUI is the first.
+
 Featured by the **DeepSeek Harness official WeChat account**, listed in the
 [dshfind](https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI) plugin
 directory, and ranked **#7 on [GitHub Trending](https://trendshift.io/repositories/146168)
