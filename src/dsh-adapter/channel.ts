@@ -5,6 +5,7 @@ import { createCommandCompletions } from './channel/command-completions.js'
 import { createLocalActions } from './channel/local-actions.js'
 import { createDetachedHandleFactory } from './channel/lifetime-resources.js'
 import { createContextBookkeeping } from './channel/context-bookkeeping.js'
+import { resolveContextOccupancy } from './context-occupancy.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from './channel/action-readiness.js'
 import { createBindingEvents } from './channel/binding-events.js'
 import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
@@ -480,6 +481,9 @@ function createChannelWithOwner(
     return actionReadiness.getReadyActions()
   }
   const actionMethods = createChannelActionMethods(getReadyActions)
+  // Official occupancy source (absent in compositions without the token meter):
+  // `read` is a cached lookup, so the accessor on the state below stays cheap.
+  const contextPressure = options.contextPressure
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, owner, inputConvergence,
@@ -516,6 +520,20 @@ function createChannelWithOwner(
     // anyway.
     get minimal(): boolean {
       return state.minimalUi
+    },
+    /**
+     * Context occupancy is DERIVED here, not stored: it combines the cached
+     * host projection value (a map lookup) with this channel's own fallback
+     * sample and capacity. An accessor is what keeps "one source of truth"
+     * true without republishing a derived value from every mutation site that
+     * can move the window or the sample (replay, resume, model switch, reset).
+     */
+    get contextOccupancy() {
+      return resolveContextOccupancy(
+        contextPressure?.read(state.sessionId),
+        state.lastUsage,
+        state.contextWindow,
+      )
     },
     commandList: LOCAL_COMMANDS,
     ...actionMethods,
@@ -595,6 +613,18 @@ function createChannelWithOwner(
   // callback. The renderer lease binds its external authority later, but this
   // owner already makes teardown and construction failure fail closed.
   registerChannelOwner(state, owner)
+
+  // The projection's change feed is the only thing that can move occupancy
+  // between session events (a compaction rewriting the surface, the prompt
+  // growing before the next request); republish so the footer, the status
+  // commands and the warning read the fresh value immediately. The store is
+  // host-wide, so the emit is unconditional — the accessor already ignores
+  // another session's value.
+  if (contextPressure !== undefined) {
+    owner.own(contextPressure.subscribe(() => {
+      if (owner.current()) state.emit()
+    }))
+  }
 
   // Agent-view is activated after the complete state/action surface exists:
   // no roster callback or persistence continuation can observe an unbound UI.
@@ -814,6 +844,7 @@ function createChannelWithOwner(
     binding,
     state,
     seedActivity: options.seedActivity,
+    seedContextOccupancy: options.seedContextOccupancy,
     inputConvergence,
     selection,
     modelActions,

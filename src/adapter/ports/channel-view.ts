@@ -776,3 +776,28 @@ export interface LlmDiscoveredModel { id: string; name?: string; contextWindow?:
 export type ChannelImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
 export interface ChannelSceneMetadata { readonly id: string; readonly title?: string }
 export interface RawTrajEvent { readonly type: string; readonly seq: number; readonly time: number; readonly data: unknown }
+
+/**
+ * The ONE context-occupancy reading every occupancy surface shares: the
+ * footer's `ctx` field and its hover detail, the segmented context bar, the
+ * working-activity line's `⚠ ctx N%` prefix, `/tokens` + `/status`, and the
+ * context-low warning.
+ *
+ * It is deliberately separate from the last request's billed usage, which stays
+ * the source for cache-hit-rate and cost readouts: "what the last request cost"
+ * and "how full the window is now" are different questions (see
+ * `dsh-adapter/context-occupancy.ts`).
+ */
+export interface ContextOccupancy {
+  /** Tokens the next request would occupy. */
+  readonly usedTokens: number
+  /** Window to divide by; `undefined` when no route advertised a capacity. */
+  readonly contextWindow: number | undefined
+  /**
+   * Which source answered: `projection` is DSH's own `contextPressure`
+   * projection (the number the Web UI shows); `sample` is this TUI's fallback,
+   * the last settled request's billed usage, used only when the composition
+   * mounts no token meter.
+   */
+  readonly source: 'projection' | 'sample'
+}

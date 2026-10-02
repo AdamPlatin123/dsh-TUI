@@ -334,7 +334,7 @@ dsh-tui
 | `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由；还没有人说过话的会话不记分支，保留首个 prompt 的自动标题），选择持久化到 `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
-| `/tokens` | 无 | token 用量 + 上下文百分比 |
+| `/tokens` | 无 | 分三段报数，不再并列两个不同量：**本次请求**上传量（input + 缓存读 + 缓存写，harness 的四个桶互斥）、**会话累计**（未缓存输入 / 输出 / 缓存读 / 缓存写）、**上下文占用** |
 | `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器浏览，`frames <名>` 直接设置（含 `random`），默认 `moon8`。持久化 `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | Agent 预设切换：`standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始的会话不可切换**。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
@@ -508,7 +508,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 悬停整条弹出图例：色块 + 名称 + token 数（窄屏自动改用短名）。
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
-- 左组：模型 → TPS → thinking → mode → ctx → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→
+- 左组：模型 → TPS → thinking → mode → ctx（**上下文占用** `19.5% (13k/64k)`：与分段条、工作线压力前缀、`/tokens`、`/status` 和上下文告警**同读一个值**，来源是 harness 自带的 `contextPressure` 投影——`projectedTokens ?? pressureTokens`，即「下一次请求」的占用，压缩与被拒请求都会立刻反映，不再等一次成功请求；投影缺席的裸 `cordis.yml` 组合回退到上次请求的计费用量）→ cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→
   cost（`≈¥0.05 谷`，**本会话估算**：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；
   hover 拆「主会话 ¥ / 子代理 ¥ / 未计价 N tok」；非官方/未收录模型只显示 token 并标注未计价；
   **估算是参考，以平台账单为准**）
@@ -519,7 +519,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
 - 空闲显示 `? for shortcuts`、运行中 `esc to interrupt`、选择中 `esc to return to input`。
-- 空闲还显示 working-activity 动画帧（`statusBar.activity` 开），上下文 ≥80% 琥珀、≥95% 红。
+- 空闲还显示 working-activity 动画帧（`statusBar.activity` 开），上下文 ≥80% 琥珀、≥95% 红（与 ctx 字段同一占用读数）。
 - 右侧**迷你轨迹条 MiniWake**（`statusBar.trajectory`，默认关）：会话投影为密度字形，颜色区分通道，失败列染红；
   窄屏降格/隐藏。
 

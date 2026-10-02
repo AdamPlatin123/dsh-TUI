@@ -86,6 +86,7 @@ import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
+import { channelContextOccupancy } from './StatusMetrics.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
@@ -260,6 +261,27 @@ const NO_ROWS: readonly ChatRow[] = []
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
+}
+
+/**
+ * The occupancy line `/tokens` and `/status` print.
+ *
+ * Occupancy has ONE source (see `dsh-adapter/context-occupancy.ts`): this is
+ * the same reading the footer's ctx field, the segmented bar and the
+ * context-low warning use — never the session's cumulative uncached input,
+ * which is a different quantity by orders of magnitude.
+ * @param channel - Live channel surface.
+ * @returns The localized line, or `undefined` when no window is known.
+ */
+function contextOccupancyLine(channel: Channel): string | undefined {
+  const occupancy = channelContextOccupancy(channel)
+  if (occupancy === undefined || occupancy.contextWindow === undefined || occupancy.contextWindow <= 0) return undefined
+  const percent = Math.max(0, Math.min(100, Math.round((occupancy.usedTokens / occupancy.contextWindow) * 100)))
+  return t('context-occupancy', {
+    percent,
+    used: formatTokens(occupancy.usedTokens),
+    window: formatTokens(occupancy.contextWindow),
+  })
 }
 
 /** Terminal-title spinner frames. */
@@ -2677,16 +2699,33 @@ export function Chat({
         })
         return true
       case 'tokens': {
-        const usage = t('tokens-usage', { in: formatTokens(channel.tokens.input), out: formatTokens(channel.tokens.output) })
-        if (channel.contextWindow === undefined) {
-          channel.notify(usage)
-        } else {
-          const percent = Math.max(
-            0,
-            Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)),
-          )
-          channel.notify(t('tokens-usage-context', { usage, percent }))
+        // Three separately-labelled facts, never two measures side by side:
+        // what THIS request uploaded (the provider's mutually-exclusive prompt
+        // buckets), what the session has accumulated (the token counters), and
+        // how full the window is (the channel's single occupancy reading — the
+        // same number the footer and the context-low warning show).
+        const usage = channel.lastUsage
+        const lines: string[] = []
+        if (usage !== undefined) {
+          const upload = usage.input + usage.cacheRead + usage.cacheWrite
+          const rate = upload > 0 ? ((usage.cacheRead / upload) * 100).toFixed(1) : '0.0'
+          lines.push(t('tokens-request-upload', {
+            upload: formatTokens(upload),
+            input: formatTokens(usage.input),
+            read: formatTokens(usage.cacheRead),
+            write: formatTokens(usage.cacheWrite),
+            rate,
+          }))
         }
+        lines.push(t('tokens-session-breakdown', {
+          input: formatTokens(channel.tokens.input),
+          output: formatTokens(channel.tokens.output),
+          read: formatTokens(channel.tokens.cacheRead),
+          write: formatTokens(channel.tokens.cacheWrite),
+        }))
+        const occupancyLine = contextOccupancyLine(channel)
+        if (occupancyLine !== undefined) lines.push(occupancyLine)
+        channel.notify(lines.join('\n'))
         return true
       }
       case 'resume':
@@ -2807,23 +2846,23 @@ export function Chat({
         return true
       case 'status': {
         const usage = channel.lastUsage
-        const pct =
-          channel.contextWindow === undefined
-            ? undefined
-            : Math.max(0, Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)))
         const lines: string[] = [
           `${t('status-model', { model: channel.model })}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
           `${t('status-state', { state: channel.working ? t('status-working') : t('status-idle') })}`,
           `${t('status-session', { id: channel.agentId })}`,
           `${t('status-dir', { cwd: channel.displayCwd })}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
-          `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
+          t('tokens-session-total', {
+            input: formatTokens(channel.tokens.input),
+            output: formatTokens(channel.tokens.output),
+          }),
         ]
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
         }
-        if (pct !== undefined) lines.push(t('cost-context', { pct }))
+        const occupancyLine = contextOccupancyLine(channel)
+        if (occupancyLine !== undefined) lines.push(occupancyLine)
         if (channel.sessionTitle) lines.push(t('status-title', { title: channel.sessionTitle }))
         setHelpOpen(false)
         channel.pushLocal('/status', lines)
@@ -2832,7 +2871,10 @@ export function Chat({
       case 'cost': {
         const usage = channel.lastUsage
         const lines = [
-          `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
+          t('tokens-session-total', {
+            input: formatTokens(channel.tokens.input),
+            output: formatTokens(channel.tokens.output),
+          }),
         ]
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
@@ -4746,8 +4788,8 @@ export function Chat({
   })
 
   // Working-activity line (spinner slot): context-pressure prefix shares the
-  // StatusLine thresholds (amber ≥ 80, red ≥ 95).
-  const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+  // StatusLine thresholds (amber ≥ 80, red ≥ 95) and its occupancy source.
+  const activityWarnPct = contextPressurePct(channelContextOccupancy(channel))
 
   // Who owns the spinner slot: with the working-activity line on, that slot
   // draws the user's `/activity` preset, so the compaction row borrows the same
