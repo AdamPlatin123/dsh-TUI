@@ -88,11 +88,16 @@ export function resolveAgentCapabilities(evidence: CapabilityEvidence): AgentCap
   // of the capability read — this runs on the render path and inside bind()'s
   // gap notice, where an exception disposes the whole channel.
   const registered = (name: string): boolean => {
-    if (agent === undefined || commandService === undefined) return false
+    // The unbound read is deliberate: the merged command list is built with the
+    // same scope (`skill-catalog` calls `commandService.list(agent)` before the
+    // first bind, which resolves the global-only view), so a registry command
+    // the user can already see in Help must not read as unavailable merely
+    // because no agent is bound yet — that is exactly the launchpad screen.
+    if (commandService === undefined) return false
     const { find } = commandService
     if (typeof find !== 'function') return false
     try {
-      return find.call(commandService, agent, name) !== undefined
+      return find.call(commandService, agent as Agent, name) !== undefined
     } catch {
       return false
     }
