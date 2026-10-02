@@ -147,7 +147,7 @@ preset registry: `@deepseek-ai/dsh-agent-preset-registry` on 0.1.7, or
 | --- | --- | --- |
 | `standard` | Standard (default) | Editing, shell, search, skills, planning, goals, subagents, and workflows |
 | `ptc` (0.1.2) / `code` (legacy 0.1.1) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
-| `minimal` | Minimal | Kernel agent preset: a single persistent-shell tool (bash on POSIX, pwsh on Windows), with no compaction, no plan mode and no runtime context. `str_replace_editor` has been opt-in since 0.1.3-alpha.2, so this preset does not include it |
+| `minimal` | Minimal | Kernel agent preset: a single persistent-shell tool (bash on POSIX, pwsh on Windows), with no compaction, no plan mode and no runtime context. `str_replace_editor` has been opt-in since 0.1.3-alpha.2, so this preset does not include it. The cost is stated up front: no compaction and no tool-result pruning (a long session can hit the context limit, oversized tool output stays in full), and `/compact` plus the questionnaire are unavailable — Help and `/` completion mark the entry, and entering/resuming the preset says so once |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
 | `liangshen` | Liangshen mode | Minimal's minimal tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
 
