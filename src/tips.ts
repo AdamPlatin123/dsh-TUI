@@ -867,8 +867,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-minimal',
     group: 'pitfalls',
-    zh: '极简模式预设不压缩、不剪枝工具结果：长会话可能撞上下文上限，/compact 与问卷也不可用',
-    en: 'Minimal preset: no compaction or tool-result pruning; long sessions can hit the limit, /compact off',
+    zh: '内核「极简模式」预设不压缩、不剪枝：长会话可能撞上限，/compact 与问卷也不可用（与「极简界面」无关）',
+    en: 'Minimal preset: no compaction or pruning — long sessions can hit the limit (not the Minimal UI)',
   },
   {
     id: 'pit-mouse-mode',
