@@ -9,7 +9,7 @@
  * - It performs no business logic, no protocol translation, no capability
  *   detection, no registry, and stores no mutable host state.
  * - It is for TUI host-internal code only. External plugins continue to use
- *   dsh-std / dsh-ecosystem-spec public protocol surfaces.
+ *   dsh-std / tui-profile public protocol surfaces.
  * - It only exposes Host Ports; admission, permission evaluation and ledger
  *   writes are Kernel/Standard internal services and must never be exposed
  *   as ordinary Host Ports.
