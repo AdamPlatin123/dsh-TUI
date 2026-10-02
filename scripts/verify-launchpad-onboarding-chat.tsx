@@ -144,6 +144,17 @@ function makeChannel(over: Record<string, unknown> = {}) {
     notifications,
     // plan / permission 由 dsh-base 注册为 external 命令（选择器打开的前提）。
     commandList: [...LOCAL_COMMANDS, { name: 'plan', external: true }, { name: 'permission', external: true }],
+    // 能力事实（端口新增：AgentCapabilities）：桩 channel 必须实现，否则
+    // Chat 的命令分支（/plan、/compact）读不到路由。与上面的 commandList
+    // 同源：plan 由 registry 提供，compact 走 TUI 自己的事务。
+    capabilities: () => ({
+      compact: { route: 'local' },
+      plan: { route: 'registry' },
+      compaction: true,
+      pruner: true,
+      questionTool: true,
+      skills: true,
+    }),
     // 命令补全面板（第六版 BUG 1）：与 composer 同源——completeCommands 过滤
     // 合并命令表（含上面的 registry 命令 plan）。
     commandCompletions: (input: string) => completeCommands(input, channel.commandList as never) as never,

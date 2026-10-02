@@ -432,7 +432,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - `/model`：选择器。**切换 = fork 会话续聊**（历史保留、仅换路由，旧会话留在 `/resume`）；
   持久化 `~/.dsh-tui/model.json`。
 - 回合运行中切换会被拒绝。
-- `/preset` 可选：`standard`（默认全功能）、`ptc`、`minimal`（内核「极简模式」：只暴露一个持久 shell 工具，无 compaction、无计划模式）、
+- `/preset` 可选：`standard`（默认全功能）、`ptc`、`minimal`（内核「极简模式」：只暴露一个持久 shell 工具，无 compaction、无计划模式；也因此没有压缩、工具结果不剪枝——长会话可能撞上下文上限，`/compact` 与问卷不可用，Help 与 `/` 补全会标注，进入该预设时提示一次）、
   `cordis`、`liangshen`（梁神模式）。
   **已产生对话的会话不能切换**（blank-only）：选择只保存为下次 `/new` 的默认。
   这里的 preset 是**内核 Agent 预设**，决定模型能用哪些工具；界面上的 `/settings → 极简界面`（Minimal UI）与它无关。

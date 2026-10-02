@@ -2539,9 +2539,26 @@ export function Chat({
         setSelectedId(null)
         setSelectionActive(false)
         return true
-      case 'compact':
-        channel.compact()
+      case 'compact': {
+        // The TUI's own transaction is the primary path: it owns the
+        // `tui/compact` decision event, the progress row with live token
+        // count, Esc cancellation, and the settle before a session switch
+        // (issue #1092) — the official `dsh-command-compact` command has none
+        // of that. A composition that mounts no compaction service falls back
+        // to the registry command; one with neither says WHY up front instead
+        // of looking usable and failing on use (channel/capabilities.ts).
+        const compact = channel.capabilities().compact
+        if (compact.route === 'local') {
+          channel.compact()
+          return true
+        }
+        if (compact.route === 'registry') return runExternalCommand('compact', rawInput, images)
+        channel.notify(
+          t('capability-unavailable', { name: 'compact', reason: t(compact.reasonKey) }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
         return true
+      }
       case 'trace':
         // `/trace` is kept as the discoverable spelling of Ctrl+T: the
         // command menu is where a user finds out the trajectory exists.
@@ -3242,9 +3259,12 @@ export function Chat({
         // Registered by dsh-plan-mode: bare `/plan` opens an on/off picker
         // marked with the current state instead of toggling blindly; Enter
         // dispatches `/plan` or `/plan off`. Arguments pass through verbatim
-        // (`/plan off`), and an unmounted row falls back to the default
-        // external path.
-        const mounted = channel.commandList.some(command => command.external && command.name === 'plan')
+        // (`/plan off`). Availability comes from the shared capability facts
+        // (the same read Shift+Tab uses), not from a second command-list
+        // scan; with no registry command the line falls through to the model,
+        // exactly as before.
+        const plan = channel.capabilities().plan
+        const mounted = plan.route !== 'none'
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (mounted && parts.length === 0) {
           setHelpOpen(false)

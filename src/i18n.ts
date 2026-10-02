@@ -325,6 +325,34 @@ const dict = {
   'compact-cancelled': { zh: '压缩已取消', en: 'Compaction cancelled' },
   // 回合进行中的自动压缩：工作 spinner 上的后缀（只此一词，别抢行）。
   'compact-badge': { zh: '压缩中', en: 'compacting' },
+  // ── 能力事实（dsh-adapter/channel/capabilities.ts）───────────────────
+  // 命令在「当前 agent 组合」下没有任何实现路径时，入口要先说清原因，
+  // 而不是看起来可用、按下去才报一句没有服务。
+  'capability-unavailable': {
+    zh: '/{{name}} 在当前 agent 预设下不可用：{{reason}}',
+    en: '/{{name}} is unavailable under the active agent preset: {{reason}}',
+  },
+  'capability-reason-no-compaction': {
+    zh: '该预设没有挂载压缩服务（内核「极简模式」预设不含 compaction，官方 /compact 命令也依赖它）',
+    en: 'the preset mounts no compaction service (the kernel Minimal preset omits compaction, and the official /compact command depends on it)',
+  },
+  'capability-reason-no-plan-command': {
+    zh: '该预设没有注册 /plan 命令（内核「极简模式」预设不含 plan-mode）',
+    en: 'the preset registers no /plan command (the kernel Minimal preset omits plan mode)',
+  },
+  // 进入/恢复一个缺能力的预设时的一次性告知：只讲用户会遇到的后果。
+  'capability-gap-compaction': {
+    zh: '当前 agent 预设没有压缩：长会话可能撞上下文上限，届时只能新开会话',
+    en: 'The active agent preset has no compaction: a long session can hit the context limit and has to be restarted',
+  },
+  'capability-gap-pruner': {
+    zh: '当前 agent 预设不剪枝工具结果：超长工具输出会整段留在上下文里',
+    en: 'The active agent preset does not prune tool results: oversized tool output stays in the context in full',
+  },
+  'capability-gap-compaction-pruner': {
+    zh: '当前 agent 预设既没有压缩也不剪枝工具结果：长会话可能撞上下文上限，超长工具输出也会整段留在上下文里',
+    en: 'The active agent preset has neither compaction nor tool-result pruning: a long session can hit the context limit, and oversized tool output stays in the context in full',
+  },
   'turn-failed': { zh: '回合出错{{detail}}', en: 'Turn error{{detail}}' },
 
   // ── dsh-adapter/promptDebug.ts（/debug-prompt 成功提示）─────────────
@@ -1467,6 +1495,17 @@ const dict = {
   'cmd-desc-new': { zh: '新开会话' },
   'cmd-desc-clear': { zh: '清空当前会话' },
   'cmd-desc-compact': { zh: '压缩会话历史' },
+  // 能力缺失时的替代描述（`annotateCommandCapabilities` 按需改指到这里）：
+  // Help 与 `/` 补全都说清「为什么不可用」，而不是按下去才报错。en 必须写全，
+  // 因为 cmd-desc-* 在 en 下会回退到 LOCAL_COMMANDS 的原文（不带标注）。
+  'cmd-desc-compact-unavailable': {
+    zh: '压缩会话历史（当前 agent 预设未挂载压缩服务，不可用）',
+    en: 'Summarize earlier turns to free context space (unavailable: this agent preset mounts no compaction service)',
+  },
+  'cmd-desc-plan-unavailable': {
+    zh: '切换计划模式（当前 agent 未注册 /plan 命令，不可用）',
+    en: 'Toggle plan mode (unavailable: this agent has no /plan command registered)',
+  },
   'cmd-desc-resume': { zh: '恢复历史会话' },
   'cmd-desc-agentview': { zh: '打开会话总览' },
   'cmd-desc-bg': { zh: '当前会话转入后台并打开总览' },

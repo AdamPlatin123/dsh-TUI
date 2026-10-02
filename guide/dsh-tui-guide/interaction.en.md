@@ -718,7 +718,7 @@ Additional forms:
 - Exiting plan mode restores the pre-plan atoms first, then the durable preset you were on before plan mode (while the registry still offers it).
 - When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed.
 - `/lang` toggles the interface language (see "Interface language").
-- `/compact` compresses the session history; unavailable under the kernel Minimal agent preset (`minimal`, a single persistent-shell tool) — unrelated to the display-side Minimal UI switch.
+- `/compact` compresses the session history; unavailable under the kernel Minimal agent preset (`minimal`, a single persistent-shell tool), which mounts no compaction and does not prune tool results — a long session can hit the context limit and oversized tool output stays in full (Help and `/` completion mark the entry, and entering the preset says so once) — unrelated to the display-side Minimal UI switch.
 - `/thinking` toggles extended reasoning display; UI state only — **not persisted**.
 - After startup, the TUI checks npm for a newer version in the background and shows a notification when one is available.
 - The check follows the npm registry configuration (`NPM_CONFIG_REGISTRY` or `~/.npmrc`),

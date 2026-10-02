@@ -11,6 +11,7 @@ import { createBindingEvents } from './channel/binding-events.js'
 import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
 import { createChannelProjection } from './channel/projection.js'
 import { createManualCompaction } from './channel/compaction.js'
+import { agentCapabilityEvidence, annotateCommandCapabilities, resolveAgentCapabilities } from './channel/capabilities.js'
 import { createSessionAdoption } from './channel/session-adoption.js'
 import { createRewindPromptAction } from './channel/session-actions.js'
 import { createForkSessionAction } from './channel/session-fork.js'
@@ -481,6 +482,10 @@ function createChannelWithOwner(
     return actionReadiness.getReadyActions()
   }
   const actionMethods = createChannelActionMethods(getReadyActions)
+  // Capability facts for the bound agent (channel/capabilities.ts). Reads are
+  // service lookups, so both consumers may call it freely: the public
+  // `capabilities()` accessor and the command-list annotation below.
+  const capabilitiesOf = () => resolveAgentCapabilities(agentCapabilityEvidence(ctx, binding.agent))
   // Official occupancy source (absent in compositions without the token meter):
   // `read` is a cached lookup, so the accessor on the state below stays cheap.
   const contextPressure = options.contextPressure
@@ -535,7 +540,11 @@ function createChannelWithOwner(
         state.contextWindow,
       )
     },
-    commandList: LOCAL_COMMANDS,
+    // Annotated from the start: Help and `/` completion read `commandList`
+    // before the first skill-catalog refresh publishes a new one, and a command
+    // whose capability is missing must never look usable in that window.
+    commandList: annotateCommandCapabilities(LOCAL_COMMANDS, capabilitiesOf()),
+    capabilities: capabilitiesOf,
     ...actionMethods,
     subagentControl,
     jobControl,
@@ -662,7 +671,13 @@ function createChannelWithOwner(
     commandService,
     agent: () => binding.agent,
     cwd: () => state.cwd,
-    setCommands(commands) { state.commandList = commands; state.emit() },
+    setCommands(commands) {
+      // Annotate before publishing: Help and `/` completion both read
+      // `commandList`, so a command whose capability is missing says so
+      // instead of looking usable and failing on use.
+      state.commandList = annotateCommandCapabilities(commands, capabilitiesOf())
+      state.emit()
+    },
     commandDescriptions: name => commandTrees?.descriptions(name),
     // Attached-context pass-through (T03 consumes the third parameter in the
     // fallback branch): the skill catalog never loses the FIFO/decision fence.
