@@ -23,7 +23,7 @@ src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
 presets/            随包分发的 preset（liangshen）
 bin/dsh-tui.js      dsh-tui 直达命令入口
 vendor/dsh-std      vendored 依赖（frozen lockfile 构建，见 scripts/build 相关脚本）
-dsh-ecosystem-spec/ 生态适配规范子项目（自带 CONTRIBUTING 与治理文档）
+tui-profile/        仓内 TUI Profile：插件准入 + 私有协议定义（纯文件，随本仓代码修订）
 cordis.patch.yml    profile 安装的包级覆盖层；行序、行 ID 与 insert/override 语义关键
 cordis.yml          直接 Cordis/DSH 启动的完整裸组合示例
 scripts/            无头回归、复现环境、探针与诊断；运行前先读脚本头部说明

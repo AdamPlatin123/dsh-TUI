@@ -1,9 +1,9 @@
-# Plugin Development Guide (merged into spec)
+# Plugin Development Guide (authoritative text: the TUI Profile)
 
 [Documentation index](README.md) · [简体中文](plugins.md)
 
-> This document has been merged with the ecosystem admission specification:
-> [Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)
+> This document has been merged with the in-repo TUI Profile (`tui-profile/`):
+> [Plugin Admission and Development Guide](../tui-profile/docs/plugin-admission-and-development.md)
 
 The ecosystem entry points and seam stability reference below are kept here
 for quick reference; the authoritative status and compatibility agreement
@@ -12,7 +12,7 @@ live in the admission & development guide.
 ## Ecosystem entry points
 
 - **Interface & compatibility agreement / Plugin development guide**:
-  [Terminal Interactive Ecosystem Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)
+  [Terminal Interactive Ecosystem Plugin Admission and Development Guide](../tui-profile/docs/plugin-admission-and-development.md)
   (admission spec, seams, contracts, verification checklist).
 - **Organization**:
   [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)
@@ -28,12 +28,12 @@ live in the admission & development guide.
 
 An **informal** maturity grading to help plugin authors gauge investment;
 the authoritative status and compatibility agreement live in the
-[admission & development guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md):
+[admission & development guide](../tui-profile/docs/plugin-admission-and-development.md):
 
 | Tier | Seams |
 | --- | --- |
 | Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line · XII keyboard shortcuts · XIII entry renderers |
-| Experimental (may still shift with dsh-std / admission-spec evolution) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** |
+| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
 Also an experimental public surface:
