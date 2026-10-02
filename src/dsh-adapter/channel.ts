@@ -81,7 +81,7 @@ import { createSettingsHosts } from './channel/settings-host.js'
 import { createChannelOwner, registerChannelOwner } from './channel/owner.js'
 import { ARGS_PREVIEW_LIMIT, foldBack, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './channel/transcript.js'
 import type { AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
-import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
+import { isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
 import { getHostCommandTrees } from './command-trees.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import type {
