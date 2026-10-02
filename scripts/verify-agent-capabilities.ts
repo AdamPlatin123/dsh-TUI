@@ -278,8 +278,10 @@ for (const [presetId, services, expected] of [
   unavailable.releaseContributions()
 
   const available = bindFixtureChannel('standard', ['compaction'])
+  // `some(...)` 而不是 `find(...)?.`：条目整个消失时可选链会得到 undefined，
+  // 断言照样为真——那正是这条要防的回归。
   ok(
-    available.commandList.find(command => command.name === 'compact')?.descriptionKey === undefined,
+    available.commandList.some(command => command.name === 'compact' && command.descriptionKey === undefined),
     'the published command list leaves /compact unannotated when the local route exists',
   )
   available.releaseContributions()
