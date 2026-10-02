@@ -24,11 +24,13 @@
 ## 功能亮点
 
 - **像素鲸鱼娘** — 开屏三选一动画，点击唤醒；开始第一个任务后定格。
+- **落地页与首次引导** — 每次启动先落在带**真输入框**的落地页（大字 + 鲸鱼 + 快捷入口，窄/矮终端自动整块降级）；首次运行走四步向导（API Key / 语言主题 / 模型工作区 / 快捷键），`/setup` 随时重跑。
 - **终端原生界面** — 流式 Markdown、工具卡、`/` 与 `@` 补全、`#L12-14` 行区间、历史搜索、中英界面。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
+- **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列（待办 / 任务），终端够宽才分栏；窄屏与 inline 模式保持整屏面板。
 - **实时状态** — 工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。
 - **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
@@ -148,7 +150,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 ## 快捷键与鼠标
 
-`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Z` 撤销草稿 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。
+`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。
 
 模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。
 
@@ -178,7 +180,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 ## 内置命令
 
-`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
 会话管理界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。

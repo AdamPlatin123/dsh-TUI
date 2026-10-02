@@ -191,6 +191,8 @@ export type ShortcutActionId =
   | 'trajectory'
   | 'dashboard'
   | 'contextPanel'
+  /** 落地页「继续上次会话」一键（第七版）：只在启动页生效，聊天页不绑。 */
+  | 'continue'
   | 'showAll'
   | 'questionFold'
   | 'redraw'
@@ -198,6 +200,8 @@ export type ShortcutActionId =
   | 'expandEditor'
   | 'star'
   | 'undo'
+  | 'sidePanel'
+  | 'sidePanelZoom'
 
 export interface ShortcutActionSpec {
   readonly id: ShortcutActionId
@@ -225,6 +229,10 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'trajectory', defaults: ['ctrl+t'] },
   { id: 'dashboard', defaults: ['ctrl+a'] },
   { id: 'contextPanel', defaults: ['ctrl+p'] },
+  // 落地页 Continue：alt+r（resume 语义）。占用核对（SHORTCUT_ACTIONS defaults ∪
+  // FIXED_RESERVED_COMBOS）：ctrl 系 v/r/g/o/t/a/p/e/l/q/k/b/c/d/u/w/j/left/right/return
+  // 全占，alt 系只有 v/s/z/return/up 在册——alt+r 空闲，且不与输入框抢字母键。
+  { id: 'continue', defaults: ['alt+r'] },
   { id: 'showAll', defaults: ['ctrl+e'] },
   { id: 'redraw', defaults: ['ctrl+l'] },
   { id: 'todoFold', defaults: ['ctrl+q'] },
@@ -236,6 +244,10 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   // Word-level undo for the prompt draft. `exactPrimary` keeps Cmd+Z out of
   // it on macOS; the combo stays remappable through /settings like any other.
   { id: 'undo', defaults: ['ctrl+z'], exactPrimary: true },
+  // 侧栏三态开关：关闭 → 打开并聚焦右栏 → 焦点回 Chat → 关闭（VS Code 同
+  // 键位；tmux 用户的前缀会吞掉 Ctrl+B，可在 /settings → Shortcuts 重映射）。
+  { id: 'sidePanel', defaults: ['ctrl+b'] },
+  { id: 'sidePanelZoom', defaults: ['alt+z'] },
 ]
 
 /** Actions that refuse the macOS ctrl↔Cmd alias (see `exactPrimary`). */

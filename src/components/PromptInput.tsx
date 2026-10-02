@@ -1,5 +1,7 @@
 import React from 'react'
-import stripAnsi from 'strip-ansi'
+// 粘贴/清洗语义已抽到 utils/inputPaste.ts（方案 B：PromptInput 与 Launchpad 共享；
+// 行为逐字节不变，只是搬了家）。
+import { sanitizeEditableText, sanitizePastedText } from '../utils/inputPaste.js'
 import { constants as fsConstants } from 'node:fs'
 import { open, unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
@@ -50,6 +52,7 @@ import {
   type PromptDraftCache,
   type PromptDraftImage,
 } from './promptDraftCache.js'
+export { sanitizeEditableText, sanitizePastedText } from '../utils/inputPaste.js'
 
 /**
  * Visible text of the session-entry control at the head of the input row:
@@ -220,69 +223,6 @@ const FOLD_MIN_CHARS = 600
 const isBigInput = (text: string): boolean =>
   text.split('\n').length >= FOLD_MIN_LINES || text.length >= FOLD_MIN_CHARS
 
-/**
- * Editable prompt text must have one stable source-to-screen geometry. The
- * renderer interprets ANSI as zero-width styling and expands tabs relative to
- * global tab stops; keeping either in `value` would let wrapping/click mapping
- * count different cells and could split an escape sequence during selection.
- * Strip terminal controls and expand tabs at ingress while preserving newlines.
- */
-const EDITABLE_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/u
-
-/**
- * Raw win32-input-mode records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) that reached the
- * editable buffer as text instead of being translated. `stripAnsi` consumes
- * the record head and leaves its terminating `_` in the draft — the stray
- * underscore users see after a multi-line paste (issue #1090). Only the full
- * record grammar (exactly five `;` separators) matches, so a real `_` and
- * ordinary bracket text survive untouched.
- */
-const WIN32_RECORD_RESIDUE = /\u001b\[\d*(?:;\d*){5}_/gu
-
-/**
- * The same record with its ESC byte missing: what a record split across
- * reads leaves behind when the escape timer flushed the prefix before the
- * tail arrived. Printable, so it is stripped only from paste payloads
- * ({@link sanitizePastedText}) — and only when the same payload also carries
- * a full ESC-bearing record as in-payload evidence of that split; typed text
- * and literal clipboard/bracketed-paste bytes are left untouched.
- */
-const WIN32_RECORD_RESIDUE_TAIL = /\[\d*(?:;\d*){5}_/gu
-
-/**
- * Normalize editable text so no terminal control characters remain in state.
- */
-export function sanitizeEditableText(text: string): string {
-  // Fast path for ordinary and multi-line drafts: newline is intentionally
-  // absent from the probe, so large clean text returns without the
-  // stripAnsi/control-normalization passes.
-  if (!EDITABLE_CONTROL.test(text)) return text
-  // Record residue goes first: `stripAnsi` would consume the CSI head and
-  // leave only the terminating `_` behind.
-  return stripAnsi(text.replace(WIN32_RECORD_RESIDUE, ''))
-    .replace(/\r\n?/gu, '\n')
-    .replace(/\t/gu, '        ')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
-}
-
-/**
- * Paste-payload ingress: strip the ESC-less tail of a split record before
- * normalizing. The tail is printable, so it survives `sanitizeEditableText`'s
- * control probe untouched; typed text keeps it because only a paste payload
- * can carry a partial record.
- *
- * The five separators only prove the *shape*, not that a record was split:
- * a user can legitimately paste the literal `[13;28;13;1;0;1_`. Strip the
- * ESC-less form only when the same payload also carries a full ESC-bearing
- * record — only then is there in-payload evidence of a split stream.
- * Otherwise the bytes are ordinary text and must survive verbatim.
- */
-export function sanitizePastedText(text: string): string {
-  // Probe with String#match: the /g detection regex carries lastIndex state
-  // across `.test` calls, so a previous success could skip a later match.
-  const hasRecordStream = text.match(WIN32_RECORD_RESIDUE) !== null
-  return sanitizeEditableText(hasRecordStream ? text.replace(WIN32_RECORD_RESIDUE_TAIL, '') : text)
-}
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
 
@@ -607,6 +547,13 @@ export interface PromptInputProps {
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
   /**
+   * Host judgement "this notice needs no toast" — the pet panel says it with
+   * its speech bubble instead while it is the active panel. Evaluated during
+   * render (not via an effect-written ledger) so toast and bubble swap in
+   * the same commit without a one-frame flash. Errors are never suppressed.
+   */
+  toastSuppressed?: (item: Channel['notifications'][number]) => boolean
+  /**
    * Owner-held slot for the unsent draft.
    *
    * The prompt owns its text in local state, and several screens REPLACE the
@@ -725,6 +672,7 @@ export interface PromptInputProps {
  */
 export function PromptInput({
   channel,
+  toastSuppressed,
   suspended = false,
   draftCache,
   helpOpen,
@@ -3271,6 +3219,17 @@ export function PromptInput({
         })
         return
       }
+      // "Send to Chat" chips peel before the draft: the first Esc drops the
+      // contexts panels staged and leaves the typed text untouched, so a second
+      // Esc then clears the input as usual. The press is CONSUMED — this rung
+      // has exactly one meaning, and a running turn must not be interrupted by
+      // the same key that only dropped a chip.
+      const stagedContexts = channel.attachedContexts ?? []
+      if (stagedContexts.length > 0) {
+        event?.stopImmediatePropagation()
+        for (const staged of [...stagedContexts]) channel.detachContext(staged.id)
+        return
+      }
       // A single Esc clears the current input (if any); the double-tap
       // path below handles rewind/clear on an already-empty input. A BIG
       // input folds into a block instead (Esc = the fold toggle; the
@@ -3690,6 +3649,12 @@ export function PromptInput({
 
   const lastNotification =
     channel.notifications[channel.notifications.length - 1]
+  // The pet panel can "say" a notice with its speech bubble instead: while
+  // that panel is the ACTIVE one the host suppresses the duplicate toast
+  // here (errors always toast — they may need action). Same render, same
+  // commit, so the swap cannot flash one frame of toast first.
+  const toastVisible =
+    lastNotification !== undefined && (toastSuppressed?.(lastNotification) ?? false) !== true
 
   // Park the native terminal cursor at the input caret (via the renderer's
   // cursor-declaration mechanism). Terminal emulators render IME preedit
@@ -3938,6 +3903,13 @@ export function PromptInput({
   // 顶边框右侧的会话名标签 chip：色随强调色；超宽截断，宽度
   // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
   // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
+  // "Send to Chat" chips (side-panel §6.7): the contexts panels staged for the
+  // next submission, rendered as one strip directly above the prompt border.
+  // Read defensively — hosts and older fixtures mount this composer with a
+  // partial channel stub (Chat guards `agentViewRows` for the same reason),
+  // and a missing projection means "nothing attached". A render-time TypeError
+  // here would be swallowed by ink and silently freeze the screen.
+  const attachedContexts = channel.attachedContexts ?? []
   const sessionTitle = channel.sessionTitle ?? ''
   const topRightLabel: InputBorderLabel | undefined =
     channel.promptSessionLabel === true && sessionTitle !== ''
@@ -4218,7 +4190,33 @@ export function PromptInput({
         )}
       </OverlayAbove>
       )}
-      {lastNotification && (
+      {attachedContexts.length > 0 && (
+        // The chip strip sits in the band directly above the prompt border —
+        // the row band the `[Image #N]` tokens occupy inside the input.
+        // Chips lay out side by side and each truncates at the row end, so the
+        // strip is ALWAYS exactly one row tall no matter how many panels stage
+        // a context or how long their titles are.
+        <Box
+          flexDirection="row"
+          width="100%"
+          height={1}
+          overflow="hidden"
+          paddingLeft={2}
+          columnGap={2}
+        >
+          {attachedContexts.map(item => (
+            // Each chip is its own shrinkable cell (ink boxes shrink by
+            // default) so a long title truncates at ITS OWN end instead of
+            // pushing the later chips off the row.
+            <Box key={item.id} overflow="hidden">
+              <Text color={promptAccent} wrap="truncate-end">
+                {t('prompt-attached-context-chip', { title: item.title })}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
+      {lastNotification && toastVisible && (
         // position=absolute takes zero layout height so the transcript never
         // shifts when a notification appears/disappears; the layer floats one
         // row above the prompt border, right-aligned.
