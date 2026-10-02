@@ -20,7 +20,7 @@ dsh-tui 维护的 adapter 中介面（Cordis service id / 宿主 API），记录
 - 因此"用 adapter"与"遵循 spec"是同一份契约的两面；contract → 宿主机制的对照表
   随 spec 一起版本化，才能保证宿主行为可核查、可回滚。
 
-边界（见 [`notes/0000-maintenance.md`](../notes/0000-maintenance.md)）：本 Note 不改变标准语义；只约束 dsh-tui 宿主自身，其他宿主不要求遵守。
+边界（见 [`../governance/rules.md`](../governance/rules.md)）：本 Note 不改变标准语义；只约束 dsh-tui 宿主自身，其他宿主不要求遵守。
 
 ## Contract 映射
 

@@ -1,8 +1,8 @@
 # Changelog
 
 本文件是 **TUI Profile**（`tui-profile/`）的变更日志：条目描述本 profile 自身的规范、
-资产与文档变化。profile 与 dsh-TUI 代码同处一库，随代码现状一起修订（归属与修订口径见
-[`notes/0000-maintenance.md`](notes/0000-maintenance.md)），因此没有单独的审批或晋级流程，
+资产与文档变化。profile 与 dsh-TUI 代码同处一库，随代码现状一起修订（归属、边界与修订
+口径见 [`governance/rules.md`](governance/rules.md)），因此没有单独的审批或晋级流程，
 登记的是 profile 的变化而不是 dsh-TUI 产品的全部变更。
 
 ## 2026-08-25（私有命名空间统一与插件文档合并）
