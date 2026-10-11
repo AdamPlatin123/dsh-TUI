@@ -6,7 +6,7 @@
  */
 import type Schema from '@deepseek-ai/schemastery'
 import { logForDebugging } from '../utils/debug.js'
-import { isRecord } from '../utils/jsonl.js'
+import { isRecord } from '../backends/shared/jsonl.js'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'

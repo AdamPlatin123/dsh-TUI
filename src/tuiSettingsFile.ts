@@ -12,7 +12,7 @@ import { basename, dirname, join } from 'node:path'
 import { parse } from 'yaml'
 import { DATA_DIR } from './utils/paths.js'
 import { dshHomeDir } from './utils/credentials.js'
-import { isRecord } from './utils/jsonl.js'
+import { isRecord } from './backends/shared/jsonl.js'
 
 export interface TuiSettingsDocument {
   readonly version: 1
