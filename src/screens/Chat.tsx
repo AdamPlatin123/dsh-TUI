@@ -778,14 +778,24 @@ export function Chat({
     setLaunchpadCaret(cursor)
   }
   const launchpadBindingGeneration = resolveBindingGeneration(channel)
+  // Capture the image epoch with each session binding. Automatic startup keeps
+  // it; explicit replacement revokes it before publishing the new binding.
+  const composerImageGeneration = channel.stagedImageGeneration?.() ?? 0
+  const launchpadSessionRef = React.useRef({ id: channel.agentId, imageGeneration: composerImageGeneration })
+  const discardLaunchpadImages = (): void => {
+    for (const stageId of launchpadImagesRef.current.values()) channel.discardStagedImage(stageId)
+    launchpadImagesRef.current.clear()
+  }
+  // Lifetime cleanup is separate from binding changes: startup adoption keeps
+  // the same draft, including the capabilities behind its image tokens.
+  React.useEffect(() => discardLaunchpadImages, [channel])
   React.useEffect(() => {
+    const previous = launchpadSessionRef.current
+    launchpadSessionRef.current = { id: channel.agentId, imageGeneration: composerImageGeneration }
+    if (previous.id === '' && channel.agentId !== '' && previous.imageGeneration === composerImageGeneration) return
     setLaunchpadDraft('')
     setLaunchpadCaret(0)
-    const bindings = launchpadImagesRef.current
-    return () => {
-      for (const stageId of bindings.values()) channel.discardStagedImage(stageId)
-      bindings.clear()
-    }
+    discardLaunchpadImages()
   }, [channel, channel.agentId, launchpadBindingGeneration])
   /**
    * 「整屏盖启动页」的显式授权（第七版防御位，用户实测回归：启动页一闪而过
@@ -2002,8 +2012,9 @@ export function Chat({
     }
   }, [])
   const draftSessionId = channel.agentId
-  /** Session the effect below last reconciled against; a change is a switch. */
-  const draftSessionRef = React.useRef(draftSessionId)
+  const draftBindingGeneration = resolveBindingGeneration(channel)
+  /** Last reconciled binding; its image epoch distinguishes adoption from replacement. */
+  const draftSessionRef = React.useRef({ id: draftSessionId, generation: draftBindingGeneration, imageGeneration: composerImageGeneration })
   /**
    * The session a fill Chat itself requested belongs to, if one is in flight.
    *
@@ -2029,8 +2040,22 @@ export function Chat({
    * answered by the snapshot's owner fields.
    */
   React.useLayoutEffect(() => {
-    if (draftSessionRef.current === draftSessionId) return
-    draftSessionRef.current = draftSessionId
+    const previous = draftSessionRef.current
+    draftSessionRef.current = { id: draftSessionId, generation: draftBindingGeneration, imageGeneration: composerImageGeneration }
+    if (previous.id === draftSessionId) return
+    if (previous.id === '' && previous.imageGeneration === composerImageGeneration) {
+      // Startup adoption gives the existing draft its first conversation.
+      // A covered composer has parked that draft in the owner slot instead.
+      const snapshot = promptDraftRef.current.current
+      if (snapshot?.ownerAgentId === '' && snapshot.bindingGeneration === previous.generation) {
+        promptDraftRef.current.current = {
+          ...snapshot,
+          ownerAgentId: String(draftSessionId),
+          bindingGeneration: draftBindingGeneration,
+        }
+      }
+      return
+    }
     // A stored draft can only belong to the conversation being replaced: the
     // composer is the one that writes it, and it writes it on the way out.
     promptDraftRef.current.current = null
@@ -2039,7 +2064,7 @@ export function Chat({
       return
     }
     promptControllerRef.current?.clear()
-  }, [draftSessionId])
+  }, [draftSessionId, draftBindingGeneration])
   const previewGallery = activePreview === null ? [] : activePreview.peek
     ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
     : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []
