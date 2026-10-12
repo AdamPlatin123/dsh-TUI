@@ -650,6 +650,8 @@ const GROUPS = {
     ["verify-session-artifact-cache", ['node', 'scripts/verify-session-artifact-cache.mjs']],
 // 跨进程首屏快照：不等慢枚举、来源隔离、失败保留、空库清空与迟到守卫。
     ["verify-session-list-snapshot", ['node', 'scripts/verify-session-list-snapshot.mjs']],
+// Web 判空投影：真实注册表读写、旧版字段兼容、注册顺序与上游语义对照。
+    ["verify-session-list-metadata", ['node', '--import', 'tsx/esm', 'scripts/verify-session-list-metadata.ts']],
 // 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
 // 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
     ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],
