@@ -666,6 +666,9 @@ const GROUPS = {
 // 空草稿不留残留。这条测的是「渲染期写回会先于认领 effect 覆盖草稿」，
 // 只靠打字或由浮层换屏都到不了。
     ["verify-composer-draft-handoff", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-handoff.tsx']],
+// 同会话换模型：真实 channel 门面与 Chat 保留文本、光标和图片；整屏停放、
+// inline/fullscreen × 常规/窄终端，以及 /new 清空旧草稿的对照。
+    ["verify-composer-draft-model-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-model-switch.tsx']],
 // Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
 // 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制；
