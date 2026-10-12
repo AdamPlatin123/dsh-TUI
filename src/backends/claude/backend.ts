@@ -20,7 +20,7 @@ import { CLAUDE_OAUTH_PROVIDER, ClaudeChannelConflictError, channelMissingCreden
 import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode, type StartPermissionMode } from './options.js'
 import { fileClaudePrefs, memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
-import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
+import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable, type ClaudeExecutable } from './process.js'
 import { activeProfileOf, fileClaudeChannels, hasChannelConnection, memoryClaudeChannels, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
 import { fileClaudeChannelTokens, type ClaudeChannelTokens } from '../shared/channel-tokens.js'
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
@@ -161,6 +161,28 @@ const rememberHost = (host: BackendHost): void => {
   installClaudeLocale(host.locale)
 }
 
+/** Reuse the winning probe; explicit env paths still need their first probe. */
+async function resolvedCliVersion(executable: ClaudeExecutable, host: BackendHost): Promise<string | undefined> {
+  if (executable.version !== undefined) return executable.version
+  if (executable.path === undefined) return undefined
+  return readClaudeVersion(executable.path, host.appVersion)
+}
+
+/** Best-effort CLI note for an SDK-missing hint; no CLI means no extra line. */
+async function foundClaudeCli(host: BackendHost): Promise<string | undefined> {
+  try {
+    const executable = await resolveClaudeExecutable()
+    if (executable.path === undefined) return undefined
+    const version = await resolvedCliVersion(executable, host)
+    return version === undefined
+      ? claudeText('claude-sdk-missing-found-cli-path', { path: executable.path })
+      : claudeText('claude-sdk-missing-found-cli', { version, path: executable.path })
+  } catch (error) {
+    host.debug(`claude: native CLI probe failed (${errorText(error)})`)
+    return undefined
+  }
+}
+
 export const claudeBackend: AgentBackend = {
   id: CLAUDE_BACKEND_ID,
   descriptor: { label: CLAUDE_BACKEND_LABEL },
@@ -172,7 +194,10 @@ export const claudeBackend: AgentBackend = {
       await loadClaudeSdk()
     } catch (error) {
       host.debug(`claude: SDK import failed (${errorText(error)})`)
-      return { installed: false, hint: claudeText('claude-sdk-missing', { version: VALIDATED_SDK_VERSION }) }
+      // A local CLI does not remove the SDK requirement.
+      const missing = claudeText('claude-sdk-missing', { version: VALIDATED_SDK_VERSION })
+      const found = await foundClaudeCli(host)
+      return { installed: false, hint: found === undefined ? missing : `${missing}\n${found}` }
     }
     let auth: 'ok' | 'missing' | 'unknown' = 'unknown'
     try {
@@ -182,7 +207,7 @@ export const claudeBackend: AgentBackend = {
     }
     try {
       const executable = await resolveClaudeExecutable()
-      const version = executable.path === undefined ? undefined : await readClaudeVersion(executable.path, host.appVersion)
+      const version = await resolvedCliVersion(executable, host)
       const drift = cliVersionDrift(version) ?? sdkVersionDrift(installedSdkVersion())
       // The picker never blocks on a missing credential (the probe cannot see
       // a settings-file env, an apiKeyHelper or a relay token), and `/login`

@@ -15,7 +15,7 @@ import { Pane } from './design-system/Pane.js'
  */
 export type SdkInstallPhase =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'confirm'; readonly dir: string; readonly version: string; readonly specifier: string }
+  | { readonly kind: 'confirm'; readonly dir: string; readonly version: string; readonly specifier: string; readonly foundCli?: string }
   | { readonly kind: 'checking' }
   | { readonly kind: 'running' }
   | { readonly kind: 'done'; readonly rebuiltStore?: boolean }
@@ -32,7 +32,15 @@ function manualLine(dir: string, specifier: string): string {
   return `cd ${dir} && pnpm add ${specifier}`
 }
 
+/** Detection's first line is install guidance; only its optional note belongs
+ *  in the confirmation pane. */
+function noteAfterGuidance(hint: string | undefined): string | undefined {
+  const note = hint?.split('\n').slice(1).join('\n').trim()
+  return note === undefined || note === '' ? undefined : note
+}
+
 export function SdkInstallWizard({ phase }: { phase: SdkInstallPhase }): React.ReactNode {
+  const cliNote = phase.kind === 'confirm' ? noteAfterGuidance(phase.foundCli) : undefined
   return (
     <Pane color="permission">
       <Box flexDirection="column">
@@ -45,8 +53,9 @@ export function SdkInstallWizard({ phase }: { phase: SdkInstallPhase }): React.R
           <Box flexDirection="column">
             <Text>{t('sdk-install-confirm-what', { specifier: phase.specifier, version: phase.version })}</Text>
             <Text>{t('sdk-install-confirm-where', { dir: phase.dir })}</Text>
-            <Box marginTop={1}>
+            <Box marginTop={1} flexDirection="column">
               <Text dimColor>{t('sdk-install-confirm-note')}</Text>
+              {cliNote !== undefined && <Text dimColor>{cliNote}</Text>}
             </Box>
           </Box>
         )}

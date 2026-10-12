@@ -104,6 +104,9 @@ const texts = {
   'claude-version-drift': { zh: 'Claude CLI {{version}} 未经本版 dsh-tui 验证（已验证：{{validated}}），继续运行', en: 'Claude CLI {{version}} is not validated with this dsh-tui (validated: {{validated}}); continuing' },
   'claude-sdk-drift': { zh: 'Claude Agent SDK {{version}} 与验证版本 {{validated}} 不一致，继续运行', en: 'Claude Agent SDK {{version}} differs from the validated {{validated}}; continuing' },
   'claude-sdk-missing': { zh: '未安装 Claude Agent SDK：在 dsh-tui 安装目录运行 pnpm add @anthropic-ai/claude-agent-sdk@{{version}}', en: 'The Claude Agent SDK is not installed: run pnpm add @anthropic-ai/claude-agent-sdk@{{version}} in the dsh-tui install directory' },
+  // Optional second line of the SDK-missing hint.
+  'claude-sdk-missing-found-cli': { zh: '已发现本机 Claude Code {{version}}（{{path}}）', en: 'Found a local Claude Code {{version}} ({{path}})' },
+  'claude-sdk-missing-found-cli-path': { zh: '已发现本机 Claude Code：{{path}}', en: 'Found a local Claude Code: {{path}}' },
   'claude-resume-not-found': { zh: '本机 Claude 会话库中没有会话 {{id}}', en: 'No Claude session {{id}} in the local session store' },
   'claude-rewind-files-unavailable': { zh: '该会话没有可用的文件检查点', en: 'No file checkpoints are available for this session' },
   'claude-fork-empty': { zh: '会话还没有保存任何消息，无可分叉的内容', en: 'Nothing to fork yet — the session has no saved messages' },

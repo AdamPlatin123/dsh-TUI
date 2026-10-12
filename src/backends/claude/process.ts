@@ -2,15 +2,9 @@
  * The `claude` child process as this backend starts it:
  * which executable, with which environment, and where its stderr goes.
  *
- * - Executable: `CLAUDE_CODE_EXECUTABLE` → the first `claude` on PATH that
- *   actually launches → the SDK's own bundled binary (left to the SDK by
- *   passing no path). A PATH binary wins over the bundled one so the session
- *   shares the user's interactive CLI version and session store, but merely
- *   existing is not enough to win: an npm install also ships shims this
- *   process cannot spawn (on Windows the extensionless POSIX `sh` script
- *   `where` reports first, and a `.cmd` Node refuses to run without a
- *   shell), and handing one to the SDK fails the whole start with its own
- *   misleading "native binary … failed to launch" error.
+ * - Executable: `CLAUDE_CODE_EXECUTABLE` → launchable PATH hit →
+ *   `~/.local/bin` → SDK bundle. Unspawnable npm shims are followed to their
+ *   binary or script entry; the winning probe's version is reused.
  * - Environment: the SDK's `env` option replaces the child environment, so it
  *   is built from `process.env`, tagged with the client app and the session
  *   state events this backend reads, and scrubbed of the variables a parent
@@ -20,8 +14,9 @@
  *   goes to the debug log and to the host's deduplicated notice reporter.
  */
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, isAbsolute, normalize, sep } from 'node:path'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path'
 
 /** Where the executable came from (`/doctor`). */
 export type ClaudeExecutableSource = 'env' | 'path' | 'bundled'
@@ -30,6 +25,8 @@ export interface ClaudeExecutable {
   /** Absolute path, or undefined to let the SDK use its bundled binary. */
   readonly path: string | undefined
   readonly source: ClaudeExecutableSource
+  /** Winning probe's version; absent for an unprobed env path or SDK bundle. */
+  readonly version?: string
 }
 
 /**
@@ -64,17 +61,19 @@ function whichAll(name: string): Promise<string[]> {
   })
 }
 
+/** Script suffixes recognized by the pinned SDK's process transport. */
+const SCRIPT_SUFFIXES = ['.js', '.mjs', '.tsx', '.ts', '.jsx'] as const
+
+/** Whether the SDK would run this path as a script rather than spawn it. */
+const isScriptEntry = (path: string): boolean => SCRIPT_SUFFIXES.some(suffix => path.endsWith(suffix))
+
+/** A wrapper's runtime is not its CLI entry, even when it exists on disk. */
+const RUNTIME_PROGRAMS = ['node', 'node.exe', 'bun', 'bun.exe']
+
 /**
- * The real binary an unspawnable PATH shim forwards to, if it names one.
- *
- * npm publishes a package's bin as wrappers around the truth: an
- * extensionless POSIX `sh` script, a `.cmd` and a `.ps1`. On Windows the
- * first two are what `where` reports and neither can be handed to
- * CreateProcess — but each ends in the absolute path of the real
- * executable, which is exactly what an interactive `claude` runs, so
- * following it keeps the user's own CLI instead of silently switching to
- * the SDK's bundled copy. The shim is read bounded, `%~dp0` and
- * `$basedir` are expanded, and every candidate still has to launch to win.
+ * Follow an unspawnable npm shim (`sh`, `.cmd`, `.ps1`) to its real entry.
+ * Windows cannot spawn the wrappers directly; the returned binary or script
+ * must still pass the version probe before the SDK receives it.
  */
 function shimTarget(shim: string): string | undefined {
   let text: string
@@ -86,12 +85,68 @@ function shimTarget(shim: string): string | undefined {
   const dir = dirname(shim)
   const expanded = text
     .replace(/%~dp0%?/giu, dir + sep)
+    .replace(/%dp0%/giu, dir + sep)
     .replace(/\$\{?basedir\}?/gu, dir)
-  for (const match of expanded.match(/"[^"\r\n]*?\.exe"|'[^'\r\n]*?\.exe'|[^\s"']*?\.exe/giu) ?? []) {
-    const candidate = match.replace(/^["']|["']$/gu, '').trim()
-    if (isAbsolute(candidate) && existsSync(candidate)) return normalize(candidate)
+  const firstOnDisk = (pattern: RegExp, reject?: (candidate: string) => boolean): string | undefined => {
+    for (const match of expanded.match(pattern) ?? []) {
+      const candidate = match.replace(/^["']|["']$/gu, '').trim()
+      if (!isAbsolute(candidate) || !existsSync(candidate)) continue
+      if (reject !== undefined && reject(candidate)) continue
+      return normalize(candidate)
+    }
+    return undefined
   }
-  return undefined
+  // Prefer the script over the runtime named before it. isScriptEntry keeps
+  // suffix handling shared with the probe.
+  const script = firstOnDisk(
+    /"[^"\r\n]*?\.[\w]+(?![\w.])"|'[^'\r\n]*?\.[\w]+(?![\w.])'|[^\s"']*?\.[\w]+(?![\w.])/giu,
+    candidate => !isScriptEntry(candidate),
+  )
+  if (script !== undefined) return script
+  return firstOnDisk(
+    /"[^"\r\n]*?\.exe"|'[^'\r\n]*?\.exe'|[^\s"']*?\.exe/giu,
+    candidate => RUNTIME_PROGRAMS.includes(basename(candidate).toLowerCase()),
+  )
+}
+
+/** Prefer USERPROFILE on Windows: a shell's HOME may be a POSIX path. */
+function homeDir(env: NodeJS.ProcessEnv): string {
+  const [first, second] = process.platform === 'win32' ? [env.USERPROFILE, env.HOME] : [env.HOME, env.USERPROFILE]
+  for (const value of [first, second]) if (value !== undefined && value !== '') return value
+  return homedir()
+}
+
+/** The native installer's directory is not added to PATH on Windows. */
+function nativeInstall(env: NodeJS.ProcessEnv): string[] {
+  const home = homeDir(env)
+  if (home === '') return []
+  const candidate = join(home, '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude')
+  return existsSync(candidate) ? [candidate] : []
+}
+
+/** Match symlinks, Windows short paths and case variants of the same file. */
+function candidateKey(path: string): string {
+  let real = path
+  try {
+    real = realpathSync.native(path)
+  } catch {
+    // The candidate may have disappeared since lookup; keep its original path.
+  }
+  const normalized = normalize(real)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+/** The candidates in order, each file named once (see {@link candidateKey}). */
+function dedupeCandidates(candidates: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const kept: string[] = []
+  for (const candidate of candidates) {
+    const key = candidateKey(candidate)
+    if (seen.has(key)) continue
+    seen.add(key)
+    kept.push(candidate)
+  }
+  return kept
 }
 
 /** Resolve the executable (never throws; the SDK binary is the fallback). */
@@ -103,10 +158,15 @@ export async function resolveClaudeExecutable(env: NodeJS.ProcessEnv = process.e
   // shadows a working copy further down PATH — or the bundled binary. An
   // explicit `CLAUDE_CODE_EXECUTABLE` above stays unvalidated on purpose:
   // a typo the user made should fail loudly, not silently.
-  for (const candidate of await whichAll('claude')) {
-    if (await readClaudeVersion(candidate) !== undefined) return { path: candidate, source: 'path' }
+  // Preserve PATH priority; overlapping native installs must not pay the
+  // probe timeout twice.
+  for (const candidate of dedupeCandidates([...await whichAll('claude'), ...nativeInstall(env)])) {
+    const version = await readClaudeVersion(candidate)
+    if (version !== undefined) return { path: candidate, source: 'path', version }
     const target = shimTarget(candidate)
-    if (target !== undefined && await readClaudeVersion(target) !== undefined) return { path: target, source: 'path' }
+    if (target === undefined) continue
+    const targetVersion = await readClaudeVersion(target)
+    if (targetVersion !== undefined) return { path: target, source: 'path', version: targetVersion }
   }
   return { path: undefined, source: 'bundled' }
 }
@@ -134,11 +194,14 @@ export function buildClaudeEnv(options: { readonly appVersion?: string; readonly
   return env
 }
 
-/** Run `<executable> --version` and pull out the version (best-effort). */
+/** Read `--version`, starting script entries through `node` as the SDK does. */
 export function readClaudeVersion(executable: string, appVersion?: string): Promise<string | undefined> {
+  const script = isScriptEntry(executable)
+  const command = script ? 'node' : executable
+  const args = script ? [executable, '--version'] : ['--version']
   return new Promise(resolve => {
     try {
-      execFile(executable, ['--version'], { timeout: 10000, windowsHide: true, env: buildClaudeEnv({ appVersion }) }, (error, stdout) => {
+      execFile(command, args, { timeout: 10000, windowsHide: true, env: buildClaudeEnv({ appVersion }) }, (error, stdout) => {
         if (error !== null) { resolve(undefined); return }
         resolve(/\d+\.\d+\.\d+(?:[-+][\w.]+)?/u.exec(String(stdout))?.[0])
       })

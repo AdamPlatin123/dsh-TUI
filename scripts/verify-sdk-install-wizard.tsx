@@ -8,7 +8,10 @@
  *   3. 手动兜底命令（cd <dir> && pnpm add <specifier>）在 failed 与
  *      pnpm-missing 两态都出现——它是不管哪一步失败的最终出路；
  *   4. 窄终端（34 列）任何一行都不超宽（长 tail 行靠 truncate-end 截断）；
- *   5. en 态标题与提示行跟着换。
+ *   5. en 态标题与提示行跟着换；
+ *   6. AC-5 显示面：检测报了本机 CLI 时确认面板多一行注记，且**只**渲染注记
+ *      （第 1 行是检测载荷里的安装指引，面板不重复）；无 CLI（单行 hint）或
+ *      缺字段（旧调用方 / stub）时面板与今天逐字一致。
  *
  * 运行：node --import tsx/esm scripts/verify-sdk-install-wizard.tsx
  */
@@ -27,10 +30,12 @@ const [
   { render, AlternateScreen },
   { SdkInstallWizard },
   { t, setLang },
+  { claudeText },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/components/SdkInstallWizard.js'),
   import('../src/i18n.js'),
+  import('../src/backends/claude/text.js'),
 ])
 
 let failures = 0
@@ -41,6 +46,9 @@ function check(name: string, ok: boolean, extra = ''): void {
     console.error('FAIL ' + name + (extra === '' ? '' : '\n      ' + extra))
   }
 }
+
+/** 屏面文本压掉全部空白后比对：对折行位置免疫（长行在 80 列下必折）。 */
+const flatten = (value: string): string => value.replaceAll(/\s+/gu, '')
 
 class FakeStdout extends Writable {
   isTTY = true
@@ -66,6 +74,14 @@ const DIR = 'C:\\Users\\test\\.dsh\\profiles\\dsh-tui'
 const SPECIFIER = '@anthropic-ai/claude-agent-sdk@0.3.287'
 const VERSION = '0.3.287'
 const TAIL = ['Progress: resolved 9, reused 77', 'ERR_PNPM_LINKING_FAILED cannot overwrite directory']
+
+/** 检测载荷形状：安装指引 + 可选的本机 CLI 注记；生产者另由 detect 回归覆盖。 */
+const GUIDANCE = claudeText('claude-sdk-missing', { version: VERSION })
+const CLI_VERSION = '2.0.30'
+const CLI_PATH = 'C:\\Users\\test\\.local\\bin\\claude.exe'
+/** 版本与路径、仅路径两种注记。 */
+const FOUND_NOTE = claudeText('claude-sdk-missing-found-cli', { version: CLI_VERSION, path: CLI_PATH })
+const FOUND_NOTE_PATH_ONLY = claudeText('claude-sdk-missing-found-cli-path', { path: CLI_PATH })
 
 /** 挂一份向导（真 render + 假 TTY），返回读屏与收尾。 */
 async function mountWizard(phase: SdkInstallPhase, columns = 80, rows = 24) {
@@ -127,8 +143,7 @@ async function run(): Promise<void> {
     check('4a 退出码', screen.includes('1'))
     // 命令约 90 列，80 列面板里必折行，且终端行尾有 pad 空格——
     // 双方压掉全部空白后比对，对任何折行位置免疫。
-    const flat = (s: string): string => s.replaceAll(/\s+/gu, '')
-    check('4b 手动命令', flat(screen).includes(flat(`cd ${DIR} && pnpm add ${SPECIFIER}`)))
+    check('4b 手动命令', flatten(screen).includes(flatten(`cd ${DIR} && pnpm add ${SPECIFIER}`)))
     check('4c tail 尾行', screen.includes('ERR_PNPM_LINKING_FAILED'))
     check('4d r 重试提示', screen.includes('r 重试'))
     await app.unmount()
@@ -138,7 +153,7 @@ async function run(): Promise<void> {
     const { app, lines } = await mountWizard({ kind: 'pnpm-missing', dir: DIR, version: VERSION, specifier: SPECIFIER })
     const screen = lines().join('\n')
     check('5a 未检测到 pnpm', screen.includes('未检测到 pnpm'))
-    check('5b 手动命令（与 failed 同款）', screen.replaceAll(/\s+/gu, '').includes(`pnpmadd${SPECIFIER}`))
+    check('5b 手动命令（与 failed 同款）', flatten(screen).includes(`pnpmadd${SPECIFIER}`))
     await app.unmount()
   }
   // 6. cancelled / no-target 两种理由。
@@ -186,13 +201,36 @@ async function run(): Promise<void> {
     ] satisfies SdkInstallPhase[]) {
       const { app, lines } = await mountWizard(phase)
       const screen = lines().join('\n')
-      const flat = screen.replaceAll(/\s+/gu, '')
       check(`9 ${lang} ${phase.kind}: no hardcoded backend`, !screen.includes('Claude'), screen)
-      if (phase.kind !== 'done') check(`9 ${lang} ${phase.kind}: actual specifier`, flat.includes(specifier), screen)
+      if (phase.kind !== 'done') check(`9 ${lang} ${phase.kind}: actual specifier`, flatten(screen).includes(specifier), screen)
       await app.unmount()
     }
   }
   setLang('zh')
+  // 10. 确认面板只画 hint 的注记，不重复安装指引；无 CLI 时保持原样。
+  {
+    const confirm = { kind: 'confirm', dir: DIR, version: VERSION, specifier: SPECIFIER } as const
+    const mountConfirm = async (foundCli?: string) => {
+      const { app, lines } = await mountWizard(foundCli === undefined ? confirm : { ...confirm, foundCli })
+      const screen = lines().join('\n')
+      await app.unmount()
+      return screen
+    }
+    const withVersion = await mountConfirm(`${GUIDANCE}\n${FOUND_NOTE}`)
+    check('10a 面板出现本机 CLI 注记（版本 + 路径）', flatten(withVersion).includes(flatten(FOUND_NOTE)), withVersion)
+    check('10b 面板不重复第 1 行安装指引（注记 ≠ 整条 hint）',
+      !flatten(withVersion).includes(flatten(GUIDANCE)), withVersion)
+
+    const withPathOnly = await mountConfirm(`${GUIDANCE}\n${FOUND_NOTE_PATH_ONLY}`)
+    check('10c 读不到版本时面板给路径', flatten(withPathOnly).includes(flatten(FOUND_NOTE_PATH_ONLY)), withPathOnly)
+
+    // 缺字段与无 CLI 的单行 hint 都不应出现注记。
+    const withoutField = await mountConfirm()
+    check('10d 缺字段时不出现该行', !flatten(withoutField).includes(flatten(FOUND_NOTE)), withoutField)
+    const noCli = await mountConfirm(GUIDANCE)
+    check('10e 无 CLI（单行 hint）时面板与今天逐字一致', noCli === withoutField, `noCli:\n${noCli}\n---\nnoField:\n${withoutField}`)
+    check('10f 两形态输出不同（10a 不恒真）', flatten(withVersion) !== flatten(withoutField), withVersion)
+  }
 }
 
 await run()

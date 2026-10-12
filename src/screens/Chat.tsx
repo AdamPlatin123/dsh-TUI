@@ -896,7 +896,13 @@ export function Chat({
     sdkInstallRef.current = installation
     const target = surface.resolveTarget()
     if (target.kind === 'profile') {
-      setSdkPhase({ kind: 'confirm', dir: target.dir, version: surface.version, specifier: surface.specifier })
+      setSdkPhase({
+        kind: 'confirm',
+        dir: target.dir,
+        version: surface.version,
+        specifier: surface.specifier,
+        ...(sdkOverlay.foundCli === undefined ? {} : { foundCli: sdkOverlay.foundCli }),
+      })
     } else {
       setSdkPhase({ kind: 'no-target', reason: target.kind === 'standalone' ? 'standalone' : 'no-profile' })
     }
