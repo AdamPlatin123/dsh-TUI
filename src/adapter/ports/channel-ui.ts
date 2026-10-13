@@ -754,9 +754,11 @@ export interface ChannelUi {
   initWorkspace(): string | null
   /** Environment diagnostics for `/doctor`. */
   doctorInfo(): string[]
-  /** Plugin contract/grant/ledger diagnostics for `/plugins` (C-070 trust
-   *  banner first line; `check <path>` runs validatePlugin + negotiate). */
-  pluginsInfo(args: string): string[]
+  /** Plugin contract/grant/ledger diagnostics for `/plugin` (C-070 trust
+   *  banner first line; `check <path>` runs validatePlugin + negotiate), plus
+   *  the profile's bundles and rows from the host plugin service. The service
+   *  is optional: an absent one answers with the diagnostics and a reason. */
+  pluginsInfo(args: string): Promise<string[]>
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
    *  the service is absent). */
   listSubagents(): Promise<string[]>

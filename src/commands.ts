@@ -39,6 +39,15 @@ export function isCommandCompletionToken(value: string): boolean {
 }
 
 /**
+ * Whether a value can occupy an ARGUMENT token. The command name keeps the
+ * strict charset above; an argument additionally allows `@`, the scope sigil of
+ * the package names `/plugin info <name>` completes (`@deepseek-ai/dsh-base`).
+ */
+function isArgumentCompletionToken(value: string): boolean {
+  return /^[a-z0-9_.:@\/-]+$/iu.test(value)
+}
+
+/**
  * The built-in slash commands (name + description pairs). Plugin-registered
  * commands merge in at runtime; locals win on name collisions.
  */
@@ -93,7 +102,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'hooks', description: 'Show hooks status' },
   { name: 'mcp', description: 'Show MCP status' },
   { name: 'skills', description: 'List available skills' },
-  { name: 'plugins', description: 'Show plugin contract, grant, and ledger diagnostics' },
+  { name: 'plugin', description: 'Show plugin diagnostics, and the plugins this profile added' },
   { name: 'update', description: 'Update dsh-tui and restart' },
   // Skills are discovered through the DSH registry and added at runtime.
   // A local entry of the same name would win the collision filter.
@@ -192,6 +201,10 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   // /trace opens on every backend; one without trajectory data shows the
   // unsupported state (channel.trajectorySource() decides, not this table).
   ['trace', 'any'],
+  // /plugin reads DSH-side services (the plugin-host row and the profile
+  // plugin service), so it stays on the `dsh` default: stated here rather than
+  // inherited from the unlisted fallback.
+  ['plugin', 'dsh'],
 ])
 
 /** The requirement of one built-in command name (unlisted → `dsh`). */
@@ -467,9 +480,11 @@ export function completeCommands(
   // Token charset includes `. : /` so provider/model specs (e.g.
   // `deepseek/deepseek-flash`, `openai/gpt-4.1`) survive as ONE token —
   // the /model completion matches its candidates against the whole spec.
-  if (!body.split(/[\t ]+/u).every(token => token === '' || isCommandCompletionToken(token))) return []
-  const trailingSeparator = /[\t ]$/u.test(body)
+  // Arguments additionally allow `@` (npm scopes); the command name does not.
   const tokens = body.split(/[\t ]+/u)
+  if (!tokens.every((token, index) =>
+    token === '' || (index === 0 ? isCommandCompletionToken(token) : isArgumentCompletionToken(token)))) return []
+  const trailingSeparator = /[\t ]$/u.test(body)
   const prefix = trailingSeparator ? '' : (tokens.pop() ?? '')
   if (trailingSeparator && tokens.at(-1) === '') tokens.pop()
 
@@ -485,7 +500,10 @@ export function completeCommands(
   const normalizedPrefix = prefix.toLowerCase()
   return candidates.flatMap(candidate => {
     const completionToken = matchingCompletionToken(candidate, normalizedPrefix)
-    if (completionToken === undefined || !isCommandCompletionToken(completionToken)) return []
+    // Root candidates are command names (strict charset); everything deeper is
+    // an argument, where a scoped package name must survive.
+    const tokenOk = tokens.length === 0 ? isCommandCompletionToken : isArgumentCompletionToken
+    if (completionToken === undefined || !tokenOk(completionToken)) return []
     const path = [...tokens, completionToken]
     const commandLine = `/${path.join(' ')}`
     return [{

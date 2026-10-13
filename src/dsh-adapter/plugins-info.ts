@@ -1,6 +1,6 @@
 /**
- * /plugins diagnostics surface (C-070 trust disclosure + C-030 negotiation
- * diagnostics): assembles the lines behind the `/plugins` command.
+ * /plugin diagnostics surface (C-070 trust disclosure + C-030 negotiation
+ * diagnostics): assembles the lines behind the `/plugin` command.
  *
  * Sections (overview):
  *
@@ -11,20 +11,30 @@
  *    (coordinates + generation), including drift-dropped contracts.
  * 3. GRANT MATRIX — plugins × the registered permissions. The plugin set is
  *    the union of FOOTPRINTS ONLY: keys of the grants file, pluginIds seen
- *    in the effect ledger, and storage namespaces on disk (the host cannot
- *    enumerate installed plugins — that knowledge lives in the dsh CLI
- *    Loader). The header says so honestly.
+ *    in the effect ledger, and storage namespaces on disk. The header says so
+ *    honestly. (The profile's own bundles and rows are a different question
+ *    and come from the host plugin service, below — this matrix stays the
+ *    footprint view it has always been.)
  * 4. LEDGER TAIL — the last 5 effect-ledger records.
+ * 5. BUNDLES AND ROWS — what the profile composes, from `ctx.pluginManager`
+ *    (`./plugin-manager.ts`): official installation-supplied bundles first,
+ *    then the profile's own, each with gate 1's tag from its declaration
+ *    (`./plugin-declaration.ts`), plus the loader entries no patch row can
+ *    address. Absent service → every line above is unchanged and one line
+ *    says why the half is missing.
  *
- * `/plugins check <path>` uses the parser and projection from the pinned
+ * `/plugin check <path>` uses the parser and projection from the pinned
  * @dsh-std/manifest revision, then evaluates every public/private protocol
  * through one ProtocolCatalog. Manifests and on-disk files are UNTRUSTED input:
  * every derived line passes cleanScalarText before it reaches the
- * transcript.
+ * transcript, and any credential they quote — a URL field, the spec a person
+ * typed, text the service hands back — is redacted first (`redactUrl`/
+ * `redactText`).
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import type { BundleInfo, PluginInfo, PluginRegistries, PluginSpecInspection } from '@deepseek-ai/dsh-plugin-manager/types'
 import { parseManifest, projectManifest } from '../adapter/standard/protocols.js'
 import { DATA_DIR } from '../utils/paths.js'
 import { t } from '../i18n.js'
@@ -34,6 +44,8 @@ import type { NegotiationDecision } from '../adapter/standard/types.js'
 import { cleanScalarText } from './sanitize.js'
 import type { GrantStore } from '../adapter/standard/grants.js'
 import type { HostDescriptorBuild } from '../adapter/standard/descriptor.js'
+import { isCompositionOwned, type PluginDeclaration } from './plugin-declaration.js'
+import { extraBundles, localizedPluginText, type PluginManagerView } from './plugin-manager.js'
 import { PLUGIN_STORAGE_DIR } from './plugin-storage.js'
 import { EFFECT_LEDGER_FILE } from './effect-ledger.js'
 
@@ -49,6 +61,8 @@ export interface PluginsInfoDeps {
   grants: GrantStore
   /** The plugin-host row's descriptor build; undefined → row not mounted. */
   host?: HostDescriptorBuild
+  /** A package's declaration, resolved from the running composition. */
+  declaration?: (packageName: string) => PluginDeclaration | undefined
   /** Test overrides; default under DATA_DIR. */
   dataDir?: string
   ledgerFile?: string
@@ -64,7 +78,64 @@ interface LedgerLine {
   errorCode?: unknown
 }
 
-const cell = (value: unknown): string => cleanScalarText(String(value ?? ''), LINE_CELLS)
+/** Query parameters that are a secret on their own: a credential needs no
+ *  userinfo (`https://registry.example.com/?token=…`). */
+const CREDENTIAL_QUERY_KEY = /^(?:token|access_token|auth|authorization|password|passwd|pwd|_auth|_authtoken|apikey|api_key|key|secret)$/i
+
+/**
+ * A URL with any credentials removed: npm and pnpm accept
+ * `https://user:token@registry/…` and `?token=…`, and this report is a
+ * transcript — neither may reach the screen or its scrollback. Host and path
+ * stay readable, so the person still recognizes which registry answered. A
+ * value that is not a URL at all (pnpm accepts odd ones) passes through
+ * unchanged.
+ */
+function redactUrl(value: string): string {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return value
+  }
+  // Userinfo goes with the whole query: a URL that authenticates there often
+  // pairs it with a token in the query.
+  if (url.password !== '' || url.username !== '') return `${url.origin}${url.pathname}`
+  let dropped = false
+  for (const key of [...url.searchParams.keys()]) {
+    if (CREDENTIAL_QUERY_KEY.test(key)) {
+      url.searchParams.delete(key)
+      dropped = true
+    }
+  }
+  return dropped ? `${url.origin}${url.pathname}${url.search}` : value
+}
+
+/** A URL-shaped run inside free text: the spec a person typed, and the same
+ *  URL quoted back in a refusal reason or a thrown error. */
+const URL_IN_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s]+/giu
+/** What the parser refuses — a styled (ANSI) URL, an odd host — still loses its
+ *  userinfo, so the one value it cannot read is not the gap a secret leaves by. */
+const USERINFO_AT_START = /^([a-z][a-z0-9+.-]*:\/\/)[^/?#@\s]*@/iu
+
+/**
+ * Free text with every URL it quotes redacted. The three paths that print text
+ * rather than a URL field — an accepted spec the upstream left unnamed, a
+ * refusal reason, an exception message — all funnel through here.
+ */
+function redactText(value: string): string {
+  if (!value.includes('://')) return value
+  return value.replace(URL_IN_TEXT, match => {
+    const redacted = redactUrl(match)
+    return redacted === match ? match.replace(USERINFO_AT_START, '$1') : redacted
+  })
+}
+
+/** One report cell: credentials redacted first, then sanitized, then capped —
+ *  truncation comes last, or a cut URL keeps the head of its own secret. */
+const cell = (value: unknown): string => cleanScalarText(redactText(String(value ?? '')), LINE_CELLS)
+
+/** One URL field as a report cell: credentials stripped, then capped. */
+const urlCell = (value: string): string => cell(redactUrl(value))
 
 /** Parse the ledger file tolerantly (skip corrupt lines, never throw). */
 function readLedgerRecords(file: string): LedgerLine[] {
@@ -124,7 +195,7 @@ function footprintPlugins(deps: PluginsInfoDeps, dataDir: string, ledgerFile: st
   return [...found].sort()
 }
 
-/** `/plugins check <path>`: official parse/projection + profile validation + negotiation. */
+/** `/plugin check <path>`: official parse/projection + profile validation + negotiation. */
 function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
   const lines: string[] = []
   const target = resolve(pathArg)
@@ -177,7 +248,7 @@ function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
     .map(request => ({
       name: request.name,
       scope: request.scope,
-      // `/plugins check` has no live activation instance. Passing an
+      // `/plugin check` has no live activation instance. Passing an
       // activation-less principal makes GrantStore fail closed when policy
       // contains activation-scoped rules instead of treating them as global.
       granted: deps.grants.allows({ componentId: manifest.id }, request.name, request.scope),
@@ -199,49 +270,77 @@ function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
   return lines
 }
 
-function decisionLines(decision: NegotiationDecision): string[] {
+/** The five-state vocabulary as one cell (shared by `check` and the list tags). */
+function stateText(decision: NegotiationDecision): string {
   switch (decision.decision) {
     case 'compatible':
-      return [t('plugins-check-state', { state: 'compatible' })]
+      return 'compatible'
     case 'compatible_degraded':
-      return [t('plugins-check-state', {
-        state: `compatible_degraded (missingOptional: ${cell(decision.missingOptional.join(', '))})`,
-      })]
+      return `compatible_degraded (missingOptional: ${cell(decision.missingOptional.join(', '))})`
     case 'waiting_authorization':
-      return [t('plugins-check-state', {
-        state: `waiting_authorization (${cell(decision.reasonCode)}: ${cell(decision.deniedPermissions.join(', '))})`,
-      })]
+      return `waiting_authorization (${cell(decision.reasonCode)}: ${cell(decision.deniedPermissions.join(', '))})`
     case 'rejected': {
       const detail = decision.missingRequired !== undefined
         ? `${cell(decision.reasonCode)}: ${cell(decision.missingRequired.join(', '))}`
         : `${cell(decision.reasonCode)}: facet ${cell(decision.facetApiVersion)} vs host [${cell((decision.hostFacetApiVersions ?? []).join(', '))}]`
-      return [t('plugins-check-state', { state: `rejected (${detail})` })]
+      return `rejected (${detail})`
     }
     case 'unknown':
-      return [t('plugins-check-state', {
-        state: `unknown (${cell(decision.reasonCode)}: ${cell(decision.unknownContracts.join(', '))})`,
-      })]
+      return `unknown (${cell(decision.reasonCode)}: ${cell(decision.unknownContracts.join(', '))})`
   }
 }
 
-/** The `/plugins` overview lines (banner always first). */
+function decisionLines(decision: NegotiationDecision): string[] {
+  return [t('plugins-check-state', { state: stateText(decision) })]
+}
+
+/** Which form of the command the raw argument text asks for. */
+export type PluginArgs =
+  | { readonly kind: 'overview' }
+  | { readonly kind: 'list' }
+  | { readonly kind: 'check'; readonly path: string }
+  | { readonly kind: 'info'; readonly spec: string }
+  | { readonly kind: 'registries' }
+  | { readonly kind: 'unknown'; readonly sub: string }
+
+/** Route `/plugin`'s argument text: one parser, so both halves of the report agree. */
+export function parsePluginArgs(args: string): PluginArgs {
+  const trimmed = args.trim()
+  if (trimmed === '') return { kind: 'overview' }
+  const [sub, ...rest] = trimmed.split(/\s+/)
+  if (sub === 'list') return { kind: 'list' }
+  if (sub === 'check') return { kind: 'check', path: rest.join(' ') }
+  if (sub === 'info') return { kind: 'info', spec: rest.join(' ') }
+  if (sub === 'registries') return { kind: 'registries' }
+  return { kind: 'unknown', sub: sub ?? '' }
+}
+
+/** The `/plugin` overview lines (banner always first). */
 export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] {
   const lines: string[] = [t('plugins-trust-banner')]
-  const trimmed = args.trim()
-  if (trimmed !== '') {
-    const [sub, ...rest] = trimmed.split(/\s+/)
-    if (sub === 'check') {
-      const pathArg = rest.join(' ')
-      if (pathArg === '') {
-        lines.push(t('plugins-check-usage'))
-        return lines
-      }
-      lines.push(...checkManifestLines(pathArg, deps))
+  const parsed = parsePluginArgs(args)
+  if (parsed.kind === 'check') {
+    if (parsed.path === '') {
+      lines.push(t('plugins-check-usage'))
       return lines
     }
-    lines.push(t('plugins-unknown-subcommand', { sub: cell(sub) }))
+    lines.push(...checkManifestLines(parsed.path, deps))
     return lines
   }
+  if (parsed.kind === 'unknown') {
+    lines.push(t('plugins-unknown-subcommand', { sub: cell(parsed.sub) }))
+    return lines
+  }
+  // `list` is the short form: the trust banner and what the profile added, no
+  // diagnostics. Its data comes from the service half below.
+  if (parsed.kind === 'list') return lines
+  // `info <spec>` names what it is looking for, so a bare one is a usage error
+  // the sync half can already answer; both service forms render below.
+  if (parsed.kind === 'info') {
+    if (parsed.spec === '') lines.push(t('plugins-info-usage'))
+    return lines
+  }
+  if (parsed.kind === 'registries') return lines
 
   const dataDir = deps.dataDir ?? DATA_DIR
   const ledgerFile = deps.ledgerFile ?? EFFECT_LEDGER_FILE
@@ -311,4 +410,238 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     }
   }
   return lines
+}
+
+/**
+ * What a listed package says about itself (gate 1's evidence): no declaration
+ * at all, a declaration this profile cannot read, or the negotiated decision.
+ */
+type DeclarationVerdict =
+  | { readonly kind: 'undeclared' }
+  | { readonly kind: 'invalid'; readonly error: string }
+  | { readonly kind: 'decided'; readonly decision: NegotiationDecision }
+
+/** Evaluate a package's declaration exactly as `check <path>` does. */
+function declarationVerdict(deps: PluginsInfoDeps, packageName: string): DeclarationVerdict {
+  const declaration = deps.declaration?.(packageName)
+  if (declaration === undefined) return { kind: 'undeclared' }
+  const data = loadSpecData()
+  if (data === undefined) return { kind: 'invalid', error: t('plugins-check-spec-unavailable') }
+  let manifest
+  try {
+    manifest = parseManifest(declaration.source, { source: declaration.path })
+    projectManifest(manifest)
+  } catch (error) {
+    return { kind: 'invalid', error: cell(error instanceof Error ? error.message : String(error)) }
+  }
+  const index = createContractIndex(data.registry, data.permissions)
+  try {
+    validatePlugin(index, manifest)
+  } catch (error) {
+    return { kind: 'invalid', error: cell(error instanceof Error ? error.message : String(error)) }
+  }
+  const host = deps.host
+  if (host === undefined) return { kind: 'invalid', error: t('plugins-check-host-unavailable') }
+  const granted = manifest.permissions.map(request => ({
+    name: request.name,
+    scope: request.scope,
+    granted: deps.grants.allows({ componentId: manifest.id }, request.name, request.scope),
+  }))
+  return { kind: 'decided', decision: negotiate(index, manifest, host.descriptor, granted) }
+}
+
+/**
+ * The gate-1 tag for one listed package, or `undefined` when it needs none.
+ * The composition's own rows are not plugins a person installed, so an absent
+ * declaration there is the normal state rather than a finding.
+ */
+function declarationTag(deps: PluginsInfoDeps, packageName: string): string | undefined {
+  const verdict = declarationVerdict(deps, packageName)
+  switch (verdict.kind) {
+    case 'undeclared':
+      return isCompositionOwned(packageName) ? undefined : t('plugins-tag-undeclared')
+    case 'invalid':
+      return t('plugins-tag-invalid', { err: verdict.error })
+    case 'decided':
+      return t('plugins-tag-declared', { state: stateText(verdict.decision) })
+  }
+}
+
+/**
+ * Display title of one loader entry: its own localized title, else the module
+ * specifier it was loaded as (`./plugin-manager.ts` reads the field, which
+ * `PluginInventoryEntry.meta` only carries after the 0.1.5 line — contract.ts:
+ * additions must degrade gracefully on the older lines).
+ */
+function pluginRowTitle(plugin: PluginInfo): string {
+  return cell(localizedPluginText(plugin, plugin.moduleName))
+}
+
+/** One bundle row: what the profile holds, how it is controlled, what it says. */
+function bundleLine(deps: PluginsInfoDeps, bundle: BundleInfo, options: { readonly rows?: boolean } = {}): string {
+  const flags: string[] = [bundle.enabled ? t('plugins-bundle-on') : t('plugins-bundle-off')]
+  if (!bundle.removable) flags.push(t('plugins-bundle-kept'))
+  if (bundle.readOnlyReason !== undefined) flags.push(t('plugins-bundle-locked', { reason: cell(bundle.readOnlyReason) }))
+  if (bundle.error !== undefined) flags.push(t('plugins-bundle-problem', { code: cell(bundle.error.code) }))
+  const tag = declarationTag(deps, bundle.name)
+  if (tag !== undefined) flags.push(tag)
+  const title = cell(localizedPluginText(bundle, bundle.name))
+  const version = bundle.version === undefined ? '' : ` ${cell(bundle.version)}`
+  // The row/override counts are detail: `/plugin info <name>` carries them, and
+  // the short list drops them (`options.rows: false`).
+  const tail = options.rows === false
+    ? ''
+    : ` · ${t('plugins-bundle-rows', { rows: String(bundle.rows.length), overrides: String(bundle.overrides.length) })}`
+  return `  ${title}${version} · ${flags.join(' · ')}${tail}`
+}
+
+/** Whether a listed set needs the "no declaration" legend (composition rows never do). */
+function needsDeclarationLegend(deps: PluginsInfoDeps, bundles: readonly BundleInfo[]): boolean {
+  return bundles.some(bundle => !isCompositionOwned(bundle.name) && deps.declaration?.(bundle.name) === undefined)
+}
+
+/** `/plugin list`: the plugins this profile added, one line each. */
+function listLines(deps: PluginsInfoDeps, bundles: readonly BundleInfo[]): string[] {
+  const extras = extraBundles(bundles)
+  if (extras.length === 0) return [t('plugins-list-empty')]
+  const lines = [t('plugins-list-header', { count: String(extras.length) })]
+  for (const bundle of extras) lines.push(bundleLine(deps, bundle, { rows: false }))
+  // The tag is explained once per report, next to the rows it qualifies: this
+  // surface is a transcript, so there is nothing to click open (C-3).
+  if (needsDeclarationLegend(deps, extras)) lines.push(t('plugins-tag-undeclared-hint'))
+  lines.push(t('plugins-list-hint'))
+  return lines
+}
+
+/**
+ * Official (installation-supplied) bundles first, then the profile's own. The
+ * split is `installed` — the field that answers "do this profile's own
+ * dependencies hold the package" — and not `optional`, which is narrower
+ * (only the launcher's `OPTIONAL_BUNDLES`): an installation-supplied bundle no
+ * shipped template preselects is `installed: false, optional: false` and would
+ * land under the profile's own name.
+ */
+function bundleSectionLines(deps: PluginsInfoDeps, bundles: readonly BundleInfo[]): string[] {
+  if (bundles.length === 0) return [t('plugins-bundles-empty')]
+  const lines: string[] = [t('plugins-bundles-header')]
+  const group = (label: string, group: readonly BundleInfo[]): void => {
+    if (group.length === 0) return
+    lines.push(` ${label}:`)
+    for (const bundle of group) lines.push(bundleLine(deps, bundle))
+  }
+  group(t('plugins-bundles-official'), bundles.filter(bundle => !bundle.installed))
+  group(t('plugins-bundles-installed'), bundles.filter(bundle => bundle.installed))
+  if (needsDeclarationLegend(deps, bundles)) lines.push(t('plugins-tag-undeclared-hint'))
+  return lines
+}
+
+/** Loader entries the profile cannot address through a patch row. */
+function pluginRowLines(plugins: readonly PluginInfo[]): string[] {
+  const unaddressable = plugins.filter(plugin => !('patchId' in plugin))
+  if (unaddressable.length === 0) return []
+  return [
+    t('plugins-rows-header'),
+    ...unaddressable.map(plugin => {
+      const reason = plugin.readOnlyReason === undefined ? '' : cell(plugin.readOnlyReason)
+      return `  ${pluginRowTitle(plugin)} · ${reason} · ${cell(plugin.entryId)}`
+    }),
+  ]
+}
+
+/** Everything a listed installed bundle carries, in full. */
+function installedBundleLines(deps: PluginsInfoDeps, bundle: BundleInfo): string[] {
+  const lines = [t('plugins-info-bundle', { name: cell(bundle.name) }), bundleLine(deps, bundle)]
+  if (bundle.rows.length > 0) {
+    lines.push(t('plugins-info-rows-label'))
+    for (const row of bundle.rows) {
+      const entry = row.entryId === undefined ? '' : ` · ${cell(row.entryId)}`
+      lines.push(`    ${cell(row.rowId)} → ${cell(row.moduleName)}${entry}`)
+    }
+  }
+  if (bundle.overrides.length > 0) {
+    lines.push(t('plugins-info-overrides-label', { list: cell(bundle.overrides.join(', ')) }))
+  }
+  if (bundle.error !== undefined) {
+    const diagnostic = bundle.error.diagnostic === undefined ? '' : ` — ${cell(bundle.error.diagnostic)}`
+    lines.push(t('plugins-info-problem', { code: cell(bundle.error.code), diagnostic }))
+  }
+  return lines
+}
+
+/** What an installation spec names, before anything installs it. */
+function inspectionLines(spec: string, inspection: PluginSpecInspection): string[] {
+  if (inspection.status === 'refused') {
+    return [t('plugins-info-inspect-refused', { problem: cell(inspection.problem), reason: cell(inspection.reason) })]
+  }
+  const lines = [t('plugins-info-inspect-accepted', {
+    name: cell(inspection.name ?? spec),
+    version: cell(inspection.version ?? ''),
+    kind: cell(inspection.kind),
+    bundle: inspection.bundle === null ? '?' : String(inspection.bundle),
+    registry: urlCell(inspection.registry ?? ''),
+  })]
+  if (inspection.description !== undefined) {
+    lines.push(t('plugins-info-inspect-description', { description: cell(inspection.description) }))
+  }
+  if (inspection.host !== undefined) lines.push(t('plugins-info-inspect-host', { host: urlCell(inspection.host) }))
+  return lines
+}
+
+/** `/plugin info <spec>`: the installed bundle when one matches, else inspect. */
+async function infoLines(deps: PluginsInfoDeps, manager: PluginManagerView, spec: string): Promise<string[]> {
+  const installed = (await manager.listBundles()).find(bundle => bundle.name === spec)
+  if (installed !== undefined) return installedBundleLines(deps, installed)
+  return inspectionLines(spec, await manager.inspect(spec))
+}
+
+/** `/plugin registries`: the registries an installation asks, in order. */
+function registriesLines(registries: PluginRegistries): string[] {
+  const none = t('plugins-info-registries-none')
+  const asCell = (value: string | null): string => value === null ? none : urlCell(value)
+  // Redact per entry, then cap: the list is a comma-joined string, which no
+  // single-URL pass could read.
+  const fallbacks = registries.fallbackRegistries.length === 0
+    ? none
+    : cell(registries.fallbackRegistries.map(value => value === null ? 'null' : redactUrl(value)).join(', '))
+  return [
+    t('plugins-info-registries-header'),
+    t('plugins-info-registries-first', { registry: asCell(registries.registry) }),
+    t('plugins-info-registries-fallbacks', { list: fallbacks }),
+    t('plugins-info-registries-resolved', { registry: asCell(registries.resolved) }),
+  ]
+}
+
+/** The service-backed half of the report (empty for a form that needs no service). */
+export async function pluginServiceLines(
+  args: string,
+  deps: PluginsInfoDeps,
+  manager: PluginManagerView | undefined,
+): Promise<string[]> {
+  const parsed = parsePluginArgs(args)
+  if (parsed.kind === 'check' || parsed.kind === 'unknown') return []
+  if (parsed.kind === 'info' && parsed.spec === '') return []
+  if (manager === undefined) return [t('plugins-service-unavailable')]
+  // The service belongs to the host: a refusal or a crash there must not take
+  // the diagnostics half down with it. Every call funnels into one line, so a
+  // rejected promise still leaves a readable report instead of an unhandled
+  // rejection and an empty screen.
+  try {
+    if (parsed.kind === 'list') return listLines(deps, await manager.listBundles())
+    if (parsed.kind === 'registries') return registriesLines(await manager.registries())
+    if (parsed.kind === 'info') return await infoLines(deps, manager, parsed.spec)
+    const bundles = await manager.listBundles()
+    const plugins = await manager.listPlugins()
+    return [...bundleSectionLines(deps, bundles), ...pluginRowLines(plugins)]
+  } catch (error) {
+    return [t('plugins-service-error', { err: cell(error instanceof Error ? error.message : String(error)) })]
+  }
+}
+
+/** `/plugin`: the diagnostics half plus the profile's own bundles and rows. */
+export async function pluginReport(
+  args: string,
+  deps: PluginsInfoDeps,
+  manager: PluginManagerView | undefined,
+): Promise<string[]> {
+  return [...pluginsInfoLines(args, deps), ...await pluginServiceLines(args, deps, manager)]
 }

@@ -1,5 +1,5 @@
 /**
- * 批 6 电池：/plugins 诊断面 + /doctor 增补（C-070 信任披露 + C-030 协商诊断）。
+ * 批 6 电池：/plugin 诊断面 + /doctor 增补（C-070 信任披露 + C-030 协商诊断）。
  *
  *   A. 信任披露 banner 固定首行（overview / check / 未知子命令三路径一致）；
  *   B. Host Descriptor 摘要：generation/契约/dropped 行；row 未挂载降级行；
@@ -7,11 +7,11 @@
  *      8 权限有效值逐位正确（含 denies 撤销与 allow 默认），host/undeclared
  *      不成行，超出 20 行出 overflow 注记；
  *   D. 台账尾 5：7 条记录只显后 5、损坏行跳过、空台账 empty 行；
- *   E. /plugins check：vendored fixtures 跑五态（compatible /
+ *   E. /plugin check：vendored fixtures 跑五态（compatible /
  *      waiting_authorization / unknown + grants 翻转 compatible）、schema 与
  *      语义失败路径、not-found、坏 JSON、输出零控制字符（不可信输入消毒）；
- *   F. 接线断言：LOCAL_COMMANDS、Chat.tsx 派发、channel 接口与实现、
- *      doctorInfo 新行引用的 i18n 键、cmd-desc-plugins、banner 双语。
+ *   F. 接线断言：LOCAL_COMMANDS（含旧名已除）、Chat.tsx 派发、channel 接口与实现、
+ *      doctorInfo 新行引用的 i18n 键、cmd-desc-plugin、banner 双语。
  *
  * HOME/USERPROFILE 在导入 src 前隔离。
  *
@@ -173,7 +173,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
   check1('missing ledger file renders the empty line', empty.some(line => line.includes('效果台账为空')))
 }
 
-// ── E. /plugins check 五态与失败路径 ──────────────────────────────────────
+// ── E. /plugin check 五态与失败路径 ───────────────────────────────────────
 {
   const checkLines = (arg: string) => pluginsInfoLines(`check ${arg}`, { grants, host }).slice(1) // 去 banner
   const compatible = checkLines(fixture('valid-plugin.json'))
@@ -213,7 +213,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
   writeFileSync(garbage, '{ not json !!!')
   check1('unparseable file reports invalid-json',
     checkLines(garbage).some(line => line.includes('不是可解析的 JSON')))
-  check1('bare check prints usage', pluginsInfoLines('check', { grants, host }).some(line => line.includes('用法：/plugins check')))
+  check1('bare check prints usage', pluginsInfoLines('check', { grants, host }).some(line => line.includes('用法：/plugin check')))
 
   // 不可信输入消毒：所有输出行不得含控制字符（manifest/文件材料过 cleanScalarText）
   const all = [
@@ -346,11 +346,17 @@ const overview = () => pluginsInfoLines('', { grants, host })
 // ── F. 接线断言 ───────────────────────────────────────────────────────────
 {
   const commands = readFileSync(join(root, 'src/commands.ts'), 'utf8')
-  check1("LOCAL_COMMANDS carries 'plugins'", /\{ name: 'plugins', description: /.test(commands))
+  check1("LOCAL_COMMANDS carries 'plugin'", /\{ name: 'plugin', description: /.test(commands))
+  // The old name left no trace: the rename shipped without a deprecation cycle
+  // (nothing had been released under `/plugins` by the time it was renamed), so
+  // a leftover row would be a second, undeclared entry point.
+  check1("LOCAL_COMMANDS carries no 'plugins' row",
+    !/\{ name: 'plugins',/.test(commands) && !commands.includes('deprecated alias of /plugin'))
   const chat = readFileSync(join(root, 'src/screens/Chat.tsx'), 'utf8')
-  check1("Chat.tsx dispatches case 'plugins' to channel.pluginsInfo(rawInput)",
-    chat.includes("case 'plugins':") && chat.includes('channel.pluginsInfo(rawInput)'))
-  check1('channel interface declares pluginsInfo(args)', readFileSync(join(root, 'src/adapter/ports/channel-ui.ts'), 'utf8').includes('pluginsInfo(args: string): string[]'))
+  check1("Chat.tsx dispatches only canonical 'plugin' to channel.pluginsInfo(rawInput)",
+    chat.includes("case 'plugin':") && !chat.includes("case 'plugins':") &&
+    chat.includes('channel.pluginsInfo(rawInput)'))
+  check1('channel interface declares pluginsInfo(args)', readFileSync(join(root, 'src/adapter/ports/channel-ui.ts'), 'utf8').includes('pluginsInfo(args: string): Promise<string[]>'))
   // Reports were extracted from channel.ts. Exercise their live ctx lookup
   // instead of pinning an implementation location with root-source regexes.
   let reportHost: { generationId: string; selfCheck(): readonly string[]; describe(): ReturnType<typeof liveHostDescriptor> } | undefined
@@ -371,13 +377,17 @@ const overview = () => pluginsInfoLines('', { grants, host })
   const missingDoctor = reportActions.doctorInfo()
   check1('reports handles a missing plugin host',
     missingDoctor.some(line => line.includes('未挂载')))
-  check1('reports handles a missing plugin host for /plugins',
-    reportActions.pluginsInfo('').some(line => line.includes('plugin-host 行未挂载')))
+  check1('reports handles a missing plugin host for /plugin',
+    (await reportActions.pluginsInfo('')).some(line => line.includes('plugin-host 行未挂载')))
   reportHost = { generationId: 'late-host-generation', selfCheck: () => [], describe: () => host }
   const liveDoctor = reportActions.doctorInfo()
   check1('reports observes a host mounted after action construction',
     liveDoctor.some(line => line.includes('late-host-generation')) &&
-    reportActions.pluginsInfo('').some(line => line.includes('generation negotiation-battery')))
+    (await reportActions.pluginsInfo('')).some(line => line.includes('generation negotiation-battery')))
+  // The profile plugin service is absent in this composition: the report says
+  // so instead of failing, and the diagnostics half is unchanged.
+  check1('reports explains an absent profile plugin service',
+    (await reportActions.pluginsInfo('')).some(line => line.includes('ctx.pluginManager')))
   check1('reports exposes a clean live registry self-check',
     liveDoctor.some(line => line.includes('自检') && line.includes('✓')))
   reportHost = { ...reportHost, selfCheck: () => ['late registry violation'] }
@@ -386,7 +396,8 @@ const overview = () => pluginsInfoLines('', { grants, host })
   const i18n = readFileSync(join(root, 'src/i18n.ts'), 'utf8')
   check1('trust banner exists in both languages',
     i18n.includes("'plugins-trust-banner'") && i18n.includes('同进程运行') && i18n.includes('in-process with the host'))
-  check1("cmd-desc-plugins exists", i18n.includes("'cmd-desc-plugins'"))
+  check1("cmd-desc-plugin exists and the removed alias's key is gone",
+    i18n.includes("'cmd-desc-plugin'") && !i18n.includes("'cmd-desc-plugins'"))
   check1('doctor plugin keys exist in both languages',
     i18n.includes("'doctor-plugin-generation'") && i18n.includes('Plugin runtime generation') &&
     i18n.includes("'doctor-plugin-registry'") && i18n.includes('Plugin-spec registry self-check'))
@@ -399,5 +410,5 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`plugin-negotiation battery OK (${checks} checks: trust banner, descriptor summary, grant matrix, ledger tail, /plugins check five-state, wiring)`)
+console.log(`plugin-negotiation battery OK (${checks} checks: trust banner, descriptor summary, grant matrix, ledger tail, /plugin check five-state, wiring)`)
 process.exit(0)

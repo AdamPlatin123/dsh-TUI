@@ -284,7 +284,7 @@ export function createUnavailableActionDelegates(
     exportSession: () => refuse('export', null),
     initWorkspace: () => refuse('init', null),
     doctorInfo: () => unavailableLines('doctor'),
-    pluginsInfo: () => unavailableLines('plugins'),
+    pluginsInfo: () => Promise.resolve(unavailableLines('plugin')),
     listSubagents: () => Promise.resolve(unavailableLines('agents')),
   }
 }
