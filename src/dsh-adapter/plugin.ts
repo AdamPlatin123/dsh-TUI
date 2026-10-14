@@ -16,6 +16,7 @@ import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
 import { kernelEntriesOf } from '../components/kernelCatalog.js'
 import { openBackendStartup, prepareBackendStartup, probeKernels, installSurfaceFor } from './backends.js'
 import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, listOfferedBackends, loadBackend, parseBackendChoice, unloadBackends } from './backend-registry.js'
+import { createPluginInstallEntry } from './plugin-install.js'
 import { formatSessionRef } from '../agent/refs.js'
 import type { AgentEvent } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
@@ -2404,6 +2405,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // whichever row the user picked, looked up by id — the manifest says what to
     // install and with which executor, this host holds the actions.
     onResolveSdkInstall: installSurfaceFor,
+    // `/plugin install <spec>` (C-4): the write path. The wiring lives beside
+    // the flow (`createPluginInstallEntry`) so a regression can drive the real
+    // feed load, declaration read and profile-relative path resolution with a
+    // fixture context. `undefined` ⇒ not an install form, or no service to
+    // install through; the screen then runs the read-only report instead.
+    onPluginInstall: createPluginInstallEntry(ctx, {
+      ownVersion: installedTuiVersion(),
+      profileName: profile ?? resolveDshProfileName(),
+    }),
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the

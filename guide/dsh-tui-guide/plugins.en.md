@@ -61,9 +61,25 @@ Also an experimental public surface:
   (`BackendSpec`, `validateBackendSpec`, `backendAdmission`) and conformance
   (`TUI-BACKEND-001`) are usable, and the **admission chain (manifest →
   registry → descriptor) is wired**; what is still missing is the step that
-  reads a mounted bundle's declaration into the registry and the kernel picker
-  (the install chain), so "install a third-party backend, restart, see it in the
-  picker" does not hold end to end yet.
+  reads a mounted bundle's declaration into the registry and the kernel picker,
+  so "install a third-party backend, restart, see it in the picker" does not hold
+  end to end yet.
+- **Installing a package is available in the terminal itself (C-4)**: `/plugin
+  install <spec>` goes through the host's `ctx.pluginManager` — a pre-install
+  notice, a trust confirmation decided by provenance of the package (the judge is
+  the packaged `tui-profile/feed/first-party.json`, decided offline; anything it
+  cannot vouch for falls back to the confirmation), and `esc` to close the pane.
+  During an install, it attempts cancellation and waits for profile writes to
+  settle: the service rolls the profile back on cancellation, or finishes the
+  install if applying has already made cancellation too late. Blocked build
+  scripts can be approved in the pane, and an incompatible version can receive
+  an **exact-version exemption**. Cancelling during exemption registration waits
+  for the current write and stops subsequent grants and the retry; exemptions
+  already written remain. **Known gaps**:
+  provenance is only a one-vote-to-veto seam with no online check at all (the
+  host service exposes no such API), and with no service the transcript reports
+  the CLI command and the reason instead of **running `dsh plugin` on the user's
+  behalf** (no pane opens: there is no flow to drive).
 - `grants` is now the narrower `HostGrantFacade`; see that PR for migration
   details.
 - On `TuiSceneProps.channel` (`ChannelUi`), `minimal` / `setMinimal()` were

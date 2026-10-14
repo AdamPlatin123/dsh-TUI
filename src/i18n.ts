@@ -1337,7 +1337,7 @@ const dict = {
   'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: { one: '…{{count}} more plugin not shown', other: '…{{count}} more plugins not shown' } },
   'plugins-ledger-empty': { zh: '效果台账为空。', en: 'The effect ledger is empty.' },
   'plugins-ledger-header': { zh: '效果台账（{{file}}）尾 5 条：', en: 'Effect ledger ({{file}}), last 5 records:' },
-  'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：list / check <路径> / info <spec> / registries）', en: 'Unknown subcommand: {{sub}} (supported: list / check <path> / info <spec> / registries)' },
+  'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：list / install <spec> / check <路径> / info <spec> / registries）', en: 'Unknown subcommand: {{sub}} (supported: list / install <spec> / check <path> / info <spec> / registries)' },
   'plugins-check-usage': { zh: '用法：/plugin check <dsh-plugin.json 路径>', en: 'Usage: /plugin check <path-to-dsh-plugin.json>' },
   'plugins-check-not-found': { zh: '文件不存在：{{path}}', en: 'File not found: {{path}}' },
   'plugins-check-invalid-json': { zh: '不是可解析的 JSON：{{err}}', en: 'Not parseable JSON: {{err}}' },
@@ -1409,6 +1409,91 @@ const dict = {
   'plugins-info-registries-fallbacks': { zh: '  回退：{{list}}', en: '  fallbacks: {{list}}' },
   'plugins-info-registries-resolved': { zh: '  pnpm 配置解析：{{registry}}', en: '  resolved from pnpm: {{registry}}' },
   'plugins-info-registries-none': { zh: '（无）', en: '(none)' },
+
+  // ── /plugin install（C-4 装链路：报告行由 dsh-adapter/plugin-install.ts 产出）──
+  'plugins-install-busy': {
+    zh: '回合正在运行，先结束它（或 /new）再装插件：安装会改动 profile 并触发应用／热重载',
+    en: 'A turn is running; finish it (or /new) before installing: an install changes the profile and applies or hot-reloads plugins',
+  },
+  'plugins-install-inspect': { zh: '将要安装：{{spec}}（{{kind}} · {{bundle}}）', en: 'About to install: {{spec}} ({{kind}} · {{bundle}})' },
+  'plugins-install-trusted': {
+    zh: '嫡系（feed 命中）：{{name}}@{{version}} —— 跳过装包信任确认；仍记 effect ledger，仍在 /plugin 列表可见',
+    en: 'First-party (feed hit): {{name}}@{{version}} — skipping the package trust confirmation; the effect ledger and the /plugin list are unaffected',
+  },
+  'plugins-install-attempt': { zh: '正在询问第 {{index}}/{{total}} 个安装源：{{registry}}', en: 'Asking registry {{index}}/{{total}}: {{registry}}' },
+  'plugins-install-installing': { zh: '正在安装…', en: 'Installing…' },
+  'plugins-install-cancelling': { zh: '正在取消…', en: 'Cancelling…' },
+  'plugins-install-applying': { zh: '正在应用…', en: 'Applying…' },
+  'plugins-install-log-line-omitted': {
+    zh: '已省略超长日志行（每行上限 {{bytes}} 字节）。',
+    en: 'An oversized log line was omitted (limit: {{bytes}} bytes per line).',
+  },
+  'plugins-install-build-blocked': {
+    zh: '安装被构建脚本拦住：有 {{count}} 个脚本待批准（批准后才会重试安装）',
+    en: 'Blocked by build scripts: {{count}} awaiting approval (the install retries only after approval)',
+  },
+  'plugins-install-build-approved': {
+    zh: '已批准 {{count}} 个构建脚本（写入 profile 的 allowBuilds），正在重试安装',
+    en: 'Approved {{count}} build scripts (written to the profile allowBuilds); retrying the install',
+  },
+  'plugins-install-incompatible': { zh: '版本不兼容：{{packages}}（当前 DSH {{runtime}}）', en: 'Incompatible version: {{packages}} (running DSH {{runtime}})' },
+  'plugins-install-exempted': {
+    zh: '已为 {{count}} 个包登记精确版本豁免（accept-risk）',
+    en: 'Recorded an exact-version exemption for {{count}} package(s) (accept-risk)',
+  },
+  'plugins-install-exemptions-unreadable': {
+    zh: '读不到当前的版本豁免清单：{{reason}}（面板按"没有豁免"继续）',
+    en: 'Could not read the current version exemptions: {{reason}} (the pane continues as if there were none)',
+  },
+  'plugins-install-done': { zh: '已安装 {{bundle}}：{{state}}', en: 'Installed {{bundle}}: {{state}}' },
+  'plugins-install-state-applied': { zh: '已应用', en: 'applied' },
+  'plugins-install-state-restart': { zh: '需要重启', en: 'restart required' },
+  'plugins-install-state-overridden': { zh: '被覆盖（HMR 生效中）', en: 'overridden (HMR is live)' },
+  'plugins-install-restart-hint': { zh: '重启本应用后它才会作为后端 / 贡献生效。', en: 'Restart this app for it to take effect as a backend / contribution.' },
+  'plugins-install-failed': { zh: '安装失败：{{reason}}', en: 'Install failed: {{reason}}' },
+  'plugins-install-manual': { zh: '手工命令：dsh plugin --profile {{profile}} add {{spec}}', en: 'Manual command: dsh plugin --profile {{profile}} add {{spec}}' },
+  'plugins-install-rescue': { zh: '反复失败时用救援 profile：dsh-tui safe --rescue', en: 'If it keeps failing, use the rescue profile: dsh-tui safe --rescue' },
+  'plugins-install-cancelled': { zh: '已取消安装（profile 已回滚）', en: 'Install cancelled (the profile was rolled back)' },
+  'plugins-install-cancel-too-late': { zh: '已进入应用阶段，无法取消', en: 'Already applying; it cannot be cancelled' },
+  'plugins-install-cancel-not-running': { zh: '没有在跑的安装（可能已经结束）', en: 'No installation is running (it may have finished)' },
+  'plugins-install-cancel-failed': { zh: '取消失败：{{reason}}', en: 'Cancel failed: {{reason}}' },
+  'plugins-install-drift': {
+    zh: '注意：profile 里的 {{name}} 现在是 {{found}}，本进程运行的是 {{running}}；对齐它：dsh plugin --profile {{profile}} add {{name}}@{{running}}',
+    en: 'Heads up: {{name}} in the profile is now {{found}} while this process runs {{running}}; realign it: dsh plugin --profile {{profile}} add {{name}}@{{running}}',
+  },
+  'plugins-install-usage': { zh: '用法：/plugin install <包名[@版本] | 路径 | git URL>', en: 'Usage: /plugin install <package[@version] | path | git url>' },
+
+  // ── components/PluginInstallPane.tsx（装前提醒 / 信任确认 / 两个"再决定"步骤）──
+  'plugins-install-pane-title': { zh: '安装插件', en: 'Install plugin' },
+  'plugins-install-configure': { zh: '要安装：{{spec}} · {{kind}} · bundle={{bundle}}', en: 'To install: {{spec}} · {{kind}} · bundle={{bundle}}' },
+  'plugins-install-unidentified': { zh: '（服务未给出包名）', en: '(the service named no package)' },
+  'plugins-install-trust-third-party': {
+    zh: '信任确认：插件与本应用同进程运行 —— 进程内全信任、无沙箱；装上后不会自动更新；它的行为受声明的 grants 约束（授权是行为约束，不是安全隔离）。',
+    en: 'Trust: the plugin runs in-process with this app — full trust, no sandbox; it will not auto-update; its behaviour is bounded by the grants it declares (grants are behavioural constraints, not a security boundary).',
+  },
+  'plugins-install-notice-declared': {
+    zh: '声明可判定：该包的 dsh-plugin.json 已通过本 profile 的准入判定。',
+    en: 'Declaration readable: the package-root dsh-plugin.json passes this profile’s admission.',
+  },
+  'plugins-install-notice-undeclared': {
+    zh: '提醒：该包没有声明 TUI 贡献（包根缺少 dsh-plugin.json）；装上后不会作为后端/贡献出现，并会在 /plugin 列表里带常驻标签。',
+    en: 'Heads up: this package declares no TUI contribution (no package-root dsh-plugin.json); it will not appear as a backend/contribution, and /plugin will tag it.',
+  },
+  'plugins-install-notice-invalid': {
+    zh: '提醒：该包的声明本 profile 无法通过（{{err}}）；装上后不会作为后端/贡献出现。',
+    en: 'Heads up: this profile cannot accept the package’s declaration ({{err}}); it will not appear as a backend/contribution.',
+  },
+  'plugins-install-notice-unjudged': {
+    zh: '提醒：注册表里的包在装上之前无法判定是否声明了 TUI 贡献；若未声明，它不会作为后端/贡献出现，并会在 /plugin 列表里带常驻标签。',
+    en: 'Heads up: a registry package’s declaration cannot be read before it lands; if it declares none, it will not appear as a backend/contribution and /plugin will tag it.',
+  },
+  'plugins-install-builds-title': { zh: '以下构建脚本需要批准（写进 profile 的 allowBuilds）：', en: 'These build scripts need approval (written to the profile allowBuilds):' },
+  'plugins-install-incompatible-title': { zh: '版本不兼容的包：', en: 'Incompatible packages:' },
+  'plugins-install-exemptions-title': { zh: '已登记的精确版本豁免：', en: 'Exact-version exemptions recorded:' },
+  'plugins-install-key-confirm': { zh: '⏎ 安装 · esc 取消', en: '⏎ install · esc cancel' },
+  'plugins-install-key-builds': { zh: '⏎ 允许这些脚本并重试 · esc 取消', en: '⏎ allow these scripts and retry · esc cancel' },
+  'plugins-install-key-incompatible': { zh: '⏎ 接受风险并重试 · esc 取消', en: '⏎ accept the risk and retry · esc cancel' },
+  'plugins-install-key-cancel': { zh: 'esc 取消安装', en: 'esc cancel the install' },
   'doctor-plugin-generation': { zh: '插件运行时 generation：{{id}}', en: 'Plugin runtime generation: {{id}}' },
   'doctor-plugin-registry': { zh: '插件规范注册表自检：{{state}}', en: 'Plugin-spec registry self-check: {{state}}' },
   'doctor-plugin-host-missing': { zh: 'plugin-host 行未挂载', en: 'plugin-host row not mounted' },
@@ -2047,6 +2132,7 @@ const dict = {
   'sugg-plugin-info-desc': { zh: '查单个条目或待装 spec', en: 'Describe an installed plugin or an install spec' },
   'sugg-plugin-registries-desc': { zh: '查看安装源', en: 'Show where installations ask' },
   'sugg-plugin-check-desc': { zh: '校验清单，不安装', en: 'Validate a manifest without installing it' },
+  'sugg-plugin-install-desc': { zh: '把这个插件装进当前 profile', en: 'Install a plugin bundle into this profile' },
   'panel-unavailable-hint': { zh: '侧栏需要全屏且内容区 ≥93 列；该面板没有整屏形态', en: 'Sidebar needs fullscreen and ≥93 content columns; this panel has no fullscreen form' },
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
