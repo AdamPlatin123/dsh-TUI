@@ -1337,7 +1337,7 @@ const dict = {
   'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: { one: '…{{count}} more plugin not shown', other: '…{{count}} more plugins not shown' } },
   'plugins-ledger-empty': { zh: '效果台账为空。', en: 'The effect ledger is empty.' },
   'plugins-ledger-header': { zh: '效果台账（{{file}}）尾 5 条：', en: 'Effect ledger ({{file}}), last 5 records:' },
-  'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：list / install <spec> / check <路径> / info <spec> / registries）', en: 'Unknown subcommand: {{sub}} (supported: list / install <spec> / check <path> / info <spec> / registries)' },
+  'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：list / install <spec> / remove <bundle> / disable <名称|id> / enable <名称|id> / check <路径> / info <spec> / registries）', en: 'Unknown subcommand: {{sub}} (supported: list / install <spec> / remove <bundle> / disable <name|id> / enable <name|id> / check <path> / info <spec> / registries)' },
   'plugins-check-usage': { zh: '用法：/plugin check <dsh-plugin.json 路径>', en: 'Usage: /plugin check <path-to-dsh-plugin.json>' },
   'plugins-check-not-found': { zh: '文件不存在：{{path}}', en: 'File not found: {{path}}' },
   'plugins-check-invalid-json': { zh: '不是可解析的 JSON：{{err}}', en: 'Not parseable JSON: {{err}}' },
@@ -1357,8 +1357,14 @@ const dict = {
   'plugins-check-host-unavailable': { zh: '当前没有 live Host Descriptor；只做静态 manifest 校验，不进行协议支持声明/协商。', en: 'No live Host Descriptor is available; only static manifest validation was performed, no protocol support declaration/negotiation.' },
   // profile 插件服务（ctx.pluginManager）：bundle/行列表与门禁 1 的标签
   'plugins-service-unavailable': {
-    zh: '当前内核没有 profile 插件服务（ctx.pluginManager）：bundle/行列表不可用。装/卸/启用请从命令行运行 `dsh plugin --profile dsh-tui …`，或以 `dsh --profile dsh-tui` 启动本应用。',
-    en: 'This kernel provides no profile plugin service (ctx.pluginManager): the bundle/row list is unavailable. Install, remove, or enable from the CLI with `dsh plugin --profile dsh-tui …`, or start this app through `dsh --profile dsh-tui`.',
+    zh: '当前内核没有 profile 插件服务（ctx.pluginManager）：bundle / 行列表与生命周期动作都不可用。',
+    en: 'This kernel provides no profile plugin service (ctx.pluginManager): the bundle/row list and the lifecycle actions are unavailable.',
+  },
+  // 第二行单独一条：转录里的报告行只留 preview 那么宽，把出口挤在第一行末尾等于看不见。
+  // 也不承诺 CLI 没有的动词——enable / disable 是服务写 profile 自己的文件（决策 C）。
+  'plugins-service-unavailable-route': {
+    zh: '装 / 卸走命令行：`dsh plugin --profile dsh-tui add|remove …`；启用 / 关闭没有命令行动词，请以 `dsh --profile dsh-tui` 启动本应用后在 /plugin 里操作。',
+    en: 'Install and remove go through the CLI: `dsh plugin --profile dsh-tui add|remove …`. Enable and disable have no CLI verb — start this app with `dsh --profile dsh-tui` and use /plugin.',
   },
   'plugins-service-error': {
     zh: '插件服务调用失败：{{err}}（上面的诊断部分照常显示。重试一次；仍失败请用 `dsh plugin --profile dsh-tui` 查看 CLI 侧的报错。）',
@@ -1370,8 +1376,8 @@ const dict = {
     en: 'No extra plugins in this profile: only the installation-supplied bundles and dsh-tui itself. Run /plugin list again after installing one.',
   },
   'plugins-list-hint': {
-    zh: '详情：/plugin info <名字>；安装源：/plugin registries；完整诊断：无参 /plugin。',
-    en: 'Details: /plugin info <name>; registries: /plugin registries; full diagnostics: bare /plugin.',
+    zh: '详情：/plugin info <名字>；卸载：/plugin remove <名字>；启用 / 关闭：/plugin enable|disable <名字|行 id>；安装源：/plugin registries；完整诊断：无参 /plugin。',
+    en: 'Details: /plugin info <name>; remove: /plugin remove <name>; enable or disable: /plugin enable|disable <name|row id>; registries: /plugin registries; full diagnostics: bare /plugin.',
   },
   'plugins-bundles-header': { zh: '已装 bundle（数据来自 profile 插件服务）：', en: 'Installed bundles (from the profile plugin service):' },
   'plugins-bundles-official': { zh: '安装自带', en: 'Official (installation-supplied)' },
@@ -1494,6 +1500,97 @@ const dict = {
   'plugins-install-key-builds': { zh: '⏎ 允许这些脚本并重试 · esc 取消', en: '⏎ allow these scripts and retry · esc cancel' },
   'plugins-install-key-incompatible': { zh: '⏎ 接受风险并重试 · esc 取消', en: '⏎ accept the risk and retry · esc cancel' },
   'plugins-install-key-cancel': { zh: 'esc 取消安装', en: 'esc cancel the install' },
+
+  // ── dsh-adapter/plugin-manage.ts + components/PluginManagePane.tsx（C-5 生命周期动作） ──
+  'plugins-manage-busy': {
+    zh: '有回合正在运行：先结束它或 /new，再执行这个动作（不改动 profile）。',
+    en: 'A turn is running: finish it or /new before this action (the profile is left alone).',
+  },
+  'plugins-manage-unknown': {
+    zh: '找不到目标：{{target}}（可寻址的：{{names}}）',
+    en: 'No such target: {{target}} (addressable: {{names}})',
+  },
+  'plugins-manage-ambiguous': {
+    zh: '{{target}} 匹配多行，请改用具体行 id：{{ids}}（profile 没有改动）。',
+    en: '{{target}} matches multiple rows. Use a specific row id: {{ids}} (the profile was not changed).',
+  },
+  'plugins-manage-refused-service-locked': {
+    zh: '拒绝：插件服务锁定了 {{target}}（{{reason}}）——两个方向都不是本应用能改的。',
+    en: 'Refused: the plugin service has {{target}} locked ({{reason}}); neither direction is this app\'s to take.',
+  },
+  'plugins-manage-refused-app-bundle': {
+    zh: '拒绝：{{target}} 就是本应用自己（门禁 2）——关了它，界面当场消失。',
+    en: 'Refused: {{target}} is this application itself (gate 2); switching it off takes the interface down with it.',
+  },
+  'plugins-manage-refused-host-bundle': {
+    zh: '拒绝：{{target}} 是本应用赖以运行的宿主层（门禁 2）——它提供本应用离不开的服务。',
+    en: 'Refused: {{target}} is the host layer this application runs on (gate 2); it provides services the interface needs.',
+  },
+  'plugins-manage-refused-not-removable': {
+    zh: '拒绝：{{target}} 不是本 profile 装的（安装自带），不可卸载。',
+    en: 'Refused: {{target}} was not installed by this profile (the dsh installation supplies it), so it cannot be removed.',
+  },
+  'plugins-manage-refused-row-not-removable': {
+    zh: '拒绝：{{target}} 是一行 patch，不能单独卸载——它随所属 bundle 走。',
+    en: 'Refused: {{target}} is a patch row and cannot be removed on its own; it goes with its bundle.',
+  },
+  'plugins-manage-refused-app-row': {
+    zh: '拒绝：{{target}} 提供本应用的界面（门禁 2）——关掉它，界面当场消失。',
+    en: 'Refused: {{target}} provides this application\'s interface (gate 2); switching it off takes the interface down with it.',
+  },
+  'plugins-manage-unchanged': {
+    zh: '{{target}} 已经是这个状态，profile 没有改动。',
+    en: '{{target}} is already in that state; the profile was not changed.',
+  },
+  'plugins-manage-removed': { zh: '已卸载 {{target}}：{{state}}', en: 'Removed {{target}}: {{state}}' },
+  'plugins-manage-enabled': { zh: '已启用 {{target}}：{{state}}', en: 'Enabled {{target}}: {{state}}' },
+  'plugins-manage-disabled': { zh: '已关闭 {{target}}：{{state}}', en: 'Disabled {{target}}: {{state}}' },
+  'plugins-manage-failed': { zh: '操作失败：{{reason}}', en: 'The action failed: {{reason}}' },
+  'plugins-manage-incompatible': {
+    zh: '版本不兼容：{{packages}}——要强行启用，先接受风险：dsh plugin --profile {{profile}} allow-version <包@版本> <当前版本> --accept-risk',
+    en: 'Incompatible version: {{packages}} — to force it, accept the risk first: dsh plugin --profile {{profile}} allow-version <package@version> <running version> --accept-risk',
+  },
+  'plugins-manage-manual-remove': {
+    zh: '手工命令：dsh plugin --profile {{profile}} remove {{target}}',
+    en: 'Manual command: dsh plugin --profile {{profile}} remove {{target}}',
+  },
+  'plugins-manage-manual-profile': {
+    zh: '启用 / 关闭没有命令行动词（profile 的依赖与 cordis.patch.yml 是服务写自己的文件）：请用 `dsh --profile {{profile}}` 启动本应用，在 /plugin 里操作；命令行只有 add / remove。',
+    en: 'Enable and disable have no CLI verb (the profile\'s dependencies and cordis.patch.yml are files the service writes for itself): start this app with `dsh --profile {{profile}}` and use /plugin; the CLI has add and remove only.',
+  },
+  'plugins-manage-residue': {
+    zh: '用户数据仍在：{{paths}} —— 不再需要时可手动删除。',
+    en: 'Your own data is still there: {{paths}} — delete it by hand when you no longer need it.',
+  },
+  'plugins-manage-residue-footprint': {
+    zh: '{{id}} 仍在授权文件 / 效果台账 / 存储目录里留有足迹',
+    en: '{{id}} still has a footprint in the grants file, the effect ledger or the storage directory',
+  },
+  'plugins-manage-residue-unjudged': {
+    zh: '读不到 {{target}} 的包内声明，无法判断它是否留下了用户数据（不猜）。',
+    en: 'The declaration inside {{target}} could not be read, so what data it left behind cannot be judged (nothing is guessed).',
+  },
+  'plugins-manage-usage': { zh: '用法：/plugin {{sub}} <bundle 名 | 行 id>', en: 'Usage: /plugin {{sub}} <bundle name | row id>' },
+  'plugins-manage-pane-title': { zh: '插件生命周期', en: 'Plugin lifecycle' },
+  'plugins-manage-action-remove': { zh: '卸载', en: 'remove' },
+  'plugins-manage-action-enable': { zh: '启用', en: 'enable' },
+  'plugins-manage-action-disable': { zh: '关闭', en: 'disable' },
+  'plugins-manage-configure': { zh: '要{{action}}：{{target}}', en: 'About to {{action}}: {{target}}' },
+  'plugins-manage-working': { zh: '正在写入 profile…', en: 'Writing the profile…' },
+  'plugins-manage-remove-facts': {
+    zh: '这是破坏性操作：它会改 profile 的 package.json 与 lockfile（服务失败时回滚），并移除它的 {{rows}} 行 / {{overrides}} 项覆盖；它留下的你自己的数据不会被删（有残留会另行提示）。',
+    en: 'This is destructive: it changes the profile\'s package.json and lockfile (rolled back if the service fails) and drops its {{rows}} rows / {{overrides}} overrides. Your own data is not deleted (any residue is reported separately).',
+  },
+  'plugins-manage-trust-facts': {
+    zh: '无法验证已装代码的安装来源：启用后它就在本进程内运行、不自动更新、没有沙箱。它声明的权限见 /plugin 的授权矩阵。',
+    en: 'The installed code\'s source cannot be verified: once enabled it runs inside this process, with no auto-update and no sandbox. Its declared permissions are in the /plugin grant matrix.',
+  },
+  'plugins-manage-host-row-facts': {
+    zh: '这一行属于宿主层（dsh-base）：关掉它会卸载本应用注入的服务，本应用可能重启或退出。',
+    en: 'This row belongs to the host layer (dsh-base): switching it off unloads services this application injects, and the app may restart or exit.',
+  },
+  'plugins-manage-key-confirm': { zh: '⏎ 执行 · esc 关闭', en: '⏎ do it · esc close' },
+  'plugins-manage-key-busy': { zh: '写入中 · esc 只关面板，操作会继续（这三个动作没有取消面）', en: 'writing · esc only closes the pane, the action goes on (these three have no cancellation)' },
   'doctor-plugin-generation': { zh: '插件运行时 generation：{{id}}', en: 'Plugin runtime generation: {{id}}' },
   'doctor-plugin-registry': { zh: '插件规范注册表自检：{{state}}', en: 'Plugin-spec registry self-check: {{state}}' },
   'doctor-plugin-host-missing': { zh: 'plugin-host 行未挂载', en: 'plugin-host row not mounted' },
@@ -2133,6 +2230,9 @@ const dict = {
   'sugg-plugin-registries-desc': { zh: '查看安装源', en: 'Show where installations ask' },
   'sugg-plugin-check-desc': { zh: '校验清单，不安装', en: 'Validate a manifest without installing it' },
   'sugg-plugin-install-desc': { zh: '把这个插件装进当前 profile', en: 'Install a plugin bundle into this profile' },
+  'sugg-plugin-remove-desc': { zh: '把这个插件从 profile 卸载', en: 'Uninstall a plugin bundle from this profile' },
+  'sugg-plugin-enable-desc': { zh: '重新启用一个 bundle 或行', en: 'Switch a plugin bundle or row back on' },
+  'sugg-plugin-disable-desc': { zh: '关闭一个 bundle 或行', en: 'Switch a plugin bundle or row off' },
   'panel-unavailable-hint': { zh: '侧栏需要全屏且内容区 ≥93 列；该面板没有整屏形态', en: 'Sidebar needs fullscreen and ≥93 content columns; this panel has no fullscreen form' },
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
