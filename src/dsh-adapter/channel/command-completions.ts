@@ -7,6 +7,39 @@ import { listThemeCatalog } from '../../themeCatalog.js'
 import { PRESET_NAMES } from '../../components/activityFrames.js'
 import type { ChannelState } from './types.js'
 
+/**
+ * What a `/plugin install | info` spec may name — the same three shapes the
+ * README lists, in the same order. A path and a git URL cannot be enumerated,
+ * and `info` also takes a spec for a bundle that is not installed yet, so these
+ * are shown as example rows rather than discovered candidates.
+ */
+const PLUGIN_SPEC_EXAMPLES: readonly {
+  readonly spec: string
+  readonly description: string
+  readonly descriptionKey: string
+}[] = [
+  { spec: '/path/to/repo', description: 'Example: a local directory', descriptionKey: 'sugg-plugin-spec-path-desc' },
+  { spec: 'https://github.com/exam/ple.git', description: 'Example: a git URL', descriptionKey: 'sugg-plugin-spec-git-desc' },
+  { spec: '@scope/package@1.2.3', description: 'Example: a registry package, @version pins it', descriptionKey: 'sugg-plugin-spec-package-desc' },
+]
+
+/**
+ * The spec shapes as completion rows for one `/plugin` form. They carry
+ * `example` (`CommandCompletionNode`): Tab hands the draft back untouched and
+ * Enter submits the draft as typed — the bare subcommand at the empty argument
+ * position (its usage line), and the typed spec once there is one. A placeholder
+ * spec can therefore neither be written into the draft nor installed by picking
+ * its row, and a real spec that only starts like one is not swallowed.
+ */
+function pluginSpecExamples(): readonly CommandCompletionNode[] {
+  return PLUGIN_SPEC_EXAMPLES.map(shape => ({
+    name: shape.spec,
+    description: shape.description,
+    descriptionKey: shape.descriptionKey,
+    example: true,
+  }))
+}
+
 /** Owns slash completion composition and cache warming; it has no lifecycle effects. */
 export function createCommandCompletions(deps: {
   state: () => ChannelState
@@ -145,13 +178,22 @@ export function createCommandCompletions(deps: {
         { name: 'registries', description: 'Show where installations ask', descriptionKey: 'sugg-plugin-registries-desc' },
         { name: 'check', description: 'Validate a plugin manifest without installing it', descriptionKey: 'sugg-plugin-check-desc' },
       ]
+      // `/plugin install <spec>` takes a spec nothing local can enumerate, so
+      // its argument position shows the shapes it accepts (`pluginSpecExamples`).
+      if (path.length === 2 && path[0] === 'plugin' && path[1] === 'install') return pluginSpecExamples()
       // The three lifecycle forms take the same installed list as `info`: what
       // they act on is what the profile holds, and an absent service answers an
       // empty list rather than a throw.
       if (path.length === 2 && path[0] === 'plugin'
-        && (path[1] === 'info' || path[1] === 'remove' || path[1] === 'enable' || path[1] === 'disable')) {
+        && (path[1] === 'remove' || path[1] === 'enable' || path[1] === 'disable')) {
         deps.plugin?.warmPluginNames()
         return deps.plugin?.pluginNames() ?? []
+      }
+      // `info` reads an installed bundle OR a spec about to be installed, so it
+      // offers both: what the profile holds first, then the spec shapes.
+      if (path.length === 2 && path[0] === 'plugin' && path[1] === 'info') {
+        deps.plugin?.warmPluginNames()
+        return [...(deps.plugin?.pluginNames() ?? []), ...pluginSpecExamples()]
       }
       return commandTrees?.children(path) ?? []
     })

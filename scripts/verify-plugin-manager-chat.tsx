@@ -120,6 +120,11 @@ const CREDENTIAL_URL = `https://reader:${CREDENTIAL}@registry.npmjs.org/`
 const SPEC_CREDENTIAL = 'fake-review-credential'
 const SPEC_CREDENTIAL_URL = `https://reader:${SPEC_CREDENTIAL}@git.example.com/org/repo.git`
 
+/** Every spec `inspect` was handed, in order. The prefix-overlap regression
+ *  (`/plugin info /p`) reads it: the typed spec must reach the service, so the
+ *  argument cannot have been swapped for the bare subcommand on the way. */
+const inspectedSpecs: string[] = []
+
 const manager: PluginManagerView = {
   listBundles: () => Promise.resolve(bundles),
   listPlugins: () => Promise.resolve(plugins),
@@ -128,17 +133,20 @@ const manager: PluginManagerView = {
     fallbackRegistries: [`https://reader:${CREDENTIAL}@registry.npmmirror.com/`],
     resolved: null,
   }),
-  inspect: spec => Promise.resolve(spec === 'verify-bad-spec'
-    ? { status: 'refused', problem: 'not-found', reason: '404 Not Found' }
-    // A git spec the upstream accepts without naming it: the report falls back
-    // to the spec itself, which is exactly the line that must not carry it.
-    : spec === SPEC_CREDENTIAL_URL
-      ? { status: 'accepted', kind: 'git', bundle: true, registry: null }
-      : {
-          status: 'accepted', kind: 'registry', name: 'verify-fresh-plugin', version: '9.9.9',
-          description: 'a fresh plugin', bundle: true, registry: CREDENTIAL_URL,
-          host: `https://reader:${CREDENTIAL}@git.example.com/repo.git`,
-        }),
+  inspect: spec => {
+    inspectedSpecs.push(spec)
+    return Promise.resolve(spec === 'verify-bad-spec'
+      ? { status: 'refused', problem: 'not-found', reason: '404 Not Found' }
+      // A git spec the upstream accepts without naming it: the report falls back
+      // to the spec itself, which is exactly the line that must not carry it.
+      : spec === SPEC_CREDENTIAL_URL
+        ? { status: 'accepted', kind: 'git', bundle: true, registry: null }
+        : {
+            status: 'accepted', kind: 'registry', name: 'verify-fresh-plugin', version: '9.9.9',
+            description: 'a fresh plugin', bundle: true, registry: CREDENTIAL_URL,
+            host: `https://reader:${CREDENTIAL}@git.example.com/repo.git`,
+          })
+  },
   // The write half (C-4). The read-only forms never reach these; the install
   // flow below hands in its own service so every write stays assertable.
   installBundle: () => Promise.resolve({ changed: true, application: 'restart-required', stage: 'install', target: 'verify-fresh-plugin' }),
@@ -363,6 +371,65 @@ for (const [fullscreen, columns, service] of [
       check(`${tag}: Tab accepts the completed name into the composer`,
         await settled(() => hasText('/plugin info verify-plugin-undeclared')), screen())
       await clear()
+
+      // 体验优化 PR：`/plugin install ` 的参数位、以及 `/plugin info ` 的已装名
+      // 之后，是三种 spec 形状——**提示不是候选**。Tab 不得把占位 spec 写进草稿，
+      // Enter 跑的是子命令本身（打用法行），所以谁也不会误装示例。
+      await type('/plugin install ')
+      check(`${tag}: install shows the spec shapes at its argument position`,
+        await settled(() => hasText('plugin install /path/to/repo') &&
+          (columns < 100 || hasText('plugin install https://github.com/exam/ple.git'))), screen())
+      console.log(`\n=== DUMP ${tag} ===\n${screen()}`)
+      // Tab 的落点是「草稿逐字没变」，而这个不变量没有可轮询的完成条件（草稿没改
+      // ⇒ 没有新帧）：用一次退格把它变成可观察的——真插进了示例的话，弹窗此刻停在
+      // 那条示例上；没插进去则退回裸子命令，屏幕上再没有示例行。
+      stdin.write('\t')
+      stdin.write('\x7f')
+      check(`${tag}: Tab inserts nothing — one backspace leaves the bare form, not an example`,
+        await settled(() => hasText(t('sugg-count', { n: 1 }))) &&
+        !hasText('plugin install /path/to/repo'), screen())
+      await clear()
+      await type('/plugin install ')
+      stdin.write('\r')
+      check(`${tag}: Enter on an example prints the usage line instead of installing it`,
+        await settled(() => hasText(t('plugins-install-usage'))), screen())
+      await clear()
+      await type('/plugin info ')
+      check(`${tag}: info offers the spec shapes after the installed names`,
+        await settled(() => hasText('plugin info /path/to/repo') &&
+          hasText('plugin info verify-plugin-undeclared')), screen())
+      await clear()
+
+      // R1 回归：参数恰好是示例前缀时（`/p` 之于 `/path/to/repo`），Enter 必须提交
+      // 这个人打的那一行——服务真的收到 `/p` 才算数；换成裸子命令就只剩用法行。
+      inspectedSpecs.length = 0
+      await type('/plugin info /p')
+      stdin.write('\r')
+      check(`${tag}: a typed spec that starts like an example reaches the service`,
+        await settled(() => inspectedSpecs.includes('/p')) && !hasText(t('plugins-info-usage')), screen())
+      await clear()
+
+      // Edits and the accepting key share one stdin batch: React has not
+      // recomputed the example row yet. Assert the service argument itself,
+      // including after Tab, so a visible but subsequently lost suffix fails.
+      for (const [label, chunk] of [
+        ['kitty Enter', 'roject\x1b[13;1u'],
+        ['paste Enter', '\x1b[200~roject\x1b[201~\r'],
+        ['Tab', 'roject\t'],
+      ] as const) {
+        inspectedSpecs.length = 0
+        await type('/plugin info /p')
+        stdin.write(chunk)
+        if (label === 'Tab') {
+          check(`${tag}: batched Tab keeps the complete draft`,
+            await settled(() => hasText('/plugin info /project')), screen())
+          stdin.write('\r')
+        }
+        check(`${tag}: batched ${label} submits the complete spec`,
+          await settled(() => inspectedSpecs.length > 0)
+          && inspectedSpecs.length === 1 && inspectedSpecs[0] === '/project', JSON.stringify(inspectedSpecs))
+        await clear()
+      }
     }
 
     await run('/plugin')

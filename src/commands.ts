@@ -25,6 +25,16 @@ export interface CommandCompletionNode {
   tag?: string
   /** Optional i18n key; plugin nodes normally rely on fallback text. */
   descriptionKey?: string
+  /**
+   * Mark this row as a syntax EXAMPLE rather than a candidate: it spells out a
+   * shape, not something this person typed. Tab therefore hands the draft back
+   * untouched instead of writing the placeholder in, and Enter runs the draft as
+   * typed — at the bare argument position that is the subcommand itself (its
+   * usage line), and once a spec is typed it is that spec. `/plugin install `
+   * shows the three shapes while neither Tab nor Enter can insert or install the
+   * placeholder, and a real spec that merely starts like one is never swallowed.
+   */
+  example?: true
 }
 
 export type CommandChildren = (canonicalPath: readonly string[]) => readonly CommandCompletionNode[]
@@ -506,6 +516,11 @@ export function completeCommands(
     if (completionToken === undefined || !tokenOk(completionToken)) return []
     const path = [...tokens, completionToken]
     const commandLine = `/${path.join(' ')}`
+    // An example row accepts nothing of its own: Tab gets back the draft it was
+    // given, and Enter runs that same line. Empty argument ⇒ the line is the
+    // bare subcommand (its usage line); a typed spec ⇒ it is the spec itself,
+    // so `/plugin info /p` still inspects `/p` instead of losing it.
+    const example = candidate.example === true
     return [{
       name: path.join(' '),
       description: candidate.description,
@@ -514,8 +529,8 @@ export function completeCommands(
       ...(candidate.tag === undefined && candidate.aliases?.length
         ? { tag: `aliases: ${candidate.aliases.join(', ')}` }
         : candidate.tag === undefined ? {} : { tag: candidate.tag }),
-      replacement: `${commandLine} `,
-      commandLine,
+      replacement: example ? input : `${commandLine} `,
+      commandLine: example ? input : commandLine,
     }]
   })
 }
