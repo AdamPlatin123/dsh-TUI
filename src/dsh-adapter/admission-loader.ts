@@ -6,7 +6,7 @@
  * capability. Listeners and the retry timer ride the caller's `ctx.effect`.
  */
 
-import { findPackageJSON } from 'node:module'
+import { resolve as resolveImport } from 'import-meta-resolve'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -243,15 +243,16 @@ function resolveEntryFile(name: string, baseUrl: string | undefined): string | u
     if (name.startsWith('.')) {
       return baseUrl === undefined || baseUrl === '' ? undefined : fileURLToPath(new URL(name, baseUrl))
     }
-    // Through the package's own resolution: `exports` need not list
-    // `./package.json`, and a subpath (`pkg/sub`) lands on the same root.
-    return findPackageJSON(name, requireBase(baseUrl))
+    // Find the imported entry, not merely the outer package.json: an exported
+    // component can have its own package root and manifest. Use ESM conditions,
+    // since require.resolve may choose a different component in dual exports.
+    return fileURLToPath(resolveImport(name, moduleBase(baseUrl).href))
   } catch {
     return undefined
   }
 }
 
-function requireBase(baseUrl: string | undefined): string | URL {
+function moduleBase(baseUrl: string | undefined): URL {
   if (baseUrl === undefined || baseUrl === '') return pathToFileURL(join(process.cwd(), 'index.js'))
   try {
     return baseUrl.startsWith('file:') ? new URL(baseUrl) : pathToFileURL(join(baseUrl, 'index.js'))

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import './lib/fake-home.mjs' // 必须最先：DATA_DIR/effect-ledger 在 import 时定死
+import { settled } from './lib/term-test.mjs'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const { default: Loader } = await import('@deepseek-ai/cordis-plugin-loader')
@@ -229,6 +230,34 @@ for (const [name, manifestId] of [[BARE_PACKAGE, 'verify-bare'], [EXPORTS_PACKAG
   check(`bare specifier ${name}: the row applied and registered its panel`, bareIds.length === 1, JSON.stringify(bareIds))
   check(`bare specifier ${name}: the manifest id is found through the package-root walk`,
     bareIds.length === 1 && bareIds[0] === `${manifestId}:demo`, JSON.stringify(bareIds))
+}
+
+// Exported subcomponents must use the nearest package manifest, just like an absolute entry.
+// A require-condition decoy ensures admission follows the module actually imported by the Loader.
+for (const dual of [false, true]) {
+  const suffix = dual ? 'dual' : 'default'
+  const bareName = '@dsh-tui-verify/component-' + suffix
+  const outer = join(loadRoot, 'node_modules', '@dsh-tui-verify', 'component-' + suffix)
+  const inner = join(outer, 'panel')
+  const decoy = join(outer, 'require-panel')
+  mkdirSync(inner, { recursive: true }); mkdirSync(decoy, { recursive: true })
+  writeFileSync(join(outer, 'package.json'), JSON.stringify({ name: bareName, version: '0.1.0', type: 'module',
+    exports: { './panel': dual ? { import: './panel/index.js', require: './require-panel/index.cjs' } : './panel/index.js' } }))
+  writeFileSync(join(outer, 'dsh-plugin.json'), manifestOf('verify-outer-' + suffix))
+  writeFileSync(join(inner, 'package.json'), JSON.stringify({ name: 'verify-inner-' + suffix, type: 'module' }))
+  writeFileSync(join(inner, 'dsh-plugin.json'), manifestOf('verify-inner-' + suffix))
+  writeFileSync(join(inner, 'index.js'), ENTRY_SOURCE)
+  writeFileSync(join(decoy, 'package.json'), JSON.stringify({ name: 'verify-require-' + suffix, type: 'commonjs' }))
+  writeFileSync(join(decoy, 'dsh-plugin.json'), manifestOf('verify-require-' + suffix))
+  writeFileSync(join(decoy, 'index.cjs'), 'module.exports = {}')
+  const composition = await mount(true, undefined, true, LOAD_BASE_URL)
+  try {
+    await composition.root.loader.create({ id: 'component-' + suffix, name: bareName + '/panel', config: { report: composition.report } })
+    await composition.root.loader.await()
+    check('exported subcomponent ' + suffix + ': admitted before apply under its own manifest',
+      await settled(() => reportedIds(composition.report).includes('verify-inner-' + suffix + ':demo')),
+      JSON.stringify(reportedIds(composition.report)))
+  } finally { await composition.root.fiber.dispose() }
 }
 
 // ── host-missing: bounded retry, then settle + loud diagnostic ────────────
