@@ -10,6 +10,7 @@ import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
+import { TeamMessageBubble } from './messages/TeamMessageBubble.js'
 import { AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { liveOutputMaxLines, liveOutputRows } from './messages/liveOutputLines.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
@@ -90,6 +91,18 @@ const NOOP_TOGGLE_STREAM_VIEW = (_rowId: number): void => {}
 // replayed history paints complete); once created, a cursor keeps revealing
 // until it catches up — settling mid-reveal must not snap (that is the
 // "non-streaming delivery becomes a smooth flow" contract).
+
+/** A row that opens a turn on the rail and the pinned header: a user row,
+ *  but not an Agent Teams peer message (never the human's prompt). */
+function isTurnRow(row: ChatRow): boolean {
+  return row.kind === 'user' && row.label !== 'team-message'
+}
+
+/** The sender a team-message row shows (empty when the event named none);
+ *  undefined for every other row, which renders as the human's prompt. */
+function teamSenderOf(row: ChatRow): string | undefined {
+  return row.label === 'team-message' ? row.sender ?? '' : undefined
+}
 
 function assistantRevealText(row: ChatRow, enabled: boolean): string {
   const stripped = stripNarration(row.text)
@@ -326,6 +339,8 @@ function signatureParts(
         row.selectionAttached === undefined ? 0 : 1,
         stringWidth(displaySelectionPath(row.selectionAttached?.path ?? '', sessionCwd)),
         String(row.selectionAttached?.lines ?? ''),
+        // A team message adds its sender line above the body.
+        teamSenderOf(row) ?? '',
       )
       // Long-line fold: expanding a folded row swaps the folded preview for
       // the raw line (thousands of rows), so both expansion switches are
@@ -1256,7 +1271,7 @@ export function MessageList({
       const measuredTops = new Map<number, number>()
       for (let i = 0; i < visibleRows.length; i++) {
         const row = visibleRows[i]!
-        if (row.kind !== 'user') continue
+        if (!isTurnRow(row)) continue
         measuredTops.set(row.id, base + offsets[i]! + (margins.get(row.id) === true ? 1 : 0))
       }
       // Walk ALL rows (not the fold window): the rail must cover the whole
@@ -1268,7 +1283,7 @@ export function MessageList({
       // click goes through the reveal path, not scrollTo).
       const turns: TimelineTurn[] = []
       for (const row of rows) {
-        if (row.kind !== 'user') continue
+        if (!isTurnRow(row)) continue
         let cached = previewCache.get(row.id)
         const imageCount = row.images?.length ?? 0
         if (cached === undefined || cached.len !== row.text.length || cached.imageCount !== imageCount || cached.lang !== lang) {
@@ -1552,6 +1567,7 @@ export function MessageList({
               textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
               selectionAttached={row.selectionAttached}
+              sender={teamSenderOf(row)}
               streaming={displayStreaming}
               thinkingOpen={row.thinkingOpen === true}
               durationMs={row.durationMs}
@@ -1634,6 +1650,7 @@ type MemoRowProps = {
   executionTarget: string | undefined
   /** IDE selection indicator (user rows): rendered above the prompt bubble. */
   selectionAttached: ChatRow['selectionAttached']
+  sender: ChatRow['sender']
   /** Session cwd for the indicator's display-path relativization (T-FIX-01). */
   sessionCwd: string | undefined
   streaming: boolean
@@ -1740,6 +1757,7 @@ function TranscriptRow({
   textFull,
   executionTarget,
   selectionAttached,
+  sender,
   sessionCwd,
   streaming,
   thinkingOpen,
@@ -1863,7 +1881,15 @@ function TranscriptRow({
               })}
             </Text>
           )}
-          {text !== '' && (
+          {text !== '' && sender !== undefined && (
+            <TeamMessageBubble
+              sender={sender}
+              text={displayText}
+              marginTopOnTurn={marginTopOnTurn}
+              isSelected={isSelected}
+            />
+          )}
+          {text !== '' && sender === undefined && (
             <UserPromptMessage
               text={displayText}
               marginTopOnTurn={marginTopOnTurn}

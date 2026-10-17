@@ -70,6 +70,13 @@ export function PluginManagePane({ step, busy }: { step: PluginManageStep; busy:
             )}
             {step.question.kind === 'trust' && <Text>{t('plugins-manage-trust-facts')}</Text>}
             {step.question.kind === 'host-row' && <Text>{t('plugins-manage-host-row-facts')}</Text>}
+            {step.question.kind === 'team-active' && (
+              <>
+                {step.question.members > 0 && <Text>{t('plugins-manage-team-active-facts', { members: String(step.question.members) })}</Text>}
+                {step.question.unseen > 0 && <Text>{t('plugins-manage-team-unseen-facts', { members: String(step.question.unseen) })}</Text>}
+                <Text>{t('plugins-manage-team-active-stop')}</Text>
+              </>
+            )}
           </Box>
         </Box>
         <Text dimColor italic><HintLine text={t('plugins-manage-key-confirm')} /></Text>

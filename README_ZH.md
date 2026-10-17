@@ -236,6 +236,43 @@ TPS 计入隐藏推理的生成时间，剔除工具执行时间；实时文本�
 自动变化仅 Codex 标识/标题，不改配色与宠物。第三方客户端使用 ChatGPT 订阅令牌受
 OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-backend.md)。
 
+### 实验性：DSH Agent Teams
+
+DSH 的实验性 Agent Teams 让会话的主 agent（Lead）创建有名字的 teammate：它们共用
+工作目录、互相发消息，并在一块共享任务板上协作。默认关闭。先把上游 bundle 装进 TUI
+profile（一次即可）：
+
+```sh
+dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@0.2.1-rc.2
+```
+
+之后用 `/team on` / `/team off` 开关（单独 `/team` 报告 bundle、服务与本会话的
+teammate）。开关就是在 profile 里启停这个 bundle，重启后保持；`dsh --profile` 启动时
+立即生效，运行中的会话也跟着变，模型会收到工具增减的通知。有 teammate 在运行时关闭
+会先确认，关闭会停止它们：团队服务卸载时释放仍在运行的 teammate。在 teammate 会话里
+看不到其他 teammate 的运行状态，确认按「可能在运行」计数。团队记录留在会话里，
+下次 `/team on` 时恢复。对这个 bundle 用 `/plugin enable|disable` 效果相同。
+
+版本必须钉住，与你已装的 DSH 版本完全一致（上面以主适配线 `0.2.1-rc.2` 为例；
+DSH `0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2` 就装同版本的 `…-profile`）：团队包与 DSH 同步发版、对 DSH 的 peer
+是精确版本，不带版本和 `next` 都装不上。`/team on` 在包没装时给出的命令按已装 DSH 的
+版本填写（限上述版本线，读不到版本时给 `0.2.1-rc.2`）；其他 DSH 版本装不上团队 bundle，
+会提示先把 DSH 换到上述版本线之一。
+
+请求里有 `spawn_teammate` 时，dsh-TUI 从中去掉 `subagent` / `subagent_fork`，团队的
+`send_message` / `list_agents` / `interrupt_agent` / `wait_agent` 顶替同名的旧版控件：
+委派工具只剩 `spawn_teammate`；团队关闭后旧版工具回来。不是团队成员的子代理（workflow、
+ralph）保留 `subagent`。teammate 显示为子代理行，
+成员间的消息在接收方会话里显示为 `✉ <发送者>` 气泡（teammate 收到的消息在其子代理详情里显示为
+agent 消息），其余团队工具显示为单行卡片（`send_message` 带目标与 `sent`）。agents 仪表盘（Ctrl+A）与 agents 侧栏
+进入团队视图：teammate 以成员名显示，状态为运行中 / 空闲 / 准备中 / 失败（回合结束的
+teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行、其余子代理、只读任务板
+（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。
+
+限制：开关作用于整个 profile，不能按会话开关（没有 profile 插件服务或没有热重载的
+启动要用 `dsh plugin` 并重启）；还不能「进入 teammate 会话」；`/export` 不导出团队消息。上游限制同样
+适用：teammate 共用一个工作目录、团队只在单进程内、任务负责人不会自动释放。
+
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 打开会话管理（DSH 会先将当前会话转后台）。

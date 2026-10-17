@@ -290,6 +290,58 @@ Using ChatGPT subscription tokens in third-party clients is subject to
 OpenAI’s terms. Full instructions and current boundaries:
 [Codex backend](docs/codex-backend.en.md).
 
+### Experimental: DSH Agent Teams
+
+DSH's experimental Agent Teams lets the session's agent (the Lead) create
+named teammates that share the working directory, message each other and
+coordinate on a shared task board. It is off by default. Install the
+upstream bundle into the TUI profile once:
+
+```sh
+dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@0.2.1-rc.2
+```
+
+Then switch it with `/team on` / `/team off` (`/team` alone reports the
+bundle, the service and this session's teammates). The switch enables or
+disables the bundle in the profile, so it persists across restarts, and on a
+`dsh --profile` launch it applies at once — running sessions included: the
+model is told which tools came and went. Turning it off while teammates run
+asks first, and switching off stops them: the team service releases the
+teammates still running as it unloads. Inside a teammate session the other
+teammates' runs are not visible, so the question counts them as possibly
+running. The team record stays in the session for the next `/team on`.
+`/plugin enable|disable` on the bundle does the same.
+
+Pin the version to exactly your installed DSH version (the command above
+uses the primary line `0.2.1-rc.2`; on DSH `0.2.1-alpha.5`, `0.2.0-rc.1` or
+`0.2.0-rc.2` install `…-profile@` that same version). The team packages ship in lockstep with DSH and pin
+their DSH peers exactly, so neither the untagged install nor `next` works.
+When the package is missing, `/team on` prints the command with your
+DSH version filled in on those lines (`0.2.1-rc.2` when the version cannot
+be read); on any other DSH version it asks you to switch DSH to one of those lines first, since
+no team bundle installs there.
+
+While a request carries `spawn_teammate`, dsh-TUI drops `subagent` /
+`subagent_fork` from it, and the team's `send_message` / `list_agents` /
+`interrupt_agent` / `wait_agent` take the place of the legacy controls of the
+same names, so `spawn_teammate` is the delegation tool; with the team off
+the legacy tools are back. Subagents that are not team members (workflow,
+ralph) keep `subagent`. A teammate shows up as a subagent row, a message between
+members as a `✉ <sender>` bubble in the receiving session (a teammate's
+received messages show on its subagent detail as agent messages), and the
+other team tools as one-line cards (`send_message` with its target and
+`sent`). The agents dashboard (Ctrl+A) and the agents side
+panel switch to a team view: each teammate under its member name with
+`running` / `idle` / `provisioning` / `failed` (a teammate whose turn ended
+is idle — a message wakes it — not done), the Lead line, the remaining
+subagents, a read-only task board (status, owner, `blocked`, write-scope
+warnings) and a banner when the team record was rejected.
+
+Limits: the switch covers the whole profile, not one session (a launch
+without the profile plugin service, or without hot reload, needs `dsh plugin`
+and a restart); there is no "enter teammate session" yet, and `/export` leaves team messages out. Upstream limits apply: teammates share one working directory, a
+team lives in one process, and a task owner is never released automatically.
+
 ## Keybindings & Mouse
 
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` dismiss, double-`Esc` rewinds · `Ctrl+B` side panel · `Ctrl+O` details · `Ctrl+R` history (`↑`/`↓` and `Ctrl+R` are scoped to the current project) · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` open the session manager (DSH backgrounds the current session first).

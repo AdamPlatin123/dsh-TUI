@@ -57,6 +57,13 @@ assert.deepEqual(mixed.registrations, [], 'profile declarations own their seats 
 const disabled = harness([{ disabled: true, options: { name: '@deepseek-ai/dsh-agent-preset', config: { id: 'standard' } } }])
 await registerBundledPresets(disabled.ctx)
 assert.equal(disabled.registrations.length, 5)
+// Agent Teams leaves the presets alone: which delegation tools a request
+// carries is decided per assembly (presets.ts filterTeamReplacedTools), so a
+// bundle toggled at run time also reaches the sessions already joined.
+const team = harness([{ disabled: false, options: { name: '@deepseek-ai/dsh-experimental-tool-agent-team' } }])
+await registerBundledPresets(team.ctx)
+assert.deepEqual(team.registrations.map(row => row.definition), fresh.registrations.map(row => row.definition),
+  'an enabled team tool row must not rewrite the registered presets')
 // A real Cordis dependency appears after the TUI's registration attempt.
 const delayed = new Context()
 const delayedRegistrations = []

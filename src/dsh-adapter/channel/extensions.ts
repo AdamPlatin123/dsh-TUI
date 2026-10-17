@@ -547,6 +547,7 @@ export function attachDshExtensions(
     state,
     seedActivity: options.seedActivity,
     seedContextOccupancy: options.seedContextOccupancy,
+    seedTeam: options.seedTeam,
     inputConvergence: core.inputConvergence,
     modelSelection,
     modelActions,

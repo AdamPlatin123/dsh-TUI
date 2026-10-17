@@ -127,6 +127,8 @@ import { PluginManagePane } from '../components/PluginManagePane.js'
 import type { SdkInstaller, SdkInstallSurface } from '../agent/backend.js'
 import type { PluginInstallFlow, PluginInstallSink, PluginInstallStep } from '../dsh-adapter/plugin-install.js'
 import type { PluginManageFlow, PluginManageSink, PluginManageStep } from '../dsh-adapter/plugin-manage.js'
+import type { TeamCommandOutcome, TeamCommandSink } from '../dsh-adapter/team-mode.js'
+import { teamMemberCounts } from '../components/teamRoster.js'
 import { usePluginWriteFlow } from './chat/usePluginWriteFlow.js'
 import { ChannelPicker } from '../components/ChannelPicker.js'
 import type { KernelEntry, KernelStatus } from '../components/kernelCatalog.js'
@@ -397,6 +399,7 @@ export function Chat({
   onResolveSdkInstall,
   onPluginInstall,
   onPluginManage,
+  onTeamCommand,
   kernelPinned,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
@@ -501,6 +504,12 @@ export function Chat({
    * whole contract.
    */
   onPluginManage?: (args: string, sink: PluginManageSink) => PluginManageFlow | undefined
+  /**
+   * `/team [status] | on | off`, wired to `createTeamCommandEntry`: on/off
+   * hand back a lifecycle flow on the Agent Teams bundle (same pane as
+   * `/plugin`), status a report. `undefined` on a backend without it.
+   */
+  onTeamCommand?: (args: string, sink: TeamCommandSink) => TeamCommandOutcome
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
   kernelPinned?: boolean
   /**
@@ -1042,6 +1051,11 @@ export function Chat({
     initialStep: { kind: 'done' },
     failureLine: error => t('plugins-manage-failed', { reason: cleanScalarText(error, COMMAND_RESULT_CELLS) }),
   })
+  /** 绑定会话的 teammate 数、其中运行中／准备中的数与可能在运行的数（关闭团队前的确认用）。 */
+  const teamMembers = (): { total: number; active: number; unseen: number } => {
+    const team = channel.team
+    return team === undefined ? { total: 0, active: 0, unseen: 0 } : teamMemberCounts(team, [...channel.subagents], channel.sessionId)
+  }
   /** 开始一次生命周期动作；`false` 表示这段输入不是那三种形式（或本启动没有服务）。 */
   const startPluginManage = (rawArgs: string): boolean => {
     const flow = onPluginManage?.(rawArgs, {
@@ -1049,6 +1063,7 @@ export function Chat({
       // 回合运行中改 profile 会触发应用／HMR：门禁在流程里（解析之前与写入之前各查一次）。
       busy: () => channel.working,
       onLines: lines => channel.pushLocal('/plugin', lines),
+      teamActiveMembers: teamMembers,
     })
     if (flow === undefined) return false
     pluginManage.start(flow, flow.begin())
@@ -1467,8 +1482,8 @@ export function Chat({
   }, [autoRecapSessionId])
   // The user starts a new message → the auto recap has served its purpose
   // (catching them up) and bows out. A newer user row is the signal; the
-  // assistant's own streamed rows don't count.
-  const lastUserRowId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
+  // assistant's own streamed rows (and a teammate's message) don't count.
+  const lastUserRowId = channel.rows.filter(row => row.kind === 'user' && row.label !== 'team-message').at(-1)?.id ?? -1
   React.useEffect(() => {
     if (
       recap !== null &&
@@ -3640,6 +3655,34 @@ export function Chat({
         void channel.pluginsInfo(rawInput).then((lines) => {
           if (channel.agentBindingGeneration !== originAgentBinding) return
           channel.pushLocal('/plugin', lines)
+        })
+        return true
+      }
+      case 'team': {
+        // `/team` 是团队 bundle 的启停（team-mode.ts）：on/off 走与 /plugin 同一个
+        // 生命周期流程与确认浮层，status 是一段报告；都按发起时的绑定落行。
+        setHelpOpen(false)
+        if (onTeamCommand === undefined) {
+          channel.pushLocal('/team', [t('team-cmd-unavailable')])
+          return true
+        }
+        const originAgentBinding = channel.agentBindingGeneration
+        const outcome = onTeamCommand(rawInput, {
+          binding: () => channel.agentBindingGeneration,
+          busy: () => channel.working,
+          onLines: lines => channel.pushLocal('/team', lines),
+          members: teamMembers,
+        })
+        if (outcome.kind === 'flow') {
+          pluginManage.start(outcome.flow, outcome.flow.begin())
+          return true
+        }
+        void outcome.lines.then((lines) => {
+          if (channel.agentBindingGeneration !== originAgentBinding) return
+          channel.pushLocal('/team', [...lines])
+        }, (error: unknown) => {
+          if (channel.agentBindingGeneration !== originAgentBinding) return
+          channel.pushLocal('/team', [t('plugins-manage-failed', { reason: cleanCommandError(error) })])
         })
         return true
       }
@@ -6376,6 +6419,8 @@ export function Chat({
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
+        team={channel.team}
+        sessionId={channel.sessionId}
         onSelect={(id) => {
           setSubagentDashboardOpen(false)
           setSubagentDetailId(id)

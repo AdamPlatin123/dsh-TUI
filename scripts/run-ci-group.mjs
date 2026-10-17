@@ -869,6 +869,24 @@ const GROUPS = {
 // 告警、压缩检查点不改写本地量），投影缺席（裸 cordis.yml 无 token-meter）时回退到
 // 上次成功请求的计费采样且软失败不抛。
     ["verify-context-occupancy", ['node', '--import', 'tsx/esm', 'scripts/verify-context-occupancy.ts']],
+// Agent Teams 读侧回归（#1241）：agentTeam 投影 store（仅 Lead 的隐式单人团队视为
+// 无团队、teammate 经 parentSession 读 Lead、他会话/他 key 不串、迟到 registry 补
+// seed）、0.2.1 relay 团队消息的气泡（按前缀块取发送者并剔除、不算人类提问、不进
+// 回退目标）与团队工具单行卡片（与同名旧版子代理控件区分）。
+    ["verify-agent-teams", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-teams.ts']],
+// compat(dsh 0.2.0, log)：0.2.0 邮箱来源的团队消息、teammate 首条消息的身份块与 send_message 结果经 compat 归一化后，
+// 与 0.2.1 形态在翻译器（含回放）、子代理投影、工具卡上产出完全相同；随 compat 模块一起删除。
+    ["verify-agent-teams-compat-0.2.0", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-teams-compat-0.2.0.ts']],
+// 团队消息气泡渲染（#1241）：发送者行 + 悬挂缩进正文，常规与窄终端宽度、宽字符下不越界。
+    ["verify-team-message-bubble", ['node', '--import', 'tsx/esm', 'scripts/verify-team-message-bubble.tsx']],
+// 代理面板的团队模式（#1241 第二阶段）：名单与子代理行按 id 合并、状态合成（跑完的
+// teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅；整屏与侧栏、
+// 窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
+    ["verify-team-dashboard", ['node', '--import', 'tsx/esm', 'scripts/verify-team-dashboard.tsx']],
+// 团队模式开关（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
+// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status|on|off 与关闭时
+// 有成员运行的确认（/plugin disable 团队 bundle 同问）。
+    ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
 // 分段估算口径回归（#1170）：estimateTokens 由 chars/4 改为 CJK 感知的纯函数——
 // 单条纯 ASCII 与旧口径相同（显式快路径；跨消息累加因改为逐条 ceil 会有 ≤1
 // token/条的舍入差），中文/全角按 ~1.4 字符/token、其它脚本按 ~2；单调不减、

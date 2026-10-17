@@ -153,6 +153,8 @@ const dict = {
   'export-dir': { zh: '- 目录: {{cwd}}', en: '- Directory: {{cwd}}' },
   'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
+  // Agent Teams: the tag after the sender of a peer message bubble.
+  'team-message-label': { zh: '团队消息', en: 'team message' },
   // T06 (PR-B · AC-5): transcript indicator above a user bubble whose send
   // consumed the live IDE selection. The ⧉ glyph lives in MessageList, not here.
   'selection-attached': {
@@ -1050,6 +1052,12 @@ const dict = {
   'tool-name-write': { zh: '写入', en: 'Write' },
   'tool-name-todo_write': { zh: '待办清单', en: 'TodoWrite' },
   'tool-name-subagent': { zh: '子代理', en: 'Task' },
+  // Agent Teams tools (dsh-adapter/team-tools.ts supplies these as displayKey).
+  'tool-name-team-message': { zh: '团队消息', en: 'Message' },
+  'tool-name-team-roster': { zh: '团队成员', en: 'Team' },
+  'tool-name-team-wait': { zh: '等待团队', en: 'Wait' },
+  'tool-name-team-interrupt': { zh: '中断成员', en: 'Interrupt' },
+  'tool-name-team-task': { zh: '任务板', en: 'Tasks' },
   'tool-name-web_search': { zh: '联网搜索', en: 'WebSearch' },
   'tool-name-multiedit': { zh: '多处编辑', en: 'MultiEdit' },
   'tool-name-notebookedit': { zh: '笔记本编辑', en: 'NotebookEdit' },
@@ -1095,6 +1103,8 @@ const dict = {
   'sugg-more-below': { zh: '↓{{n}}', en: '↓{{n}}' },
   // 二级补全子项描述（/lang /theme /effort /preset /activity 的 children）
   'sugg-status-desc': { zh: '显示当前选择', en: 'Show the current choice' },
+  'sugg-team-on-desc': { zh: '开启 Agent Teams（启用团队 bundle）', en: 'Switch Agent Teams on (enable the team bundle)' },
+  'sugg-team-off-desc': { zh: '关闭 Agent Teams（停用团队 bundle）', en: 'Switch Agent Teams off (disable the team bundle)' },
   'sugg-lang-zh-desc': { zh: '切换界面语言到中文', en: 'Switch the UI language to Chinese' },
   'sugg-lang-en-desc': { zh: '切换界面语言到英文', en: 'Switch the UI language to English' },
   'sugg-theme-auto-desc': { zh: '跟随终端背景自动切换', en: 'Follow the terminal background' },
@@ -1597,6 +1607,18 @@ const dict = {
     zh: '这一行属于宿主层（dsh-base）：关掉它会卸载本应用注入的服务，本应用可能重启或退出。',
     en: 'This row belongs to the host layer (dsh-base): switching it off unloads services this application injects, and the app may restart or exit.',
   },
+  'plugins-manage-team-active-facts': {
+    zh: '本会话有 {{members}} 个 teammate 正在运行或准备中。',
+    en: '{{members}} teammate(s) in this session are running or being created.',
+  },
+  'plugins-manage-team-unseen-facts': {
+    zh: '团队里有 {{members}} 个 teammate 可能正在运行：从 teammate 会话里看不到它们的运行状态。',
+    en: '{{members}} teammate(s) of this team may be running: their runs are not visible from a teammate session.',
+  },
+  'plugins-manage-team-active-stop': {
+    zh: '关闭团队会停止它们：团队服务卸载时释放仍在运行的 teammate。团队消息与任务板停止，团队记录留在会话里。',
+    en: 'Switching the team off stops them: the team service releases the teammates still running as it unloads. Team messages and the task board stop; the team record stays in the session.',
+  },
   'plugins-manage-key-confirm': { zh: '⏎ 执行 · esc 关闭', en: '⏎ do it · esc close' },
   'plugins-manage-key-busy': { zh: '写入中 · esc 只关面板，操作会继续（这三个动作没有取消面）', en: 'writing · esc only closes the pane, the action goes on (these three have no cancellation)' },
   'doctor-plugin-generation': { zh: '插件运行时 generation：{{id}}', en: 'Plugin runtime generation: {{id}}' },
@@ -1746,6 +1768,57 @@ const dict = {
   'subagent-hint-back': { zh: '返回', en: 'back' },
   'subagent-hint-compose': { zh: '发消息', en: 'compose' },
   'subagent-empty-hint': { zh: '让主代理发起 Task 后，子代理会出现在这里', en: 'Subagents appear here once the main agent starts Task delegations' },
+
+  // ── Agent Teams：代理面板的团队模式（components/SubagentDashboard.tsx）──
+  'team-dashboard-title': { zh: ' 代理团队 ', en: ' Agent Team ' },
+  'team-status-provisioning': { zh: '准备中', en: 'provisioning' },
+  'team-status-running': { zh: '运行中', en: 'running' },
+  'team-status-idle': { zh: '空闲', en: 'idle' },
+  'team-status-active': { zh: '活跃', en: 'active' },
+  'team-status-failed': { zh: '失败', en: 'failed' },
+  'team-members-title': { zh: '成员', en: 'Members' },
+  'team-lead-row': { zh: 'lead · 当前会话', en: 'lead · this session' },
+  'team-lead-row-peer': { zh: 'lead', en: 'lead' },
+  'team-self-mark': { zh: '当前会话', en: 'this session' },
+  'team-others-title': { zh: '其他子代理', en: 'Other subagents' },
+  'team-tasks-title': { zh: '任务板 · {{completed}}/{{total}}', en: 'Tasks · {{completed}}/{{total}}' },
+  'team-tasks-empty': { zh: '暂无任务', en: 'No tasks' },
+  'team-tasks-count': { zh: '任务 {{completed}}/{{total}}', en: 'tasks {{completed}}/{{total}}' },
+  'team-last-run-failed': { zh: '上一轮失败 {{error}}', en: 'last run failed {{error}}' },
+  'team-task-blocked': { zh: '阻塞', en: 'blocked' },
+  'team-failure': { zh: '团队记录被拒：{{failure}}', en: 'Team record rejected: {{failure}}' },
+
+  // ── /team：团队模式开关（团队 bundle 的启停，见 docs/agent-teams-design.md「开关机制」）──
+  'team-cmd-unavailable': { zh: '当前内核没有 Agent Teams。', en: 'The current kernel has no Agent Teams.' },
+  'team-cmd-usage': { zh: '未知子命令「{{sub}}」。用法：/team [status] | on | off', en: 'Unknown subcommand "{{sub}}". Usage: /team [status] | on | off' },
+  'team-cmd-no-manager': {
+    zh: '本次启动没有 profile 插件服务，无法在会话内切换。改用：dsh plugin --profile {{profile}} add {{bundle}}（关闭用 remove），然后重启。',
+    en: 'This launch has no profile plugin service, so the team cannot be switched here. Use dsh plugin --profile {{profile}} add {{bundle}} (remove to switch off), then restart.',
+  },
+  'team-cmd-bundle': { zh: '团队 bundle：{{state}}', en: 'Team bundle: {{state}}' },
+  'team-cmd-on': { zh: '已开启', en: 'on' },
+  'team-cmd-off': { zh: '已关闭', en: 'off' },
+  'team-cmd-already-on': { zh: '团队 bundle 已开启，无需改动。', en: 'The team bundle is already on; nothing to change.' },
+  'team-cmd-not-installed': {
+    zh: '团队 bundle 未安装。在这里安装：/plugin install {{bundle}}（装完即开启）；或在终端：dsh plugin --profile {{profile}} add {{bundle}}',
+    en: 'The team bundle is not installed. Install it here with /plugin install {{bundle}} (it is switched on once installed), or in a terminal with dsh plugin --profile {{profile}} add {{bundle}}',
+  },
+  'team-cmd-kernel-unsupported': {
+    zh: '运行中的 DSH {{version}} 没有本应用能读取的团队 bundle：先把 DSH 换成 {{lines}} 之一，再安装同版本的团队 bundle。',
+    en: 'The running DSH {{version}} has no team bundle this app can read: switch DSH to one of {{lines}} first, then install the team bundle of that same version.',
+  },
+  'team-cmd-off-not-installed': { zh: '团队 bundle 未安装，团队本就是关闭的，无需改动。', en: 'The team bundle is not installed, so the team is already off; nothing to change.' },
+  'team-cmd-service': { zh: '团队服务：{{state}}', en: 'Team service: {{state}}' },
+  'team-cmd-running': { zh: '运行中', en: 'running' },
+  'team-cmd-stopped': { zh: '未运行', en: 'not running' },
+  'team-cmd-pending-on': { zh: 'profile 已开启团队，但服务没有运行：重启后生效，或服务激活失败（见日志）。', en: 'The profile has the team on but the service is not running: it applies after a restart, or the service failed to activate (see the log).' },
+  'team-cmd-pending-off': { zh: 'profile 已关闭团队，但服务仍在运行：重启后生效。', en: 'The profile has the team off but the service is still running: it applies after a restart.' },
+  'team-cmd-no-members': { zh: '本会话没有 teammate。', en: 'No teammates in this session.' },
+  'team-cmd-members': { zh: '本会话 teammate：{{total}} 个，其中 {{active}} 个运行中或准备中。', en: 'Teammates in this session: {{total}}, {{active}} running or provisioning.' },
+  'team-cmd-members-unseen': {
+    zh: '本会话 teammate：{{total}} 个，其中 {{active}} 个运行中或准备中，{{unseen}} 个可能在运行（从 teammate 会话里看不到）。',
+    en: 'Teammates in this session: {{total}}, {{active}} running or provisioning, {{unseen}} may be running (not visible from a teammate).',
+  },
 
   // ── agent team：子代理转录视图、发消息输入框、消息流 ──
   'agent-view-title': { zh: '子代理转录', en: 'Agent transcript' },
@@ -2121,6 +2194,7 @@ const dict = {
   'cmd-desc-migrate': { zh: '从其他编程代理导入对话（claude-code/codex/omp/zcode/grok-build）' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
+  'cmd-desc-team': { zh: '团队模式：查看状态，或 on / off 开关（启停 Agent Teams bundle）' },
   'cmd-desc-jobs': { zh: '查看本会话的后台任务' },
   'cmd-desc-panel': { zh: '侧栏面板：开关 / 聚焦 / 缩放 / 切换', en: 'Side panel: toggle / focus / zoom / switch' },
   'cmd-desc-kernel': { zh: '选择内核（切换后重启进入）', en: 'Choose the kernel (restarts into it)' },
