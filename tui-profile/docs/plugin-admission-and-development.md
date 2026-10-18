@@ -327,7 +327,145 @@ attachment；cleanup failure 必须保留可诊断、可重试状态。
 
 验证必须覆盖实际安装 artifact、依赖闭包、native/build step、override/patch 声明和
 固定的 dsh-std revision。只验证源码仓库或只执行参考实现测试，不足以产生 artifact
-claim。
+claim。逐项的执行口径（六档 evidence、digest 与依赖闭包的具体范围、provenance 的否决
+语义）见下一节。
+
+### 供应链证据与 provenance（执行口径）
+
+本节是 `TUI-DEP-001` 与 `TUI-CLAIM-001` 的执行口径，**不新增要求 ID**：它只把"证据"拆成
+可分别记录、不能互相冒充的六档，并说明 claim 绑定在哪几样东西上。术语取自 dsh-std 的
+[`provenance`](../../vendor/dsh-std/docs/proposals/provenance.zh.md) 与
+[`conformance`](../../vendor/dsh-std/docs/proposals/conformance.zh.md) 提案，evidence profile 见
+[说明 0004](../notes/0004-provenance-validation.md)。
+
+**六档 evidence。** 每一档由不同角色产出，能证明的东西不同，**不能互相冒充**
+（[governance §5](../governance/rules.md)）：
+
+| 档 | 谁产出 | 能证明什么 | 不能证明什么 |
+| --- | --- | --- | --- |
+| `declared` | 插件作者（`dsh-plugin.json`） | 作者声称需要与提供什么 | 声明是否成立、运行时是否真的如此 |
+| `parsed` | 固定 revision 的 `@dsh-std/manifest` | 清单能被该 parser 接受，字段与形状闭合 | 语义正确、协商会成功、行为符合声明 |
+| `negotiated` | Host 的 protocol catalog 与 admission evaluator | 在本 Host、本 profile、本坐标下能达成 agreement 或降级结论 | 代码跑得动、权限已授权、用户已确认 |
+| `tested` | 固定的 suite（`conformance/requirements-v0.15.json` 登记的那些） | 在该 suite 版本上这些用例按期望通过 | 用例没覆盖的路径、真实终端里的行为 |
+| `observed` | Host 运行时（ownership record / effect ledger） | 这次 activation 实际注册了什么、清理了什么 | 作者意图、其他 Host 上的行为 |
+| `attested` | 构建平台（npm provenance / SLSA attestation） | 这个 artifact 由谁、在哪次构建里产出 | 代码质量、有没有漏洞、与声明是否一致 |
+
+六档都是 evidence，**没有一档是安全保证**（`TUI-TRUST-001` 与说明 0004 末段）。"有
+attestation"不等于"已审计"，"通过 fixtures"不等于"没有缺陷"，"观察到一次"不等于"承诺
+永远如此"。
+
+**claim 绑定对象。** 一条 claim 必须同时绑定下列六项，缺一项即不成立；其中 Host / artifact /
+suite / result / evidence level 有机器可读形状
+[`schemas/conformance-claim.schema.json`](../schemas/conformance-claim.schema.json)
+（`claimVersion: "0.15"`，`evidenceLevel` 的取值就是上表六档、schema 里首字母大写），字段对应
+与缺口见 `TUI-CLAIM-001`：
+
+| 绑定项 | 具体是什么 |
+| --- | --- |
+| std revision | `vendor/dsh-std` 的固定 revision，以及该 revision 下的 Manifest version 与 definition 来源 |
+| profile | 本 profile 的坐标与内容摘要（`registry/registry-0.15.json` 的 `profileHash`，sha256 pin） |
+| Host | 被验证的 TUI Host 及其 host descriptor digest（`TUI-HOST-001`） |
+| artifact | 实际被安装的那份产物：包名、精确版本、SHA-256 digest |
+| suite | 跑的哪套用例：suite 名与 version/digest，以及它覆盖的测试层 |
+| result | 每项通过/失败，以及这一项来自哪一档 evidence |
+
+**artifact digest 的口径。** digest 的对象是**会被安装的那个 tarball**，不是源码仓库，也不是
+工作树：
+
+- **npm 分发**：以 registry 上的 tarball 为准；本地用 `npm pack` 复现同一份产物后算
+  SHA-256。registry 的 `dist.integrity` / `dist.shasum` 是同一产物的另一份摘要，可以交叉
+  核对，**不能替代**自己算的那一份。
+- **非 npm 分发**（本地目录、git、tarball 链接）：digest 只对**被冻结的那一份产物**有意义；
+  给得出就记录，给不出就如实写"没有"（见 `TUI-CLAIM-001`），**不要拿 commit hash 冒充
+  artifact digest**。
+- digest 在**发布/评审时**计算并随 claim 记录；安装期与运行期都**不重算、不校验**（见下面
+  的"执行点"）。
+
+**依赖闭包的范围。** `TUI-DEP-001` 里的"实际安装 artifact + 依赖闭包"在这里具体指：
+
+- **实际安装的 artifact**：用户机器上解析到的那份 tarball，包含 `files` 白名单决定的发布面
+  （`dsh-plugin.json` 必须落在里面，否则装到用户机器上就没有声明面）；
+- **依赖闭包**：`dependencies` / `peerDependencies` / `optionalDependencies` 的解析结果与
+  锁文件一致；
+- **native / build step**：需要编译或执行安装脚本的依赖单独列出——构建脚本被拦是安装期的
+  一条独立门禁，**不因为"有 claim"而放行**；
+- **override / patch**：`overrides`、profile 的 patch 层、bundle 的 `cordis.patch.yml` 都算进
+  闭包，它们改变的是实际组合，而不只是依赖图；
+- **std revision**：`vendor/dsh-std` 的固定 revision 与 `@dsh-std/*` 版本线对得上；TUI 私有
+  坐标固定为 `tui.dsh/v1alpha1`。
+
+只验证源码仓库、或只跑参考实现的测试，不产生 artifact claim（`TUI-DEP-001` 原文）。
+
+**provenance 的否决语义。** provenance / attestation 在本 profile 里只有**否决权**，没有
+放行权：
+
+- **不得单独放行**：一份合法的 attestation 不能替代清单条目、不能替代准入、不能替代用户
+  确认；它也**不能**把第三方变成嫡系——嫡系只看随包发布的
+  [`feed/first-party.json`](../feed/first-party.json)，见 [`feed/README.md`](../feed/README.md)。
+- **不一致 ⇒ 降级**：将来某个来源（registry 的 attestation、发布者身份、构建 provenance）与
+  已记录的 claim 或清单条目**不一致**时，该次判定降级（嫡系 → 第三方、Verified → 未验证、
+  `compatible` → `unknown`），并把原因记进 claim / 报告；**不是**清除字段，也不是静默忽略。
+- **缺席 ≠ 失败**：拿不到 attestation 只是"没有这一档 evidence"，不是拒绝、不触发降级——
+  除非某条 claim 明确要求了 `attested`（今天没有这样的要求者）。
+- **本轮没有任何在线校验**：Host 服务面（`@deepseek-ai/dsh-plugin-manager`）的公开类型不含
+  provenance / publisher / attestation，TUI 也没有网络客户端；安装与运行都不查这些。要接是
+  后续版本的事，接的时候只接"否决"，不把它升格成"认证"。
+
+**执行点。** 三档，别混：
+
+| 场景 | 谁执行 | 执行什么 |
+| --- | --- | --- |
+| 本仓库的机器检查 | CI 与本地门禁 | `verify:plugin-spec`（registry pin / 坐标 / fixture 矩阵）、`verify:plugin-feed`（清单格式）、backend 族门禁与 profile 套件 |
+| 准入评审 | TUI 团队按「官方准入检查清单」 | 逐条核对 evidence；**人工**，只在被要求准入/上架时发生 |
+| 运行时 | 宿主 | **不验** artifact digest、**不验** provenance、**不验** attestation；只做 manifest 投影、协商、权限与组合 |
+
+生态收录（`plugins.json` 与站外市场）**不是**上面任何一档执行点：它是发现渠道，判据与边界
+见「收录与推广」。
+
+**措辞。** 展示 verification level 时按档说（"通过本 profile 的 fixtures"、"npm provenance
+可得"、"运行时观察"），**不合并成"安全"**，不使用"官方认证""安全插件"等措辞（准入清单
+G 节）。
+
+### TUI-CLAIM-001 Claim binding
+
+任何"已验证 / Verified"表述都是一条 **claim**，必须同时绑定 `std revision`、`profile`、
+`Host`、`artifact`、`suite`、`result` 六项（定义见上一节），并标明它来自哪一档 evidence。
+缺任一项的表述不成立。
+
+机器可读形状是
+[`schemas/conformance-claim.schema.json`](../schemas/conformance-claim.schema.json)
+（`claimVersion: "0.15"`），绑定项与必填键的对应关系：
+
+| 绑定项 | schema 键 | 说明 |
+| --- | --- | --- |
+| claim 格式 | `claimVersion` | 固定 `"0.15"`，schema 必填 |
+| Host | `hostDescriptorDigest` | `sha256:<64 hex>`；必须是 descriptor 的 digest，不是版本号 |
+| artifact | `subject` + `artifactDigest` | `subject` 是 `包名@精确版本`，`artifactDigest` 是 `sha256:<64 hex>`；对象是实际安装的 tarball，两者一起才绑定完整 artifact |
+| suite | `suiteVersion` | suite 名与版本的组合；失败项另列 `failedRequirements` |
+| result | `result` + `failedRequirements` | `pass` / `fail`，失败项逐条列出 |
+| evidence level | `evidenceLevel` | `Declared` / `Parsed` / `Negotiated` / `Tested` / `Observed` / `Attested` 之一 |
+| spec 版本 | `specVersion` | 固定 `community-v0.15`，schema 必填；它只是 profile 接入的 spec 版本，**不承载** std revision 与 profile 摘要 |
+| std revision + profile | —（schema 无独立键） | 必须随 claim 附上 registry pin（`profileHash`）；`additionalProperties: false` 使它不能内嵌进 claim，附件载体尚未定义，是本形状的已知缺口，接执行体时补 |
+| 时间与签发 | `testedAt` / `signer` / `expiresAt` / `revoked` | `testedAt` 必填；其余可选，claim 可签发、可过期、可撤销 |
+
+四条硬口径：
+
+1. **一条 claim 只有一档 evidence level**。要同时说"parsed 过了、tested 也过了"，就是两条
+   claim，各自绑定自己的 suite 与结果——这正是"不能互相冒充"的可执行形式。
+2. **没有 `artifactDigest` 就没有 claim**（schema 里它是必填）。推论：拿不出产物 digest 的包
+   **不能**被标成 Verified；它仍然可以被收录、被安装（两者都不要求 claim）。
+3. **作者与参考实现不能自证**：`signer` 必须是不参与该实现的一方（评审方 / 目录运营方）；
+   插件作者的自述只是 `declared` 档的输入，不是 claim。
+4. **claim 随证据失效**：suite 版本变了、Host descriptor 变了、artifact 重新打包（哪怕只差
+   一个字节）、或对应 registry 条目的 `profileHash` 漂了，旧 claim 都不再适用；不一致时按
+   上一节的"不一致 ⇒ 降级"处理。
+
+本 profile 今天只发布这个**形状**，没有任何生产者或执行体：宿主会把它读进 profile 的 schema
+集合并检查结构完整性，但**不校验任何真实 claim**；准入与安装都不要求 claim。什么时候要求、
+由谁签发，属后续版本（与 provenance 的在线校验同一批）。
+
+- Source：`schemas/conformance-claim.schema.json`
+- 术语：`vendor/dsh-std/docs/proposals/conformance.zh.md`（ConformanceReport）
 
 ### TUI-BACKEND-001 Backend contribution family
 
@@ -1173,12 +1311,70 @@ DSH 专用服务、完整/轻量 profile 与入口 slot；发现前的路由只�
 
 ## 命名与发布规范
 
-- **包名**：生态约定 `@dsh-tui-ecosystem/<name>`（发布前先查 npm 是否被占）；
-  官方核心包保持 `@deepseek-harness-tui/*`。仓库放
-  `github.com/dsh-tui-ecosystem/<name>`。
-- **许可证**：MIT（与主包一致）。
-- **版本**：语义化版本；发布由 `v*` tag 驱动（参考主包 publish workflow）。
-- **Node**：`^22.19 || >=24`，纯 ESM。
+**命名是双轨的**：裸名与 scoped 包名都是一等公民，**不因命名被拒**。
+
+| 形态 | 谁用 | 说明 |
+| --- | --- | --- |
+| 裸名（如 `dsh-code-memory`） | 社区插件 | 生态侧已有实例；bundle 的 patch 按包名解析，裸名形态最稳 |
+| `@dsh-tui-ecosystem/<name>` | 生态组织内的新包 | **建议**而非要求；模板用的是它 |
+| `@deepseek-harness-tui/*` | 官方核心包 | 生态插件不要使用；`@deepseek-ai/*` 属宿主上游，也不要占用 |
+
+- **不要求**组织仓库（生态收录里的项目绝大多数在个人账号下），**不要求** scoped。
+- **名称是稳定标识**：bundle 解析按包名逐字匹配，改名对用户就是换一个包；要改就发布新名并
+  写清迁移，不要让旧名静默失效。
+- **仓库归属**：source repository 要可定位（`package.json` 的 `repository`），与 README、
+  issue 对得上；供应链评审以它为准（`TUI-DEP-001`）。
+- **许可证**：许可证必须可定位，且与 `package.json` / README 一致；MIT（与主包一致）是最省
+  事的写法。
+- **版本与标签**：语义化版本；发布由 `v*` tag 驱动，**tag 必须等于 `package.json` 的
+  version**（主包与生态侧唯一已发布包的发布流程都这么做；两者不等时发布流程直接失败）。
+- **provenance**：可得出 provenance 时**附上**（npm 上优先用 trusted publishing；静态
+  `NPM_TOKEN` 是降级做法）。它是 `attested` 档 evidence 的来源，不构成准入（见「供应链证据与
+  provenance」）。
+- **Node 与模块形态**：`^22.19 || >=24`，纯 ESM（`type: "module"`），相对导入带 `.js` 后缀。
+- **发布前先查名**：npm 上是否已被占用；被占用就换个名字，不要指望 scope 能解决——裸名与
+  scoped 是两条并行的合法路线，不是新旧的替代关系。
+
+**嫡系资格 ≠ 生态准入**：首方 feed **只收 scoped** 名单条目，用 scope 当"离线可判的发布者"
+（见 [`feed/README.md`](../feed/README.md)）。这条规则**只**决定安装时要不要先问一句信任，
+不决定一个包能不能被准入、被收录、被安装；反过来，"用了 scoped"也不等于嫡系——feed 里没有
+的精确 `name@version` 一律按第三方处理。
+
+## 从旧模板迁移（只有 `cordis.patch.yml` 的包）
+
+2026-08 版 `plugin-template` 生成的包只有 `cordis.patch.yml`、没有 `dsh-plugin.json`。这类包
+能装、能组合，但**没有声明面**：它不参与准入，不能声明 `Backend`，也不发布协议坐标——**不是
+"默认通过"，而是"没有可判的东西"**。安装本身仍归插件管理器（`/plugin install` 或
+`dsh plugin --profile dsh-tui add`），本仓库不代装。
+
+迁移清单（逐条可执行）：
+
+1. **补 `dsh-plugin.json`**（包根、唯一，`TUI-PKG-001`）：
+   - `$schema` 用绝对 URI；`manifestVersion: "0.15"`；manifest 由固定 revision 的
+     `@dsh-std/manifest` parser 接受（**不要求联网取 schema**）；
+   - `id` 稳定且唯一（不随版本变），`name` / `version` 与 `package.json` 对齐；
+   - `facets.host`：`entry` 指向包内入口（相对路径，不许 `..`）、`apiVersion` 写
+     `v1alpha1`（facet API 版本，不是私有协议坐标；私有协议坐标见第 3 步）；不写
+     `client` / `worker` facet；
+   - `requires.contracts`：required 必须能由本 profile 导入或拥有的 definition 解析，optional
+     要写 TUI 可展示的 fallback（`TUI-PKG-002`）；
+   - `permissions`：`name` / `scope` / `reason` 三项，最小集，逐条写 `reason`；
+   - `contributes`：至少 `commands: []`（没有命令就写空数组）；`panels` 在 v0.15 必须为空；
+   - `subscriptions`：数组，没有就写 `[]`；
+   - **不写** `provides`、**不写** `requires.services`。
+2. **保留 `cordis.patch.yml`**：组合层不变；manifest 不会替它注入行，两者是两件事。
+3. **要声明私有贡献就把坐标指向 `tui.dsh/v1alpha1`**：`Backend` 族见接缝十四；声明里的
+   `id` / `capabilities` / `grants` / `install` 会先过 `validateBackendSpec`，再被宿主准入判
+   一次（五态见接缝十四）。
+4. **把 manifest 放进发布面**：`files` 白名单必须含 `dsh-plugin.json`（和
+   `cordis.patch.yml`，如果仍然用它），否则用户装到的 tarball 里没有它。
+5. **发布前本地验证**：固定 revision 的 parser 能接受；对照「官方准入检查清单」逐条自查；
+   改动渲染、键盘或终端协议的流程按「验证清单」在真实 TTY 里手动跑一遍。
+6. **发布流程**：`v*` tag 等于 `package.json` 的 version；能出 provenance 就开（见「命名与
+   发布规范」）。
+
+判据与 `TUI-PKG-001` / `TUI-PKG-002` 一一对应：**没有 manifest ⇒ A 节第一条不成立；
+manifest 缺声明闭包 ⇒ B 节不成立。旧模板因此天然过不了准入，而不是被特殊放行。**
 
 ## 质量与安全红线
 
@@ -1241,7 +1437,8 @@ DSH 专用服务、完整/轻量 profile 与入口 slot；发现前的路由只�
 
 - [ ] `TUI-RUN-002`：展示 trusted-in-process 和非沙箱警告
 - [ ] `TUI-DEP-001`：Reproducible 的依赖闭包和 digest 证据完整
-- [ ] `TUI-CLAIM-001`：claim 绑定 spec/host/artifact/suite/result
+- [ ] `TUI-CLAIM-001`：claim 绑定 std revision/profile/Host/artifact/suite/result，
+      一条 claim 只有一档 evidence
 - [ ] effect ledger 不记录 secret、credential、token 或消息正文
 
 ### G. 市场展示
@@ -1265,11 +1462,40 @@ DSH_TUI_DEBUG=1 dsh --profile dsh-tui      # 需要调试时
 
 ## 收录与推广
 
-- 完成插件后，把链接提交到生态组织，让社区发现你：
-  - 主仓库的 [`docs/links.md`](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/links.md)（PR 到 `ccch1mneyyy/dsh-TUI`）
-  - 组织主页 README 的收录列表（PR 到 `dsh-tui-ecosystem`）
-- 在 README 里注明依赖的 dsh-TUI 版本下限，随主包版本更新做兼容性说明。
+生态里有**三层**，判据不同、维护者不同、结论不能互相顶替：
 
-收录只做链接罗列，不包含代码审查或运行验证。收录本身不代表 dsh-TUI、生态组织
-或其成员对插件的功能、质量或安全作任何背书或担保；插件由各自作者维护，使用者
-安装社区插件前请自行评估。
+| 层 | 谁维护 | 判据 | 能得出什么 | 不能得出什么 |
+| --- | --- | --- | --- | --- |
+| **仓内 profile 准入** | 本仓库（`tui-profile/`，随代码修订） | 协议 / 形状 / 坐标 / digest / conformance（本指南与 `conformance/`） | `compatible`、`compatible_degraded`、`waiting_authorization`、`rejected`、`unknown` 五态 | 安全性、质量、"官方认证" |
+| **首方 feed** | 本仓库随包发布（`tui-profile/feed/first-party.json`） | 精确 `name@version`、只收 scoped、一个版本钉死一份 | 安装时**免一次信任确认**的那份名单 | 准入结论；不在名单里不等于不能用 |
+| **生态收录** | 生态组织（`dsh-tui-ecosystem`） | `plugins.json` + `plugins-pr.yml` 的校验（下表） | 出现在 [dshtui.com/plugins](https://dshtui.com/plugins) 的目录条目 | 准入、验证、背书 |
+
+**生态收录实际查什么**（收录仓的 `plugins-pr.yml` → `.github/scripts/validate-plugins.mjs`，
+2026-10 口径）：
+
+1. `plugins.json` 是合法 JSON，且 `plugins` 是数组；
+2. 每条必填 `name` / `displayName` / `description` / `author` / `repo` / `kind` / `addedAt`，
+   `kind` 只能是 `plugin` / `template` / `core`；
+3. `repo` 是 `https://github.com/owner/repo`；插件名与仓库地址都不重复（大小写不敏感）；
+4. **新增**条目：仓库真实存在且公开，PR 提交者是该仓库 owner 或 collaborator；
+5. **新增**条目：仓库 README 里有指向 dsh-TUI 的链接（`https://dshtui.com` 或主仓地址）。
+
+五条过了之后可选一次 AI 审查（没有 API key 就跳过；审查标记为需要复核时不自动合并），再由
+`MERGE_TOKEN` 自动 squash 合并并触发站点部署。
+
+**它不查**：npm 上有没有发布、包名是裸名还是 scoped、有没有 `dsh-plugin.json`、manifest 能
+不能被解析、有没有 provenance / attestation、声明了哪些能力与权限。所以：
+
+> **收录 ≠ 准入 ≠ 背书。** 收录只说明"仓库公开、作者本人提交、README 回链了本产品"；它不
+> 说明插件符合本指南的任何一条要求，也不代表 dsh-TUI、生态组织或其成员对插件的功能、质量
+> 或安全作任何背书或担保。反过来，没被收录的插件一样可以安装、可以自己发布。
+
+投稿两条路：
+
+- **收录仓 PR**：向 `dsh-tui-ecosystem/dsh-tui-ecosystem` 的 `plugins.json` 加一条，按上面五
+  条自查；
+- **友情链接**：主仓 [`docs/links.md`](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/links.md)
+  的 PR——罗列性质，同样不构成背书。
+
+建议顺序是**先过本指南的检查清单、再投稿**，并在 README 里写明依赖的 dsh-TUI 版本下限、随
+主包版本更新兼容性说明；这是建议，不是收录的前置条件（收录流程不读本指南）。
