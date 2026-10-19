@@ -27,10 +27,25 @@ import {
   type OnboardingStep,
   type TutorialCard,
 } from '../components/onboardingModel.js'
+import {
+  addedProviderOrder,
+  defaultSelection,
+  modelRefKey,
+  modelRefsOf,
+  planModelAdoption,
+  resolveDefaultPick,
+  selectedModelRefs,
+  toggleModelRef,
+  type AdoptionPlan,
+  type ProviderModelRef,
+} from '../components/onboardingProviderPlan.js'
+import { clearOnboardingDraft, readOnboardingDraft, writeOnboardingDraft, type OnboardingPendingAction } from '../onboardingDraft.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { CredentialStatus, EffortOption, LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
 import type { BalanceResult } from '../adapter/ports/channel-catalog.js'
+import type { OAuthProviderStatus } from '../adapter/ports/channel-settings.js'
+import type { ProviderWizardOutcome } from '../dsh-adapter/providerWizard.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiWorkspaceTarget } from '../workspaces.js'
 
@@ -40,6 +55,28 @@ type ConnState =
   | { kind: 'running' }
   | { kind: 'ok'; models: number; balance: string | null }
   | { kind: 'fail'; reason: string; status?: number | undefined }
+
+/**
+ * 第一步的三层：动作列表 → 选账号登录 → 接入模型（内联模态层）。
+ *
+ * `adopt` 只在"登录/写 key 之后真的有新模型、且不止一个"时出现——一个模型
+ * 不问（直接设为默认），一个都没有也不问。三分支的判定在
+ * `components/onboardingProviderPlan` 里，是纯函数。
+ */
+type AccessPhase = 'actions' | 'signin' | 'adopt'
+type AccessZone = 'models' | 'default'
+
+/** 动作行的 id（渲染顺序由 `accessActionIds` 决定，缺接缝的行不出现）。 */
+type AccessActionId = 'signin' | 'add' | 'recheck' | 'next'
+
+/** 接入层的完整状态（取消即整块丢掉）。 */
+interface AdoptState {
+  readonly plan: AdoptionPlan
+  readonly selected: ReadonlySet<string>
+  readonly defaultKey: string | undefined
+  readonly zone: AccessZone
+  readonly index: number
+}
 
 /** 第二步的两块：语言还是主题（Tab 换）。 */
 type LookPane = 'lang' | 'theme'
@@ -68,6 +105,32 @@ function modelRowCount(
   return listed.filter(model => model.provider === group).length
 }
 
+/** 接入层当前区的行（模型区多一行"确认"哨兵，用 undefined 占位）。 */
+function adoptRowsOf(adopt: AdoptState): readonly (ProviderModelRef | undefined)[] {
+  if (adopt.zone === 'models') return [...adopt.plan.added, undefined]
+  return selectedModelRefs(adopt.plan.added, adopt.selected)
+}
+
+/** 登录状态的一句话（复用 /login 的四条既有文案，不另造一套词）。 */
+function oauthStateText(row: OAuthProviderStatus): string {
+  if (row.signedIn) {
+    return row.expiresAt === undefined
+      ? t('login-oauth-in-no-expiry')
+      : t('login-oauth-in', { time: new Date(row.expiresAt).toISOString() })
+  }
+  return row.expired ? t('login-oauth-expired') : t('login-oauth-signed-out')
+}
+
+/**
+ * 底部提示行：子层有子层自己的键位（勾选 / 选默认 / 返回），别拿骨架那句
+ * "←/→ 换步骤"去糊弄一个正在多选的人。
+ */
+function hintKeyFor(step: OnboardingStep, phase: AccessPhase, onLast: boolean): 'onboarding-hint' | 'onboarding-hint-last' | 'onboarding-access-signin-hint' | 'onboarding-access-adopt-hint' {
+  if (step === 'access' && phase === 'signin') return 'onboarding-access-signin-hint'
+  if (step === 'access' && phase === 'adopt') return 'onboarding-access-adopt-hint'
+  return onLast ? 'onboarding-hint-last' : 'onboarding-hint'
+}
+
 /**
  * Onboarding —— 首次运行的引导向导（`~/.dsh-tui/onboarding.json` 走一次性记账）。
  *
@@ -81,6 +144,12 @@ function modelRowCount(
  *
  * **凭证永远只报"有没有"，不报值**：`describeCredential` 回的是不含秘密的
  * 元数据，界面上也照它的原样画。
+ *
+ * 第一步（账号与模型接入）会把**动作**交给 Chat 执行：订阅登录与 `/provider`
+ * 的 key 流程都要用共享问答面板（设备码、授权 URL、密钥输入），而那套面板
+ * 归 Chat 的 `questionStore`。面板挂起时本屏会被卸载、回答后重挂，所以进度
+ * 落在 `src/onboardingDraft.ts`（模块级，不是 React state）——挂载时读回，
+ * 动作回来时按"动作前的目录基线"做差分，再按 0/1/N 决定是否问默认模型。
  */
 export function Onboarding({
   channel,
@@ -88,7 +157,9 @@ export function Onboarding({
   onClose,
   onRunCommand,
   onApplyLang,
-  initialStep = 0,
+  onProviderSignIn,
+  onProviderAddProvider,
+  initialStep,
   externalNotice,
 }: {
   channel: Channel
@@ -103,22 +174,81 @@ export function Onboarding({
    * 优先级（env > cordis.yml > 持久化）只有 Chat 手里那一份。
    */
   onApplyLang: (lang: Lang) => void
-  /** 测试缝：直接落在某一步（探针不重复走前几步）。 */
-  initialStep?: number
+  /**
+   * 订阅账号登录（第一步的动作行）：Chat 用既有的 `runOAuthLogin` +
+   * `questionStore` 跑完整个 OAuth 流程，只把结果交回来。返回值口径与
+   * `/provider` 的 `ProviderWizardOutcome` 一致。
+   */
+  onProviderSignIn?: (provider: string) => Promise<ProviderWizardOutcome>
+  /**
+   * "添加模型提供方（API key）"：Chat 用既有的 `runProviderWizard` 跑
+   * `/provider` 的 add 流程（route / 端点 / key / 模型多选 / 回滚都在那里）。
+   */
+  onProviderAddProvider?: () => Promise<ProviderWizardOutcome>
+  /** 测试缝：直接落在某一步（探针不重复走前几步；不给则从 draft 恢复）。 */
+  initialStep?: number | undefined
   /** 测试缝：外部注入一句提示（真机不传）。 */
   externalNotice?: string
 }): React.ReactNode {
   const { columns, rows } = useTerminalSize()
-  const [stepIndex, setStepIndex] = React.useState(() =>
-    Math.max(0, Math.min(initialStep, ONBOARDING_STEPS.length - 1)))
+  // 面板接管会把这一屏卸载再重挂：step/focus 先看 draft，只有显式传了
+  // `initialStep`（测试缝、/setup）才由参数决定。
+  const [restored] = React.useState(() => readOnboardingDraft())
+  const [stepIndex, setStepIndex] = React.useState(() => {
+    const seed = initialStep ?? restored?.step ?? 0
+    return Math.max(0, Math.min(seed, ONBOARDING_STEPS.length - 1))
+  })
   const step = ONBOARDING_STEPS[stepIndex]!
-  const [focusIndex, setFocusIndex] = React.useState(0)
-  const [notice, setNotice] = React.useState<string | undefined>(externalNotice)
+  const [focusIndex, setFocusIndex] = React.useState(initialStep === undefined ? restored?.focus ?? 0 : 0)
+  const [notice, setNotice] = React.useState<string | undefined>(
+    externalNotice ?? (initialStep === undefined ? restored?.notice : undefined))
+  const aliveRef = React.useRef(true)
+  React.useEffect(() => () => {
+    aliveRef.current = false
+  }, [])
 
-  // ── 第一步：凭证 + 连通性 ────────────────────────────────────────────
+  // ── 第一步：凭证 + 连通性 + 账号/模型接入 ────────────────────────────
   const [credential, setCredential] = React.useState<CredentialStatus | undefined>(undefined)
   const [conn, setConn] = React.useState<ConnState>({ kind: 'idle' })
   const [checkNonce, setCheckNonce] = React.useState(0)
+  /** dsh-auth 的登录状态；`undefined` = 本组合没挂这个插件。 */
+  const [oauth, setOauth] = React.useState<readonly OAuthProviderStatus[] | undefined>(undefined)
+  const [accessPhase, setAccessPhase] = React.useState<AccessPhase>('actions')
+  const [signinIndex, setSigninIndex] = React.useState(0)
+  const [adopt, setAdopt] = React.useState<AdoptState | undefined>(undefined)
+  /** 目录刷新阀门：接入成功后让第三步重读模型/提供方。 */
+  const [catalogNonce, setCatalogNonce] = React.useState(0)
+  /**
+   * 第一步的动作清单在挂载后**会长出来**（`oauthProviderStatuses` / `providerSetup`
+   * 是异步/懒解析的）：前几帧可能只有"重新检查 / 跳过"，之后"登录订阅账号 / 添加
+   * 模型提供方"插到最前面。焦点因此按**动作 id**记，不按下标——否则用户的焦点
+   * 会在清单变长的瞬间从"重新检查"静默变成"登录"，一次回车就点错东西。
+   */
+  const providerSetupHost = React.useMemo(() => channel.providerSetup?.(), [channel])
+  const canSignIn = onProviderSignIn !== undefined && (oauth?.length ?? 0) > 0
+  const canConfigure = onProviderAddProvider !== undefined && providerSetupHost !== undefined
+  const accessActionIds = React.useMemo<readonly AccessActionId[]>(() => [
+    ...(canSignIn ? ['signin' as const] : []),
+    ...(canConfigure ? ['add' as const] : []),
+    'recheck',
+    'next',
+  ], [canConfigure, canSignIn])
+  const [accessFocusId, setAccessFocusId] = React.useState<AccessActionId | undefined>(() => {
+    // 首次挂载**不钉任何行**：清单是异步长出来的（先有"重新检查/跳过"，几帧后
+    // 才长出"登录/加 key"），钉住当时的第 0 行会让焦点在清单变长后落到别的动作上。
+    // 只有"面板接管后重挂"才按 draft 里的下标恢复。
+    const seed = restored?.focus ?? 0
+    if (seed <= 0) return undefined
+    return accessActionIds[Math.min(seed, Math.max(0, accessActionIds.length - 1))]
+  })
+  const accessIndex = accessFocusId === undefined
+    ? 0
+    : Math.max(0, accessActionIds.indexOf(accessFocusId))
+  /**
+   * 已经有能用的东西了吗（凭证已配置，或某个订阅账号已登录）？有就不再往屏幕上
+   * 堆"手工设置"的兜底文案——那是"这台机器现在什么都没有"时才需要的出路。
+   */
+  const accessReady = credential?.configured === true || (oauth ?? []).some(row => row.signedIn)
   React.useEffect(() => {
     let alive = true
     setCredential(undefined)
@@ -127,11 +257,13 @@ export function Onboarding({
       const status = await channel.describeCredential('DEEPSEEK_API_KEY').catch(() => undefined)
       if (!alive) return
       setCredential(status)
-      const [models, balance] = await Promise.all([
+      const [models, balance, oauthRows] = await Promise.all([
         channel.listModels().catch(() => [] as readonly LlmModelInfo[]),
         channel.balanceInfo().catch(() => ({ ok: false, reason: 'network' }) as BalanceResult),
+        channel.oauthProviderStatuses?.().catch(() => undefined) ?? Promise.resolve(undefined),
       ])
       if (!alive) return
+      setOauth(oauthRows)
       // 连通性的判定口径：余额接口是唯一一次真的打服务端的调用，所以以它
       // 为准；模型列表只用来给成功态添一个数字（某些 provider 会走缓存）。
       setConn(balance.ok
@@ -185,12 +317,15 @@ export function Onboarding({
     return () => {
       alive = false
     }
-  }, [channel])
+  }, [channel, catalogNonce])
 
   // ── 第四步：招式卡 ──────────────────────────────────────────────────
   const [tried, setTried] = React.useState<ReadonlySet<string>>(() => new Set())
 
   const finish = React.useCallback((outcome: 'skipped' | 'done'): void => {
+    // 两条出口都收掉进度：跳过的下一次启动还要从第一步重问，完成的更不该
+    // 留着旧的 draft 去影响 `/setup`。
+    clearOnboardingDraft()
     onClose(outcome)
   }, [onClose])
 
@@ -237,14 +372,202 @@ export function Onboarding({
     onRunCommand(card.command)
   }, [onRunCommand])
 
-  /** 当前这一步有多少可移动的行（决定 ↑/↓ 的上限与回车落点）。 */
-  const rowCount = step === 'apikey'
-    ? 1
-    : step === 'look'
-      ? (lookPane === 'lang' ? LANGS.length : themeOptions.length)
-      : step === 'model'
-        ? (zone === 'model' ? modelRowCount(models, modelGroup, providers) : zone === 'effort' ? efforts.length : 1)
-        : TUTORIAL_CARDS.length
+  // ── 第一步的接入动作（订阅登录 / API key / 接入模型）──────────────────
+  /** provider 显示名：注册表 → 登录状态 → 原始 id。 */
+  const providerLabel = React.useCallback((id: string | undefined): string => {
+    if (id === undefined) return ''
+    return providers.find(entry => entry.id === id)?.name
+      ?? oauth?.find(row => row.provider === id)?.label
+      ?? id
+  }, [oauth, providers])
+  /**
+   * 动作行的文案（登录行带上"已登录几 / 共几"的实况）。清单本身（`accessActionIds`）
+   * 与"能不能用"（`accessReady`）在第一步的状态区上方算，那里要先于焦点状态。
+   */
+  const accessRows = React.useMemo(() => {
+    const total = oauth?.length ?? 0
+    const signedIn = (oauth ?? []).filter(row => row.signedIn).length
+    const describe = (id: AccessActionId): { label: string; desc: string } => {
+      switch (id) {
+        case 'signin':
+          return {
+            label: t('onboarding-access-action-signin'),
+            desc: t('onboarding-access-action-signin-desc', { signed: signedIn, total }),
+          }
+        case 'add':
+          return {
+            label: t('onboarding-access-action-add'),
+            desc: t('onboarding-access-action-add-desc'),
+          }
+        case 'recheck':
+          return {
+            label: t('onboarding-access-action-recheck'),
+            desc: t('onboarding-access-action-recheck-desc'),
+          }
+        case 'next':
+          return {
+            label: t('onboarding-access-action-next'),
+            desc: t('onboarding-access-action-next-desc'),
+          }
+      }
+    }
+    return accessActionIds.map(id => ({ id, ...describe(id) }))
+  }, [accessActionIds, oauth])
+
+  /**
+   * 动作回来（或面板重挂）之后的唯一收口：读回动作前的目录基线 → 差分 →
+   * 0/1/N 决策。`pending` 先清空，保证重挂路径与 Promise 回调只结算一次。
+   */
+  const settlePendingAction = React.useCallback(async (): Promise<void> => {
+    const draft = readOnboardingDraft()
+    const pending = draft?.pending
+    if (draft === undefined || pending === undefined) return
+    // 已经卸载的实例不许把这一单"吃掉"：面板挂起时本屏被卸载，重挂的那个实例
+    // 才是该结算的人（它读同一份 draft）。这里先退出去，把 pending 原样留给它。
+    if (!aliveRef.current) return
+    writeOnboardingDraft({ pending: undefined })
+    const models = await channel.listModels().catch(() => [] as readonly LlmModelInfo[])
+    if (!aliveRef.current) return
+    setCatalogNonce(nonce => nonce + 1)
+    // 登录状态也可能刚变了：重跑一次状态读取（凭证 + 已登录账号 + 连通性）。
+    setCheckNonce(nonce => nonce + 1)
+    const plan = planModelAdoption({
+      baseline: draft.baseline,
+      current: modelRefsOf(models),
+      ...(pending.kind === 'sign-in' && pending.provider !== undefined ? { provider: pending.provider } : {}),
+      ...(channel.provider !== undefined && channel.model !== undefined
+        ? { currentRoute: { provider: channel.provider, id: channel.model } }
+        : {}),
+    })
+    const label = providerLabel(plan.provider ?? (pending.kind === 'sign-in' ? pending.provider : undefined))
+    if (plan.decision === 'none') {
+      const text = label === ''
+        ? t('onboarding-access-added-none')
+        : t('onboarding-access-added-none-for', { provider: label })
+      setNotice(text)
+      writeOnboardingDraft({ baseline: [], notice: text })
+      return
+    }
+    if (plan.decision === 'auto') {
+      const pick = plan.added[0]!
+      const ok = await channel.switchModel(pick.provider, pick.id).catch(() => false)
+      if (!aliveRef.current) return
+      const text = ok
+        ? t('onboarding-access-added-auto', { name: pick.name, provider: providerLabel(pick.provider) })
+        : t('onboarding-model-switch-failed', { name: pick.name })
+      setNotice(text)
+      writeOnboardingDraft({ baseline: [], notice: text })
+      return
+    }
+    const preferred = plan.defaultPick ?? plan.added[0]!
+    setAdopt({
+      plan,
+      selected: defaultSelection(plan.added),
+      defaultKey: modelRefKey(preferred),
+      zone: 'models',
+      index: 0,
+    })
+    setAccessPhase('adopt')
+  }, [channel, providerLabel])
+
+  /**
+   * 跑一个接入动作：**先**把基线 + 意图写进 draft，再交给 Chat 的面板。
+   * 顺序是关键——面板一挂起这一屏就卸载了，晚写的上下文没人接得住。
+   */
+  const runProviderAction = React.useCallback(async (
+    pending: OnboardingPendingAction,
+    start: () => Promise<ProviderWizardOutcome>,
+  ): Promise<void> => {
+    const baseline = modelRefsOf(await channel.listModels().catch(() => [] as readonly LlmModelInfo[]))
+    writeOnboardingDraft({ step: stepIndex, focus: accessIndex, baseline, pending, notice: undefined })
+    const outcome = await start().catch(() => 'failed' as ProviderWizardOutcome)
+    if (outcome === 'cancelled' || outcome === 'failed') {
+      // 取消/失败都没有产生目录变化：清掉 pending，别让重挂再结算一次。
+      // 具体原因由 Chat 的流程自己报（`/provider` 的 notify 也在那里）；这里只
+      // 保证回到动作层并留一句本地回声——整屏盖着时外面的通知条是看不见的。
+      const text = outcome === 'cancelled'
+        ? t('onboarding-access-cancelled')
+        : t('onboarding-access-action-failed')
+      if (readOnboardingDraft()?.pending !== undefined) {
+        writeOnboardingDraft({ pending: undefined, baseline: [], notice: text })
+      }
+      if (aliveRef.current) {
+        setAccessPhase('actions')
+        setNotice(text)
+      }
+      return
+    }
+    await settlePendingAction()
+  }, [accessIndex, channel, settlePendingAction, stepIndex])
+
+  const startSignIn = React.useCallback((provider: string): void => {
+    if (onProviderSignIn === undefined) return
+    setAccessPhase('actions')
+    void runProviderAction({ kind: 'sign-in', provider }, () => onProviderSignIn(provider))
+  }, [onProviderSignIn, runProviderAction])
+
+  const startAddProvider = React.useCallback((): void => {
+    if (onProviderAddProvider === undefined) return
+    void runProviderAction({ kind: 'add-provider' }, onProviderAddProvider)
+  }, [onProviderAddProvider, runProviderAction])
+
+  /** 接入层的默认模型落点：`switchModel` 与第三步同一条路（写 model.json）。 */
+  const applyAdoption = React.useCallback((
+    plan: AdoptionPlan,
+    selected: ReadonlySet<string>,
+    preferredKey: string | undefined,
+  ): void => {
+    const picked = selectedModelRefs(plan.added, selected)
+    const preferred = preferredKey === undefined
+      ? undefined
+      : picked.find(row => modelRefKey(row) === preferredKey)
+    const pick = resolveDefaultPick(picked, preferred)
+    if (pick === undefined) {
+      setAdopt(undefined)
+      setAccessPhase('actions')
+      setNotice(t('onboarding-access-adopt-empty'))
+      return
+    }
+    void channel.switchModel(pick.provider, pick.id).then((ok) => {
+      const text = ok
+        ? t('onboarding-access-adopted', { n: picked.length, name: pick.name })
+        : t('onboarding-model-switch-failed', { name: pick.name })
+      // 落地判断先看还在不在：用户可能在 `switchModel` 解析前就退出了引导，
+      // 那时既不该改状态，也不该给下一次 `/setup` 留一条过期提示。
+      if (!aliveRef.current) return
+      setNotice(text)
+      writeOnboardingDraft({ baseline: [], notice: text })
+      setCheckNonce(nonce => nonce + 1)
+    }).catch(() => undefined).finally(() => {
+      if (!aliveRef.current) return
+      setAdopt(undefined)
+      setAccessPhase('actions')
+    })
+  }, [channel])
+
+  // 面板重挂：draft 里还有在飞的动作，说明面板刚把这一屏还回来。
+  React.useEffect(() => {
+    if (restored?.pending === undefined) return
+    setAccessPhase('actions')
+    void settlePendingAction()
+    // 只在首次挂载结算一次：settle 自己会把 pending 清掉。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 进度（步骤 / 焦点）随变随存，卸载-重挂后从 draft 读回。
+  React.useEffect(() => {
+    writeOnboardingDraft({ step: stepIndex, focus: focusIndex })
+  }, [focusIndex, stepIndex])
+
+  /**
+   * 第三步模型区的行数（分组层 = provider 数；列表层 = 该 provider 的模型数）。
+   * 第一步的接入层有自己的 `accessActionIds` / `adoptRowsOf`，不走这里。
+   */
+  const rowCount = step === 'look'
+    ? (lookPane === 'lang' ? LANGS.length : themeOptions.length)
+    : step === 'model'
+      ? (zone === 'model' ? modelRowCount(models, modelGroup, providers) : zone === 'effort' ? efforts.length : 1)
+      : TUTORIAL_CARDS.length
 
   useInput((input, key, event) => {
     // 工作区选择是引导内部的模态层：开着的时候键盘全归它。
@@ -277,6 +600,108 @@ export function Onboarding({
       event.stopImmediatePropagation()
       return
     }
+    // 第一步的接入子层（选账号 / 接入模型）：Esc 只退一层，不跳过整个引导。
+    if (step === 'access' && accessPhase !== 'actions') {
+      if (key.escape) {
+        if (accessPhase === 'signin') setAccessPhase('actions')
+        else {
+          // 退出接入层不撤回已经登录/写入的东西（它们本来就生效了），
+          // 只是不再替用户选默认模型。
+          setAdopt(undefined)
+          setAccessPhase('actions')
+          setNotice(t('onboarding-access-adopt-cancelled'))
+        }
+        event.stopImmediatePropagation()
+        return
+      }
+      if (accessPhase === 'signin') {
+        const count = (oauth?.length ?? 0) + 1
+        if (key.upArrow || key.downArrow) {
+          setSigninIndex(previous => Math.max(0, Math.min(previous + (key.upArrow ? -1 : 1), count - 1)))
+          return
+        }
+        if (isPlainReturn(key)) {
+          const row = oauth?.[signinIndex]
+          if (row === undefined) setAccessPhase('actions')
+          else startSignIn(row.provider)
+          event.stopImmediatePropagation()
+        }
+        return
+      }
+      // 接入层：模型多选 → 默认单选，Tab 换区。
+      if (adopt === undefined) return
+      if (key.tab) {
+        // 进默认区时把焦点放到"标记的那一个"上（Tab 与 Enter 走同一条落点）。
+        setAdopt((previous) => {
+          if (previous === undefined) return previous
+          if (previous.zone === 'default') return { ...previous, zone: 'models', index: 0 }
+          const picked = selectedModelRefs(previous.plan.added, previous.selected)
+          const preferred = previous.defaultKey === undefined
+            ? 0
+            : Math.max(0, picked.findIndex(row => modelRefKey(row) === previous.defaultKey))
+          return { ...previous, zone: 'default', index: preferred }
+        })
+        event.stopImmediatePropagation()
+        return
+      }
+      const rows = adoptRowsOf(adopt)
+      if (key.upArrow || key.downArrow) {
+        setAdopt(previous => previous === undefined ? previous : ({
+          ...previous,
+          index: Math.max(0, Math.min(previous.index + (key.upArrow ? -1 : 1), rows.length - 1)),
+        }))
+        return
+      }
+      if (input === ' ') {
+        // Space = 选择：模型区勾/去勾当前行；默认区把当前行选为默认（只标记，
+        // 不落盘）。落盘永远在 Enter 上——两键语义分开，不互相代劳。
+        if (adopt.zone === 'models') {
+          const row = adopt.plan.added[adopt.index]
+          if (row !== undefined) {
+            setAdopt((previous) => {
+              if (previous === undefined) return previous
+              const selected = toggleModelRef(previous.selected, modelRefKey(row))
+              // 被勾掉的那一行如果正是"标记的默认"，把标记让给还选着的第一个：
+              // 否则默认区会出现"一个 ✓ 都没有、Enter 却落 picked[0]"的错位。
+              const defaultKey = previous.defaultKey !== undefined && !selected.has(previous.defaultKey)
+                ? selected.values().next().value
+                : previous.defaultKey
+              return { ...previous, selected, defaultKey }
+            })
+          }
+          event.stopImmediatePropagation()
+          return
+        }
+        const picked = selectedModelRefs(adopt.plan.added, adopt.selected)
+        const row = picked[adopt.index]
+        if (row !== undefined) {
+          setAdopt(previous => previous === undefined ? previous : ({ ...previous, defaultKey: modelRefKey(row) }))
+        }
+        event.stopImmediatePropagation()
+        return
+      }
+      if (isPlainReturn(key)) {
+        // Enter = 确定：模型区确认这批勾选（进默认区）；默认区把标记的那一个
+        // 落成默认模型（`switchModel` 与第三步同一条路）。
+        if (adopt.zone === 'models') {
+          const picked = selectedModelRefs(adopt.plan.added, adopt.selected)
+          // 一个都没勾 = 这次不选默认（模型仍然可用），直接收层。
+          if (picked.length === 0) applyAdoption(adopt.plan, adopt.selected, adopt.defaultKey)
+          else {
+            const preferred = adopt.defaultKey === undefined
+              ? 0
+              : Math.max(0, picked.findIndex(row => modelRefKey(row) === adopt.defaultKey))
+            setAdopt(previous => previous === undefined ? previous : ({ ...previous, zone: 'default', index: preferred }))
+          }
+          event.stopImmediatePropagation()
+          return
+        }
+        applyAdoption(adopt.plan, adopt.selected, adopt.defaultKey)
+        event.stopImmediatePropagation()
+        return
+      }
+      return
+    }
     if (key.escape) {
       // 模型分组钻进去之后，Esc 先退一层。这条判定必须排在"跳过整个向导"**之前**：
       // 它原来写在 model 分支里（在全局 Esc 之后）永远轮不到，钻进去就成了单向门。
@@ -300,6 +725,8 @@ export function Onboarding({
     const horizontalOwnedByChild =
       (step === 'model' && zone === 'effort')
       || (step === 'model' && zone === 'model' && modelGroup !== undefined)
+      // 接入子层自己吃 ↑/↓/Tab/Esc；←/→ 在这里没有意义，别把层级换掉。
+      || (step === 'access' && accessPhase !== 'actions')
     if (!horizontalOwnedByChild && (key.leftArrow || key.rightArrow)) {
       goToStep(stepIndex + (key.leftArrow ? -1 : 1))
       event.stopImmediatePropagation()
@@ -414,10 +841,26 @@ export function Onboarding({
       return
     }
 
-    // 第一步：只有"重新检查"一个动作。
-    if (step === 'apikey' && isPlainReturn(key)) {
-      setCheckNonce(nonce => nonce + 1)
-      return
+    // 第一步（动作列表）：↑/↓ 移焦点，Enter 落在动作上。动作本身是异步的，
+    // 面板一起就把这一屏交出去（进度在 draft 里，回来接着走）。
+    if (step === 'access') {
+      if (key.upArrow || key.downArrow) {
+        const next = Math.max(0, Math.min(accessIndex + (key.upArrow ? -1 : 1), Math.max(0, accessActionIds.length - 1)))
+        const id = accessActionIds[next]
+        if (id !== undefined) setAccessFocusId(id)
+        // 焦点也进 draft：面板挂起回来时停在同一行动作上。
+        setFocusIndex(next)
+        return
+      }
+      if (isPlainReturn(key)) {
+        const action = accessActionIds[accessIndex]
+        if (action === 'signin') setAccessPhase('signin')
+        else if (action === 'add') startAddProvider()
+        else if (action === 'recheck') setCheckNonce(nonce => nonce + 1)
+        else advance()
+        event.stopImmediatePropagation()
+        return
+      }
     }
   })
 
@@ -451,8 +894,105 @@ export function Onboarding({
         <Box marginBottom={1}>
           <Text dimColor wrap="truncate-end">{t(stepDescKey(step) as never)}</Text>
         </Box>
-        {step === 'apikey' && (
-          <ApiKeyStep credential={credential} conn={conn} focusIndex={focusIndex} onRetry={() => setCheckNonce(n => n + 1)} onHover={setFocusIndex} />
+        {/* 子层（选账号 / 接入）把空间让给清单：状态块只在动作层画一次。 */}
+        {step === 'access' && accessPhase === 'actions' && (
+          <AccessStatus credential={credential} conn={conn} oauth={oauth} />
+        )}
+        {step === 'access' && accessPhase === 'actions' && (
+          <Box flexDirection="column" marginTop={1}>
+            {accessRows.map((row, index) => (
+              <Box key={row.id} flexDirection="column" onMouseEnter={() => setAccessFocusId(row.id)}>
+                <ListItem
+                  isFocused={accessIndex === index}
+                  declareCursor={false}
+                  onClick={(event: ClickEvent) => {
+                    event.stopImmediatePropagation()
+                    setAccessFocusId(row.id)
+                    if (row.id === 'signin') setAccessPhase('signin')
+                    else if (row.id === 'add') startAddProvider()
+                    else if (row.id === 'recheck') setCheckNonce(nonce => nonce + 1)
+                    else advance()
+                  }}
+                >
+                  {row.label}
+                </ListItem>
+                <Text dimColor wrap="truncate-end">{'    ' + row.desc}</Text>
+              </Box>
+            ))}
+            {(!canSignIn || !canConfigure) && !accessReady && (
+              <Box flexDirection="column" marginTop={1}>
+                <Text dimColor wrap="truncate-end">{'  ' + t('onboarding-access-fallback')}</Text>
+                {!canSignIn && (
+                  <Text dimColor wrap="truncate-end">{'    · ' + t('onboarding-access-fallback-signin')}</Text>
+                )}
+                {!canConfigure && (
+                  <Text dimColor wrap="truncate-end">{'    · ' + t('onboarding-access-fallback-provider')}</Text>
+                )}
+                <Text dimColor wrap="truncate-end">{'  ' + t('onboarding-access-fallback-env')}</Text>
+                <Text>{'    ' + t('onboarding-access-fallback-powershell')}</Text>
+                <Text>{'    ' + t('onboarding-access-fallback-cmd')}</Text>
+                <Text dimColor wrap="truncate-end">{'  ' + t('onboarding-access-fallback-store')}</Text>
+                <Text>{'    ' + t('onboarding-access-fallback-store-path')}</Text>
+              </Box>
+            )}
+          </Box>
+        )}
+        {step === 'access' && accessPhase === 'signin' && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box marginBottom={1}><Text bold>{t('onboarding-access-signin-title')}</Text></Box>
+            {(oauth ?? []).map((row, index) => (
+              <Box key={row.provider} flexDirection="column" onMouseEnter={() => setSigninIndex(index)}>
+                <ListItem
+                  isFocused={signinIndex === index}
+                  declareCursor={false}
+                  onClick={(event: ClickEvent) => {
+                    event.stopImmediatePropagation()
+                    setSigninIndex(index)
+                    startSignIn(row.provider)
+                  }}
+                >
+                  {t('onboarding-access-oauth-row', { provider: row.provider, state: oauthStateText(row) })}
+                </ListItem>
+              </Box>
+            ))}
+            <Box onMouseEnter={() => setSigninIndex((oauth ?? []).length)}>
+              <ListItem
+                isFocused={signinIndex === (oauth ?? []).length}
+                declareCursor={false}
+                onClick={(event: ClickEvent) => {
+                  event.stopImmediatePropagation()
+                  setAccessPhase('actions')
+                }}
+              >
+                {t('onboarding-access-back')}
+              </ListItem>
+            </Box>
+          </Box>
+        )}
+        {step === 'access' && accessPhase === 'adopt' && adopt !== undefined && (
+          <AdoptPanel
+            adopt={adopt}
+            providerLabel={providerLabel}
+            onHover={(index) => setAdopt(previous => previous === undefined ? previous : ({ ...previous, index }))}
+            onToggle={(key) => setAdopt(previous => previous === undefined ? previous : ({
+              ...previous,
+              selected: toggleModelRef(previous.selected, key),
+            }))}
+            onZone={(zone) => setAdopt(previous => previous === undefined ? previous : ({ ...previous, zone, index: 0 }))}
+            onConfirm={() => {
+              // 与模型区 Enter 同义：确认这批勾选、进默认区（没勾就直接收层）。
+              const picked = selectedModelRefs(adopt.plan.added, adopt.selected)
+              if (picked.length === 0) {
+                applyAdoption(adopt.plan, adopt.selected, adopt.defaultKey)
+                return
+              }
+              const preferred = adopt.defaultKey === undefined
+                ? 0
+                : Math.max(0, picked.findIndex(row => modelRefKey(row) === adopt.defaultKey))
+              setAdopt(previous => previous === undefined ? previous : ({ ...previous, zone: 'default', index: preferred }))
+            }}
+            onPick={(row) => applyAdoption(adopt.plan, adopt.selected, modelRefKey(row))}
+          />
         )}
         {step === 'look' && (
           <Box flexDirection="column">
@@ -575,7 +1115,7 @@ export function Onboarding({
       <Divider bleed color="subtle" />
       <Box flexShrink={0} height={1} paddingX={2}>
         <Text dimColor italic>
-          <HintLine text={t(onLast ? 'onboarding-hint-last' : 'onboarding-hint')} />
+          <HintLine text={t(hintKeyFor(step, accessPhase, onLast))} />
         </Text>
       </Box>
     </Box>
@@ -615,44 +1155,55 @@ function PaneTab({
   )
 }
 
-/** 第一步：凭证状态 + 真连通性检查。 */
-function ApiKeyStep({
+/**
+ * 第一步的状态块：凭证 + 订阅登录 + 真连通性检查。
+ *
+ * 这里**只读**——动作在下面的动作行里，由 Chat 交给既有的登录/`/provider`
+ * 流程执行。凭证只报"有没有"（`describeCredential` 不含秘密）；登录行只画
+ * 掩码状态（provider + 已登录/过期/未登录）。
+ *
+ * 缺凭证时的文字兜底写的是**真实**的两条路：`$DSH_HOME/.credentials.yaml`
+ * 的 `refs:` 段，以及平台各自的环境变量写法（PowerShell 的用户级持久化与
+ * cmd 的 setx——一键安装包写的就是前者）。这里不再出现 v1 那条
+ * `~/.deepseek/config.json`：DSH 没有读取方，写了也不生效。
+ */
+function AccessStatus({
   credential,
   conn,
-  focusIndex,
-  onRetry,
-  onHover,
+  oauth,
 }: {
   credential: CredentialStatus | undefined
   conn: ConnState
-  focusIndex: number
-  onRetry: () => void
-  onHover: (index: number) => void
+  oauth: readonly OAuthProviderStatus[] | undefined
 }): React.ReactNode {
   const configured = credential?.configured === true
+  const signedIn = (oauth ?? []).filter(row => row.signedIn)
   return (
     <Box flexDirection="column">
-      <Box>
-        {credential === undefined
-          ? <Text dimColor>{t('onboarding-key-checking')}</Text>
-          : configured
-            ? <Text color="success">{'✓ ' + t('onboarding-key-configured')}</Text>
-            : <Text color="warning">{'✗ ' + t('onboarding-key-missing')}</Text>}
-      </Box>
-      {credential !== undefined && configured && (
-        <Text dimColor>
-          {'  ' + credentialSourceText(credential.source)}
-        </Text>
-      )}
-      {credential !== undefined && !configured && (
-        <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>{'  ' + t('onboarding-key-shape')}</Text>
-          <Text dimColor>{'  ' + t('onboarding-key-howto-env')}</Text>
-          <Text>{'    DEEPSEEK_API_KEY=sk-…      (PowerShell: $env:DEEPSEEK_API_KEY="sk-…")'}</Text>
-          <Text dimColor>{'  ' + t('onboarding-key-howto-config')}</Text>
-          <Text>{'    ~/.deepseek/config.json  { "apiKey": "sk-…" }'}</Text>
+      <Box flexDirection="column">
+        <Box>
+          {credential === undefined
+            ? <Text dimColor>{t('onboarding-key-checking')}</Text>
+            : configured
+              ? <Text color="success">{'✓ ' + t('onboarding-key-configured')}</Text>
+              : <Text color="warning">{'✗ ' + t('onboarding-key-missing')}</Text>}
         </Box>
-      )}
+        {credential !== undefined && configured && (
+          <Text dimColor>
+            {'  ' + credentialSourceText(credential.source)}
+          </Text>
+        )}
+        {oauth !== undefined && (
+          signedIn.length > 0
+            ? <Text color="success">
+                {'✓ ' + t('onboarding-access-oauth-in', { n: signedIn.length, providers: signedIn.map(row => row.provider).join(', ') })}
+              </Text>
+            : <Text dimColor>{'· ' + t('onboarding-access-oauth-none')}</Text>
+        )}
+        {credential !== undefined && !configured && (
+          <Text dimColor>{'  ' + t('onboarding-key-shape')}</Text>
+        )}
+      </Box>
       <Box marginTop={1} flexDirection="column">
         {conn.kind === 'running' && <LoadingState message={t('onboarding-conn-running')} dimColor />}
         {conn.kind === 'ok' && (
@@ -665,23 +1216,127 @@ function ApiKeyStep({
           </Box>
         )}
         {conn.kind === 'fail' && (
-          <Box flexDirection="column">
-            <Box><Text color="error">{'✗ ' + connFailText(conn.reason, conn.status)}</Text></Box>
-            <Box marginTop={1} onMouseEnter={() => onHover(0)}>
+          <Box><Text color="error">{'✗ ' + connFailText(conn.reason, conn.status)}</Text></Box>
+        )}
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * 接入层：登录/写 key 之后新出现的模型，"要不要接入、哪个当默认"。
+ *
+ * 只有 N>1 才会走到这里（0 不问、1 直接落默认）。模型区每行可勾选，末尾
+ * 一行是"确认"哨兵；默认区只列勾中的模型，Enter 就是落点。Esc 退一层，
+ * 已经登录/写入的东西不会因此回滚——它只放弃"替你选默认"这一步。
+ */
+function AdoptPanel({
+  adopt,
+  providerLabel,
+  onHover,
+  onToggle,
+  onZone,
+  onConfirm,
+  onPick,
+}: {
+  adopt: AdoptState
+  providerLabel: (id: string | undefined) => string
+  onHover: (index: number) => void
+  onToggle: (key: string) => void
+  onZone: (zone: AccessZone) => void
+  onConfirm: () => void
+  onPick: (row: ProviderModelRef) => void
+}): React.ReactNode {
+  const { plan } = adopt
+  const label = providerLabel(plan.provider)
+  const picked = selectedModelRefs(plan.added, adopt.selected)
+  // 一批跨多个 provider 时按 provider 数报数（标题里点名单个 provider 是假的）。
+  const title = plan.multiProvider || label === ''
+    ? t('onboarding-access-adopt-title-multi', {
+        n: plan.added.length,
+        providers: addedProviderOrder(plan.added).length,
+      })
+    : t('onboarding-access-adopt-title', { provider: label, n: plan.added.length })
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box marginBottom={1}>
+        <Text bold>{title}</Text>
+      </Box>
+      <Box marginBottom={1}>
+        <Text dimColor wrap="truncate-end">{t('onboarding-access-adopt-note')}</Text>
+      </Box>
+      {adopt.zone === 'models' ? (
+        <Box flexDirection="column">
+          <Box marginBottom={1}>
+            <Text dimColor>{t('onboarding-access-adopt-zone-models')}</Text>
+          </Box>
+          {plan.added.map((row, index) => (
+            <Box key={modelRefKey(row)} flexDirection="column" onMouseEnter={() => onHover(index)}>
               <ListItem
-                isFocused={focusIndex === 0}
+                isFocused={adopt.index === index}
+                isSelected={adopt.selected.has(modelRefKey(row))}
                 declareCursor={false}
                 onClick={(event: ClickEvent) => {
                   event.stopImmediatePropagation()
-                  onRetry()
+                  onHover(index)
+                  onToggle(modelRefKey(row))
                 }}
               >
-                {t('onboarding-key-retry')}
+                {row.name + '  ' + row.provider}
+              </ListItem>
+            </Box>
+          ))}
+          <Box flexDirection="column" onMouseEnter={() => onHover(plan.added.length)}>
+            <ListItem
+              isFocused={adopt.index === plan.added.length}
+              declareCursor={false}
+              onClick={(event: ClickEvent) => {
+                event.stopImmediatePropagation()
+                onHover(plan.added.length)
+                onConfirm()
+              }}
+            >
+              {t('onboarding-access-adopt-confirm', { n: picked.length })}
+            </ListItem>
+          </Box>
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          <Box marginBottom={1}>
+            <Text dimColor>{t('onboarding-access-adopt-zone-default')}</Text>
+          </Box>
+          {picked.map((row, index) => (
+            <Box key={modelRefKey(row)} flexDirection="column" onMouseEnter={() => onHover(index)}>
+              <ListItem
+                isFocused={adopt.index === index}
+                isSelected={adopt.defaultKey === modelRefKey(row)}
+                declareCursor={false}
+                onClick={(event: ClickEvent) => {
+                  event.stopImmediatePropagation()
+                  onHover(index)
+                  onPick(row)
+                }}
+              >
+                {row.name + '  ' + row.provider}
+              </ListItem>
+            </Box>
+          ))}
+          <Box marginTop={1}>
+            <Box onMouseEnter={() => onZone('models')}>
+              <ListItem
+                isFocused={false}
+                declareCursor={false}
+                onClick={(event: ClickEvent) => {
+                  event.stopImmediatePropagation()
+                  onZone('models')
+                }}
+              >
+                {t('onboarding-access-adopt-back')}
               </ListItem>
             </Box>
           </Box>
-        )}
-      </Box>
+        </Box>
+      )}
     </Box>
   )
 }
