@@ -245,6 +245,11 @@ So the "add?" question becomes:
   `providerWizard.ts:380-410`) are preserved untouched.
 - **Repeated adoption**: the baseline lives in the draft, so a remount keeps the same baseline
   and the same batch is never asked about twice.
+- **Action id (review fix)**: `pending` carries a monotonic id. Closing the guide does not cancel
+  the provider flow, so a leftover promise can finish after the user reopened `/setup` and started
+  a NEW action; writing its `completed` unconditionally would overwrite that action's `pending` and
+  make the guide settle the abandoned run while the live one loses its result. The completion is
+  written only when `draft.pending.id` is our own (see §7.2).
 - **Settle ordering (review fix)**: `pending` covers the WHOLE run and `completed` is written only
   when the action ends; settling requires `completed`. The question panel can close *between* two
   questions (model discovery and the profile write happen there), so the guide remounts while the
@@ -311,7 +316,7 @@ Sync: the 44 upstream commits (a40c305a → 5e0146bc) **touched none of** `Onboa
 
 | Gate | Result |
 | --- | --- |
-| `scripts/verify-onboarding-wizard.tsx` | **84/84 passed** (new J1–J11: action rows, fallback copy, the 0/1/N branches, Space/Enter split, draft across a remount, panel-takeover settle, mark hand-over) |
+| `scripts/verify-onboarding-wizard.tsx` | **88/88 passed** (new J1–J12: action rows, fallback copy, the 0/1/N branches, Space/Enter split, draft across a remount, panel-takeover settle, mark hand-over) |
 | `scripts/verify-onboarding-provider-plan.ts` (new) | **21/21 passed** |
 | `scripts/verify-i18n.ts` | passed (2077 entries, no dead keys, placeholders consistent) |
 | `scripts/verify-guide.mjs` | passed (20 guide files byte-identical) |
@@ -335,6 +340,7 @@ Sync: the 44 upstream commits (a40c305a → 5e0146bc) **touched none of** `Onboa
 | Mouse toggle did not hand over the mark (review) | the keyboard `Space` path had the hand-over, `onToggle` did not | both paths share `toggleAdoptSelection` |
 | The English manual missed the `←/→` exception (review) | the Chinese one listed step 1's access sub-layer, the English one only the slider and a drilled-in model list | `docs/interaction.en.md` synced and `guide/` rebuilt |
 
+| A stale run overwrote the new pending (review, minor) | close the guide → reopen `/setup` and start a new action → the old run's late callback wrote its completion over the new pending | `OnboardingPendingAction` gained a monotonic `id`; the completion is written only for that id; J12 covers close → new run → old run late → the new run still settles |
 ## 8. Compatibility and migration
 
 - **`ONBOARDING_VERSION` is not bumped**: per `src/onboardingPrefs.ts:34-39` only an **added

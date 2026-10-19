@@ -28,8 +28,19 @@
  */
 import type { ProviderModelRef } from './components/onboardingProviderPlan.js'
 
-/** The access action whose result the guide is waiting for. */
+/**
+ * The access action whose result the guide is waiting for.
+ *
+ * `id` is what makes completions unambiguous: closing the guide clears the
+ * draft but cannot cancel the provider flow, so a leftover promise can finish
+ * after the user reopened `/setup` and started a NEW action. Without an id that
+ * late callback would overwrite the new `pending` record with its own
+ * `completed` one — the guide would settle the abandoned action and the live
+ * one would lose its result.
+ */
 export interface OnboardingPendingAction {
+  /** Monotonic id allocated when the action starts (see {@link nextOnboardingActionId}). */
+  readonly id: number
   readonly kind: 'sign-in' | 'add-provider'
   /** Provider id for `sign-in`; absent for the add-provider wizard. */
   readonly provider?: string | undefined
@@ -95,7 +106,18 @@ export const EMPTY_ONBOARDING_DRAFT: OnboardingDraft = {
 }
 
 let current: OnboardingDraft | undefined
+let actionSeq = 0
 const listeners = new Set<() => void>()
+
+/**
+ * Allocate the id for a starting action.
+ *
+ * @returns A positive, strictly increasing id (1-based).
+ */
+export function nextOnboardingActionId(): number {
+  actionSeq += 1
+  return actionSeq
+}
 
 function emit(): void {
   for (const listener of [...listeners]) {
@@ -133,10 +155,14 @@ function count(value: unknown, fallback: number): number {
 /** Validate the pending action; anything unrecognized reads as "none". */
 function parsePending(value: unknown): OnboardingPendingAction | undefined {
   if (!isRecord(value)) return undefined
+  const id = value.id
   const kind = value.kind
+  // An action without a valid id cannot be told apart from a later one, so it
+  // reads as "no action" rather than as a candidate for a stale completion.
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) return undefined
   if (kind !== 'sign-in' && kind !== 'add-provider') return undefined
   const provider = typeof value.provider === 'string' && value.provider !== '' ? value.provider : undefined
-  return { kind, ...(provider === undefined ? {} : { provider }) }
+  return { id, kind, ...(provider === undefined ? {} : { provider }) }
 }
 
 /** Validate the completion record; anything unrecognized reads as "not finished". */

@@ -225,6 +225,10 @@ export function planModelAdoption(input: {
 - **凭据写入**：引导不自己写凭据；`/provider` 的回滚语义（先凭据后 profile，profile
   失败恢复旧 key，`providerWizard.ts:380-410`）原样保留。
 - **重复接入**：差分基线写进 draft，重挂后仍是同一基线；同一批模型不会被问第二次。
+- **动作 id（review 修正）**：`pending` 带一个单调 id。关掉引导不会取消 provider 流程——用户在
+  `/setup` 里重新发起一单后，上一单的迟到回调若直接把 `completed` 写进 draft，就会顶掉新一单的
+  `pending`，让引导结算"被放弃的那一单"、丢掉在跑的那一单的结果。完成态只在
+  `draft.pending.id === 自己的 id` 时写（见 §7.2）。
 - **结算时序（review 修正）**：`pending` 覆盖**整个动作期间**，`completed` 只在动作结束时写入；
   结算必须有 `completed`。原因是问答面板可以在两次提问之间关闭（模型探测、profile 写入都在
   提问之间），此时本屏被重挂而目录还没变——早结算会读到旧目录并把结果丢掉。跑动作的实例即使
@@ -285,7 +289,7 @@ export function planModelAdoption(input: {
 
 | 门禁 | 结果 |
 | --- | --- |
-| `scripts/verify-onboarding-wizard.tsx` | **84/84 通过**（新增 J1–J11：动作行、兜底文案、0/1/N 三分支、Space/Enter 分工、draft 重挂、面板接管结算、标记移交） |
+| `scripts/verify-onboarding-wizard.tsx` | **88/88 通过**（新增 J1–J12：动作行、兜底文案、0/1/N 三分支、Space/Enter 分工、draft 重挂、面板接管结算、标记移交） |
 | `scripts/verify-onboarding-provider-plan.ts`（新增） | **21/21 通过** |
 | `scripts/verify-i18n.ts` | 通过（2077 条目，无死键、占位符一致） |
 | `scripts/verify-guide.mjs` | 通过（20 份手册逐字节一致） |
@@ -309,6 +313,7 @@ export function planModelAdoption(input: {
 | 鼠标勾选不移交标记（review） | 键盘 Space 有移交，鼠标 `onToggle` 没有 | 两条路径共用 `toggleAdoptSelection` |
 | 英文手册漏了 `←/→` 例外（review） | 中文列了"第一步的接入子层"，英文只列了滑块与钻入的模型列表 | 同步 `docs/interaction.en.md` 并重建 `guide/` |
 
+| 两单交错顶掉 pending（review，Minor） | 关引导 → 重新 `/setup` 发起新动作 → 上一单迟到回调把新 pending 写成自己的完成态 | `OnboardingPendingAction` 增单调 `id`；完成态只在 id 相同时写；J12 覆盖"关闭→新单→旧单迟到→新单仍正常结算" |
 ## 8. 兼容与迁移
 
 - **`ONBOARDING_VERSION` 不 bump**：按 `src/onboardingPrefs.ts:34-39` 的规则，

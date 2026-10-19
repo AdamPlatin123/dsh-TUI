@@ -41,6 +41,7 @@ import {
 } from '../components/onboardingProviderPlan.js'
 import {
   clearOnboardingDraft,
+  nextOnboardingActionId,
   readOnboardingDraft,
   subscribeOnboardingDraft,
   writeOnboardingDraft,
@@ -500,11 +501,14 @@ export function Onboarding({
    * 顺序是关键——面板一挂起这一屏就卸载了，晚写的上下文没人接得住。
    */
   const runProviderAction = React.useCallback(async (
-    pending: OnboardingPendingAction,
+    intent: Omit<OnboardingPendingAction, 'id'>,
     start: () => Promise<ProviderWizardOutcome>,
     /** 发起这一单的动作 id：重挂后按它把焦点放回同一行（不是按当时的行号）。 */
     focusId: AccessActionId,
   ): Promise<void> => {
+    // 每单一个 id：引导关掉再开、又发起新动作时，上一单迟到的回调不能把
+    // 新一单的 `pending` 覆盖成它自己的完成态。
+    const pending: OnboardingPendingAction = { ...intent, id: nextOnboardingActionId() }
     const baseline = modelRefsOf(await channel.listModels().catch(() => [] as readonly LlmModelInfo[]))
     // 动作前的上下文先落盘：面板一挂起这一屏就卸载了，晚写的没人接得住。
     // `pending` 会一直留到动作结束——中途的重挂靠它知道"还有一单在跑"。
@@ -519,9 +523,9 @@ export function Onboarding({
     })
     const outcome = await start().catch(() => 'failed' as ProviderWizardOutcome)
     const status = outcome === 'cancelled' ? 'cancelled' : outcome === 'failed' ? 'failed' : 'completed'
-    // 引导已经关了（用户按了 Esc / 完成）就没有人该收这一单：clearOnboardingDraft
-    // 已经把 draft 清掉，别再把它写回来。
-    if (readOnboardingDraft()?.pending !== undefined) {
+    // 只有"桌上还是我这一单"才写完成态：引导已经被关掉（draft 清空），或者
+    // 用户又发起了一单（pending.id 变了）时，这一单的结果没有归属，丢掉。
+    if (readOnboardingDraft()?.pending?.id === pending.id) {
       writeOnboardingDraft({ completed: { ...pending, status }, pending: undefined })
     }
     // 在挂的实例（可能是重挂出来的那一个）在这里结算；这里的实例已经卸载时，

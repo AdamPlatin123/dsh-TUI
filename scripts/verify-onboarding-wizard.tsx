@@ -814,22 +814,28 @@ const oauthRow = (provider: string) => ({
     step: 2,
     focus: 1,
     baseline: [{ provider: 'a', id: 'b', name: 'c' }],
-    pending: { kind: 'sign-in', provider: 'a' },
+    pending: { id: 1, kind: 'sign-in', provider: 'a' },
     notice: 'n',
   })
   check('J6a 空 → undefined；写后可读回全部字段',
     empty && written.step === 2 && written.focus === 1
-    && written.baseline.length === 1 && written.pending?.provider === 'a' && written.notice === 'n')
+    && written.baseline.length === 1 && written.pending?.provider === 'a'
+    && typeof written.pending?.id === 'number' && written.notice === 'n')
   check('J6a2 focusId / completed 按形状解析',
     draft.parseOnboardingDraft({ baseline: [], focusId: 'signin' })?.focusId === 'signin'
     && draft.parseOnboardingDraft({ baseline: [], focusId: 7 })?.focusId === undefined
-    && draft.parseOnboardingDraft({ baseline: [], completed: { kind: 'sign-in', provider: 'x', status: 'completed' } })?.completed?.status === 'completed'
-    && draft.parseOnboardingDraft({ baseline: [], completed: { kind: 'sign-in', status: 'nope' } })?.completed === undefined)
+    && draft.parseOnboardingDraft({ baseline: [], completed: { id: 3, kind: 'sign-in', provider: 'x', status: 'completed' } })?.completed?.status === 'completed'
+    && draft.parseOnboardingDraft({ baseline: [], completed: { kind: 'sign-in', status: 'completed' } })?.completed === undefined
+    && draft.parseOnboardingDraft({ baseline: [], completed: { id: 3, kind: 'sign-in', status: 'nope' } })?.completed === undefined)
   check('J6b parse 归一化坏数字、拒绝坏基线/坏 pending',
     draft.parseOnboardingDraft({ step: 'x', focus: -1, baseline: [] })?.step === 0
     && draft.parseOnboardingDraft({ step: 1.7, baseline: [] })?.step === 1
     && draft.parseOnboardingDraft({ baseline: 'nope' }) === undefined
-    && draft.parseOnboardingDraft({ baseline: [], pending: { kind: 'nope' } })?.pending === undefined)
+    && draft.parseOnboardingDraft({ baseline: [], pending: { kind: 'nope' } })?.pending === undefined
+    // 没有 id 的 pending 无法与后来的一单区分 → 读作"没有动作"
+    && draft.parseOnboardingDraft({ baseline: [], pending: { kind: 'sign-in' } })?.pending === undefined
+    && draft.parseOnboardingDraft({ baseline: [], pending: { id: 0, kind: 'sign-in' } })?.pending === undefined
+    && draft.parseOnboardingDraft({ baseline: [], pending: { id: 2, kind: 'sign-in' } })?.pending?.id === 2)
   draft.clearOnboardingDraft()
   check('J6c clear 真的清空', draft.readOnboardingDraft() === undefined)
 }
@@ -870,8 +876,9 @@ const oauthRow = (provider: string) => ({
   await settled(() => s.screen().includes('选择要登录的账号'))
   s.send('\r')
   const draft = await import('../src/onboardingDraft.js')
-  check('J9a 动作发起时落 draft：基线 + 意图 + 焦点 id，且还没有完成态',
+  check('J9a 动作发起时落 draft：基线 + 意图 + 焦点 id + 动作 id，且还没有完成态',
     await settled(() => draft.readOnboardingDraft()?.pending?.provider === 'xai'
+      && draft.readOnboardingDraft()?.pending?.id !== undefined
       && draft.readOnboardingDraft()?.completed === undefined
       && draft.readOnboardingDraft()?.focusId === 'signin'),
     JSON.stringify(draft.readOnboardingDraft()))
@@ -931,6 +938,72 @@ const oauthRow = (provider: string) => ({
   check('J11b 焦点按 id 恢复到"登录订阅账号"那一行',
     await settled(() => s.screen().includes('❯ 登录订阅账号（OAuth）')), s.screen())
   s.close()
+  draft.clearOnboardingDraft()
+}
+
+{
+  // J12：旧动作的迟到回调不能顶掉新动作。时序：发起 A（慢）→ 关引导 →
+  // 重新打开并发起 B → A 先结束（此时 draft 里是 B 的 pending）→ A 必须被丢弃，
+  // B 仍然持有自己的 pending，B 结束时正常结算。
+  const draft = await import('../src/onboardingDraft.js')
+  clearOnboardingDraft()
+  const catalog: { list: readonly { provider: string; id: string; name: string }[] } = { list: [] }
+  let releaseA: (() => void) | undefined
+  let releaseB: (() => void) | undefined
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    listModels: async () => catalog.list,
+    oauthProviderStatuses: async () => [oauthRow('xai'), oauthRow('openai-codex')],
+    providerSetup: () => ({ oauth: {} }),
+  })
+  const a = await openWizard([], {
+    step: 0,
+    channel,
+    signIn: () => new Promise((resolve) => { releaseA = () => resolve('added') }),
+  })
+  await settled(() => a.screen().includes('登录订阅账号'))
+  a.send('\r')
+  await settled(() => a.screen().includes('选择要登录的账号'))
+  a.send('\r')
+  const draftA = await settled(() => draft.readOnboardingDraft()?.pending?.id !== undefined)
+    ? draft.readOnboardingDraft()
+    : undefined
+  a.close() // 关掉引导：draft 清空，但 A 的 promise 还在跑
+  clearOnboardingDraft()
+  const b = await openWizard([], {
+    step: 0,
+    channel,
+    signIn: () => new Promise((resolve) => { releaseB = () => resolve('added') }),
+  })
+  await settled(() => b.screen().includes('登录订阅账号'))
+  b.send('\r')
+  await settled(() => b.screen().includes('选择要登录的账号'))
+  b.send('\u001b[B') // 选第二个账号，避免与 A 的 provider 相同
+  await settled(() => b.screen().includes('❯ openai-codex'))
+  b.send('\r')
+  const draftB = await settled(() => draft.readOnboardingDraft()?.pending?.provider === 'openai-codex')
+    ? draft.readOnboardingDraft()
+    : undefined
+  check('J12a 两单的动作 id 不同（A/B 各自持有）',
+    draftA?.pending?.id !== undefined && draftB?.pending?.id !== undefined
+    && draftA?.pending?.id !== draftB?.pending?.id,
+    JSON.stringify({ a: draftA?.pending, b: draftB?.pending }))
+  // B 登录的是 openai-codex，所以新出现的模型也必须是它的——否则 diff 会被
+  // provider 过滤掉，测的就不是"两单交错"而是"登录了别的号"。
+  catalog.list = [{ provider: 'openai-codex', id: 'gpt-5.6', name: 'GPT-5.6' }]
+  releaseA?.() // A 迟到：不能把 B 的 pending 顶掉，也不能替 B 结算
+  await new Promise(resolve => setTimeout(resolve, 120))
+  check('J12b A 的迟到完成被丢弃：B 的 pending 原样还在，也没有完成态',
+    draft.readOnboardingDraft()?.pending?.id === draftB?.pending?.id
+    && draft.readOnboardingDraft()?.completed === undefined,
+    JSON.stringify(draft.readOnboardingDraft()))
+  check('J12c A 的模型没有被接入（没有替 B 结算）',
+    !channel.calls.some(call => call.startsWith('switchModel:')), JSON.stringify(channel.calls))
+  releaseB?.()
+  check('J12d B 正常结算（自己的结果仍然被接住）',
+    await settled(() => channel.calls.filter(call => call === 'switchModel:openai-codex/gpt-5.6').length === 1),
+    JSON.stringify(channel.calls))
+  b.close()
   draft.clearOnboardingDraft()
 }
 
