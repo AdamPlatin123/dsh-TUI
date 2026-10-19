@@ -144,8 +144,8 @@ results back to the chat screen and add no new behavior.
   and opens the same kernel picker (keyboard path =
   focus ring + `Enter`). Every row ends flush at the same right edge, the cwd plate is top-aligned to the
   first row, and narrow terminals truncate per the existing truncate-middle contract.
-- **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
-  horizontal keys belong to the child control), `Tab` switches between the language/theme and
+- **Wizard**: `←`/`→` change step (except step 3's effort slider, a drilled-in model list and step 1's
+  access sub-layer, where the horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = act on the
   focused action row — sign in to a subscription / add a provider (API key) / check again / skip this step;
   both sign-in and key entry ride the shared question panel, which takes over the whole terminal and then

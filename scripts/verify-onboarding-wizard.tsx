@@ -820,6 +820,11 @@ const oauthRow = (provider: string) => ({
   check('J6a 空 → undefined；写后可读回全部字段',
     empty && written.step === 2 && written.focus === 1
     && written.baseline.length === 1 && written.pending?.provider === 'a' && written.notice === 'n')
+  check('J6a2 focusId / completed 按形状解析',
+    draft.parseOnboardingDraft({ baseline: [], focusId: 'signin' })?.focusId === 'signin'
+    && draft.parseOnboardingDraft({ baseline: [], focusId: 7 })?.focusId === undefined
+    && draft.parseOnboardingDraft({ baseline: [], completed: { kind: 'sign-in', provider: 'x', status: 'completed' } })?.completed?.status === 'completed'
+    && draft.parseOnboardingDraft({ baseline: [], completed: { kind: 'sign-in', status: 'nope' } })?.completed === undefined)
   check('J6b parse 归一化坏数字、拒绝坏基线/坏 pending',
     draft.parseOnboardingDraft({ step: 'x', focus: -1, baseline: [] })?.step === 0
     && draft.parseOnboardingDraft({ step: 1.7, baseline: [] })?.step === 1
@@ -842,12 +847,12 @@ const oauthRow = (provider: string) => ({
 }
 
 {
-  // J9：问答面板接管整屏 = 本屏被卸载、回答后重挂。结算必须由**重挂的那个实例**
-  // 做：卸载的实例若把 draft 里的 pending 吃掉，登录后的模型永远不会被接入。
+  // J9：面板可以在**两次提问之间**关闭（模型探测 / profile 写入都发生在提问
+  // 之间），那时本屏被重挂、目录还没变。必须等到动作真的结束（draft.completed）
+  // 才结算，否则会读到旧目录并把结果丢掉；而且迟到的完成要能送到在挂的实例。
   const ev: Ev[] = []
   const catalog: { list: readonly { provider: string; id: string; name: string }[] } = { list: [] }
   let release: (() => void) | undefined
-  // 同一个假 channel 给两次挂载用：第二次必须看到"登录后"的目录。
   const remountChannel = makeChannel({
     describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
     listModels: async () => catalog.list,
@@ -857,7 +862,7 @@ const oauthRow = (provider: string) => ({
   const s = await openWizard(ev, {
     step: 0,
     channel: remountChannel,
-    // 永不自动解析的登录：模拟"面板还占着终端"。
+    // 永不自动解析的登录：模拟"动作还在跑"。
     signIn: () => new Promise((resolve) => { release = () => resolve('added') }),
   })
   await settled(() => s.screen().includes('登录订阅账号'))
@@ -865,21 +870,67 @@ const oauthRow = (provider: string) => ({
   await settled(() => s.screen().includes('选择要登录的账号'))
   s.send('\r')
   const draft = await import('../src/onboardingDraft.js')
-  check('J9a 动作发起时先落 draft（基线 + 意图），面板才有东西可回来',
-    await settled(() => draft.readOnboardingDraft()?.pending?.provider === 'xai'),
+  check('J9a 动作发起时落 draft：基线 + 意图 + 焦点 id，且还没有完成态',
+    await settled(() => draft.readOnboardingDraft()?.pending?.provider === 'xai'
+      && draft.readOnboardingDraft()?.completed === undefined
+      && draft.readOnboardingDraft()?.focusId === 'signin'),
     JSON.stringify(draft.readOnboardingDraft()))
-  s.close() // ← Chat 的打断通道：面板接管，本屏卸载
+  s.close() // ← 面板关闭、本屏卸载（动作仍在跑）
   catalog.list = [{ provider: 'xai', id: 'grok-4', name: 'Grok 4' }]
   const second = await openWizard(ev, { keepDraft: true, channel: remountChannel })
-  check('J9b 重挂的实例按同一份 draft 结算：自动设为默认',
+  await settled(() => second.screen().includes('登录订阅账号'))
+  await new Promise(resolve => setTimeout(resolve, 120))
+  check('J9b 动作未完成时重挂不结算（不拿旧目录做决定）',
+    !second.channel.calls.some(call => call.startsWith('switchModel:')),
+    JSON.stringify(second.channel.calls))
+  release?.() // ← 动作此刻才结束
+  check('J9c 迟到的完成由在挂实例结算：自动设为默认',
     await settled(() => second.channel.calls.includes('switchModel:xai/grok-4')),
     JSON.stringify(second.channel.calls))
-  release?.()
-  await new Promise(resolve => setTimeout(resolve, 80))
-  check('J9c 旧实例的 promise 迟到解析也不会二次结算',
+  check('J9d 结算后 draft 清干净（pending/completed 都不留）',
+    await settled(() => draft.readOnboardingDraft()?.pending === undefined
+      && draft.readOnboardingDraft()?.completed === undefined),
+    JSON.stringify(draft.readOnboardingDraft()))
+  await new Promise(resolve => setTimeout(resolve, 60))
+  check('J9e 只结算一次',
     second.channel.calls.filter(call => call === 'switchModel:xai/grok-4').length === 1,
     JSON.stringify(second.channel.calls))
   second.close()
+  draft.clearOnboardingDraft()
+}
+{
+  // J11：另一种时序——动作在重挂之前就已经结束（完成态已写进 draft），
+  // 挂载时直接结算，不用等任何回调。
+  const ev: Ev[] = []
+  const draft = await import('../src/onboardingDraft.js')
+  clearOnboardingDraft()
+  draft.writeOnboardingDraft({
+    step: 0,
+    focus: 0,
+    focusId: 'signin',
+    baseline: [],
+    pending: undefined,
+    completed: { kind: 'sign-in', provider: 'xai', status: 'completed' },
+  })
+  const catalog = {
+    list: [{ provider: 'xai', id: 'grok-4', name: 'Grok 4' }],
+  }
+  const s = await openWizard(ev, {
+    keepDraft: true,
+    // 有登录动作行，才能验证"焦点按 id 回到发起它的那一行"。
+    signIn: async () => 'cancelled',
+    channel: makeChannel({
+      describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+      listModels: async () => catalog.list,
+      oauthProviderStatuses: async () => [oauthRow('xai')],
+      providerSetup: () => ({ oauth: {} }),
+    }),
+  })
+  check('J11 挂载时动作已完成 → 立即结算（自动设为默认）',
+    await settled(() => s.channel.calls.includes('switchModel:xai/grok-4')), JSON.stringify(s.channel.calls))
+  check('J11b 焦点按 id 恢复到"登录订阅账号"那一行',
+    await settled(() => s.screen().includes('❯ 登录订阅账号（OAuth）')), s.screen())
+  s.close()
   draft.clearOnboardingDraft()
 }
 

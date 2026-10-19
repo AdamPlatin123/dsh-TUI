@@ -39,7 +39,13 @@ import {
   type AdoptionPlan,
   type ProviderModelRef,
 } from '../components/onboardingProviderPlan.js'
-import { clearOnboardingDraft, readOnboardingDraft, writeOnboardingDraft, type OnboardingPendingAction } from '../onboardingDraft.js'
+import {
+  clearOnboardingDraft,
+  readOnboardingDraft,
+  subscribeOnboardingDraft,
+  writeOnboardingDraft,
+  type OnboardingPendingAction,
+} from '../onboardingDraft.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { CredentialStatus, EffortOption, LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
@@ -234,12 +240,14 @@ export function Onboarding({
     'next',
   ], [canConfigure, canSignIn])
   const [accessFocusId, setAccessFocusId] = React.useState<AccessActionId | undefined>(() => {
-    // 首次挂载**不钉任何行**：清单是异步长出来的（先有"重新检查/跳过"，几帧后
-    // 才长出"登录/加 key"），钉住当时的第 0 行会让焦点在清单变长后落到别的动作上。
-    // 只有"面板接管后重挂"才按 draft 里的下标恢复。
-    const seed = restored?.focus ?? 0
-    if (seed <= 0) return undefined
-    return accessActionIds[Math.min(seed, Math.max(0, accessActionIds.length - 1))]
+    // 焦点按**动作 id**恢复，不按下标：清单是异步长出来的（先有"重新检查/跳过"，
+    // 几帧后才长出"登录/加 key"），下标在清单变长后会指向另一个动作。
+    // id 暂时不在清单里也没关系——`accessIndex` 会先落在第 0 行，等清单长出来
+    // 再回到同一个动作上。
+    const seed = restored?.focusId
+    return seed === 'signin' || seed === 'add' || seed === 'recheck' || seed === 'next'
+      ? seed
+      : undefined
   })
   const accessIndex = accessFocusId === undefined
     ? 0
@@ -415,17 +423,34 @@ export function Onboarding({
   }, [accessActionIds, oauth])
 
   /**
-   * 动作回来（或面板重挂）之后的唯一收口：读回动作前的目录基线 → 差分 →
-   * 0/1/N 决策。`pending` 先清空，保证重挂路径与 Promise 回调只结算一次。
+   * 动作结束之后的唯一收口：读回动作前的目录基线 → 差分 → 0/1/N 决策。
+   * 前提是 draft 里已经有 `completed`（动作真的跑完了），并且本实例还在挂；
+   * `pending`/`completed` 同时清空，保证重挂、订阅回调、Promise 回调三条路
+   * 径加起来只结算一次。
    */
   const settlePendingAction = React.useCallback(async (): Promise<void> => {
     const draft = readOnboardingDraft()
-    const pending = draft?.pending
-    if (draft === undefined || pending === undefined) return
-    // 已经卸载的实例不许把这一单"吃掉"：面板挂起时本屏被卸载，重挂的那个实例
-    // 才是该结算的人（它读同一份 draft）。这里先退出去，把 pending 原样留给它。
+    const completion = draft?.completed
+    // **动作跑完之前不结算**：问答面板可以在两次提问之间关闭（模型探测、profile
+    // 写入都在提问之间），那时本屏会被重挂，而目录还没变——早结算就会读到旧
+    // 目录、把结果丢掉。`completed` 由跑动作的那个实例在结束时写入（它同时把
+    // `pending` 清掉，所以这里只认 `completed`）。
+    if (draft === undefined || completion === undefined) return
+    // 已经卸载的实例不许把这一单"吃掉"：面板挂起时本屏被卸载，重挂（或在挂）
+    // 的那个实例才是该结算的人。这里先退出去，把 draft 原样留给它。
     if (!aliveRef.current) return
-    writeOnboardingDraft({ pending: undefined })
+    writeOnboardingDraft({ pending: undefined, completed: undefined })
+    // 取消/失败没有目录变化，只留一句本地回声：具体原因由 Chat 的流程自己报
+    // （`/provider` 的 notify 也在那里），而整屏盖着时外面的通知条看不见。
+    if (completion.status === 'cancelled' || completion.status === 'failed') {
+      const text = completion.status === 'cancelled'
+        ? t('onboarding-access-cancelled')
+        : t('onboarding-access-action-failed')
+      setAccessPhase('actions')
+      setNotice(text)
+      writeOnboardingDraft({ baseline: [], notice: text })
+      return
+    }
     const models = await channel.listModels().catch(() => [] as readonly LlmModelInfo[])
     if (!aliveRef.current) return
     setCatalogNonce(nonce => nonce + 1)
@@ -434,12 +459,12 @@ export function Onboarding({
     const plan = planModelAdoption({
       baseline: draft.baseline,
       current: modelRefsOf(models),
-      ...(pending.kind === 'sign-in' && pending.provider !== undefined ? { provider: pending.provider } : {}),
+      ...(completion.kind === 'sign-in' && completion.provider !== undefined ? { provider: completion.provider } : {}),
       ...(channel.provider !== undefined && channel.model !== undefined
         ? { currentRoute: { provider: channel.provider, id: channel.model } }
         : {}),
     })
-    const label = providerLabel(plan.provider ?? (pending.kind === 'sign-in' ? pending.provider : undefined))
+    const label = providerLabel(plan.provider ?? (completion.kind === 'sign-in' ? completion.provider : undefined))
     if (plan.decision === 'none') {
       const text = label === ''
         ? t('onboarding-access-added-none')
@@ -477,39 +502,59 @@ export function Onboarding({
   const runProviderAction = React.useCallback(async (
     pending: OnboardingPendingAction,
     start: () => Promise<ProviderWizardOutcome>,
+    /** 发起这一单的动作 id：重挂后按它把焦点放回同一行（不是按当时的行号）。 */
+    focusId: AccessActionId,
   ): Promise<void> => {
     const baseline = modelRefsOf(await channel.listModels().catch(() => [] as readonly LlmModelInfo[]))
-    writeOnboardingDraft({ step: stepIndex, focus: accessIndex, baseline, pending, notice: undefined })
+    // 动作前的上下文先落盘：面板一挂起这一屏就卸载了，晚写的没人接得住。
+    // `pending` 会一直留到动作结束——中途的重挂靠它知道"还有一单在跑"。
+    writeOnboardingDraft({
+      step: stepIndex,
+      focus: accessIndex,
+      focusId,
+      baseline,
+      pending,
+      completed: undefined,
+      notice: undefined,
+    })
     const outcome = await start().catch(() => 'failed' as ProviderWizardOutcome)
-    if (outcome === 'cancelled' || outcome === 'failed') {
-      // 取消/失败都没有产生目录变化：清掉 pending，别让重挂再结算一次。
-      // 具体原因由 Chat 的流程自己报（`/provider` 的 notify 也在那里）；这里只
-      // 保证回到动作层并留一句本地回声——整屏盖着时外面的通知条是看不见的。
-      const text = outcome === 'cancelled'
-        ? t('onboarding-access-cancelled')
-        : t('onboarding-access-action-failed')
-      if (readOnboardingDraft()?.pending !== undefined) {
-        writeOnboardingDraft({ pending: undefined, baseline: [], notice: text })
-      }
-      if (aliveRef.current) {
-        setAccessPhase('actions')
-        setNotice(text)
-      }
-      return
+    const status = outcome === 'cancelled' ? 'cancelled' : outcome === 'failed' ? 'failed' : 'completed'
+    // 引导已经关了（用户按了 Esc / 完成）就没有人该收这一单：clearOnboardingDraft
+    // 已经把 draft 清掉，别再把它写回来。
+    if (readOnboardingDraft()?.pending !== undefined) {
+      writeOnboardingDraft({ completed: { ...pending, status }, pending: undefined })
     }
+    // 在挂的实例（可能是重挂出来的那一个）在这里结算；这里的实例已经卸载时，
+    // settle 会早退，由订阅到 completed 的在挂实例接手。
     await settlePendingAction()
   }, [accessIndex, channel, settlePendingAction, stepIndex])
 
   const startSignIn = React.useCallback((provider: string): void => {
     if (onProviderSignIn === undefined) return
     setAccessPhase('actions')
-    void runProviderAction({ kind: 'sign-in', provider }, () => onProviderSignIn(provider))
+    void runProviderAction({ kind: 'sign-in', provider }, () => onProviderSignIn(provider), 'signin')
   }, [onProviderSignIn, runProviderAction])
 
   const startAddProvider = React.useCallback((): void => {
     if (onProviderAddProvider === undefined) return
-    void runProviderAction({ kind: 'add-provider' }, onProviderAddProvider)
+    void runProviderAction({ kind: 'add-provider' }, onProviderAddProvider, 'add')
   }, [onProviderAddProvider, runProviderAction])
+
+  /**
+   * 模型区的一次勾选/去勾（键盘 Space 与鼠标点击共用）。被勾掉的那一行如果
+   * 正是"标记的默认"，标记让给还选着的第一个——否则默认区会出现"一个 ✓ 都
+   * 没有、Enter 却落在 picked[0]"的错位。
+   */
+  const toggleAdoptSelection = React.useCallback((key: string): void => {
+    setAdopt((previous) => {
+      if (previous === undefined) return previous
+      const selected = toggleModelRef(previous.selected, key)
+      const defaultKey = previous.defaultKey !== undefined && !selected.has(previous.defaultKey)
+        ? selected.values().next().value
+        : previous.defaultKey
+      return { ...previous, selected, defaultKey }
+    })
+  }, [])
 
   /** 接入层的默认模型落点：`switchModel` 与第三步同一条路（写 model.json）。 */
   const applyAdoption = React.useCallback((
@@ -545,19 +590,27 @@ export function Onboarding({
     })
   }, [channel])
 
-  // 面板重挂：draft 里还有在飞的动作，说明面板刚把这一屏还回来。
+  /**
+   * 结算入口。三种时序都要覆盖：
+   *   1. 挂载时动作已经结束（面板在结束前关掉、或上一次挂载已卸载）→ 立刻结算；
+   *   2. 动作还在跑（只有 pending）→ 什么都不做，等 completed；
+   *   3. 动作在本实例在挂期间结束 → 订阅回调里结算。
+   */
   React.useEffect(() => {
-    if (restored?.pending === undefined) return
-    setAccessPhase('actions')
-    void settlePendingAction()
-    // 只在首次挂载结算一次：settle 自己会把 pending 清掉。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    const settleIfReady = (): void => {
+      const draft = readOnboardingDraft()
+      if (draft?.completed === undefined) return
+      setAccessPhase('actions')
+      void settlePendingAction()
+    }
+    settleIfReady()
+    return subscribeOnboardingDraft(settleIfReady)
+  }, [settlePendingAction])
 
   // 进度（步骤 / 焦点）随变随存，卸载-重挂后从 draft 读回。
   React.useEffect(() => {
-    writeOnboardingDraft({ step: stepIndex, focus: focusIndex })
-  }, [focusIndex, stepIndex])
+    writeOnboardingDraft({ step: stepIndex, focus: focusIndex, focusId: accessFocusId })
+  }, [accessFocusId, focusIndex, stepIndex])
 
   /**
    * 第三步模型区的行数（分组层 = provider 数；列表层 = 该 provider 的模型数）。
@@ -657,18 +710,7 @@ export function Onboarding({
         // 不落盘）。落盘永远在 Enter 上——两键语义分开，不互相代劳。
         if (adopt.zone === 'models') {
           const row = adopt.plan.added[adopt.index]
-          if (row !== undefined) {
-            setAdopt((previous) => {
-              if (previous === undefined) return previous
-              const selected = toggleModelRef(previous.selected, modelRefKey(row))
-              // 被勾掉的那一行如果正是"标记的默认"，把标记让给还选着的第一个：
-              // 否则默认区会出现"一个 ✓ 都没有、Enter 却落 picked[0]"的错位。
-              const defaultKey = previous.defaultKey !== undefined && !selected.has(previous.defaultKey)
-                ? selected.values().next().value
-                : previous.defaultKey
-              return { ...previous, selected, defaultKey }
-            })
-          }
+          if (row !== undefined) toggleAdoptSelection(modelRefKey(row))
           event.stopImmediatePropagation()
           return
         }
@@ -974,10 +1016,7 @@ export function Onboarding({
             adopt={adopt}
             providerLabel={providerLabel}
             onHover={(index) => setAdopt(previous => previous === undefined ? previous : ({ ...previous, index }))}
-            onToggle={(key) => setAdopt(previous => previous === undefined ? previous : ({
-              ...previous,
-              selected: toggleModelRef(previous.selected, key),
-            }))}
+            onToggle={toggleAdoptSelection}
             onZone={(zone) => setAdopt(previous => previous === undefined ? previous : ({ ...previous, zone, index: 0 }))}
             onConfirm={() => {
               // 与模型区 Enter 同义：确认这批勾选、进默认区（没勾就直接收层）。

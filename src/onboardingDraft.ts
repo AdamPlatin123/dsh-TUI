@@ -35,6 +35,18 @@ export interface OnboardingPendingAction {
   readonly provider?: string | undefined
 }
 
+/**
+ * How an in-flight access action ended. The neutral three-way vocabulary the
+ * guide consumes; the adapter's richer outcome union is mapped onto it at the
+ * write site.
+ */
+export type OnboardingCompletionStatus = 'completed' | 'cancelled' | 'failed'
+
+/** The finished action's result, written by whoever ran it. */
+export interface OnboardingCompletion extends OnboardingPendingAction {
+  readonly status: OnboardingCompletionStatus
+}
+
 /** Mechanical guide progress (see the module doc for why it exists). */
 export interface OnboardingDraft {
   /** Zero-based step index, already clamped by the caller. */
@@ -42,14 +54,31 @@ export interface OnboardingDraft {
   /** Focus row inside the current step/layer. */
   readonly focus: number
   /**
+   * Stable focus identity for step 1's action list (`'signin' | 'add' | …`).
+   * The list grows asynchronously, so an index alone would restore the wrong
+   * action: the same index means a different row once sign-in/add are present.
+   */
+  readonly focusId: string | undefined
+  /**
    * Catalog snapshot taken before the in-flight action; the diff baseline.
    * Empty when no action has run, which makes the first diff "everything is
    * new" — only reachable if a caller reads the plan without an action, and
    * the callers never do.
    */
   readonly baseline: readonly ProviderModelRef[]
-  /** The action in flight, while its panel owns the terminal. */
+  /**
+   * The action in flight. Stays set for the WHOLE run — a question panel can
+   * close between two questions (model discovery, profile write) and remount
+   * the guide while the flow is still working, and settling then would read a
+   * catalog that has not changed yet and drop the result.
+   */
   readonly pending: OnboardingPendingAction | undefined
+  /**
+   * Set by the runner when the action ends. Settling requires this: the
+   * remount that happens mid-run must wait for it, and a late completion must
+   * still be able to reach the instance that is on screen.
+   */
+  readonly completed: OnboardingCompletion | undefined
   /** Notice line to restore after a remount. */
   readonly notice: string | undefined
 }
@@ -58,12 +87,40 @@ export interface OnboardingDraft {
 export const EMPTY_ONBOARDING_DRAFT: OnboardingDraft = {
   step: 0,
   focus: 0,
+  focusId: undefined,
   baseline: [],
   pending: undefined,
+  completed: undefined,
   notice: undefined,
 }
 
 let current: OnboardingDraft | undefined
+const listeners = new Set<() => void>()
+
+function emit(): void {
+  for (const listener of [...listeners]) {
+    try {
+      listener()
+    } catch {
+      // A listener must never break the write that notified it.
+    }
+  }
+}
+
+/**
+ * Observe draft writes. The guide subscribes so a completion that lands while
+ * it is mounted (or after a remount) settles there, instead of being lost to
+ * the instance that started the action.
+ *
+ * @param listener - Called after every write and clear.
+ * @returns Unsubscribe.
+ */
+export function subscribeOnboardingDraft(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -80,6 +137,16 @@ function parsePending(value: unknown): OnboardingPendingAction | undefined {
   if (kind !== 'sign-in' && kind !== 'add-provider') return undefined
   const provider = typeof value.provider === 'string' && value.provider !== '' ? value.provider : undefined
   return { kind, ...(provider === undefined ? {} : { provider }) }
+}
+
+/** Validate the completion record; anything unrecognized reads as "not finished". */
+function parseCompleted(value: unknown): OnboardingCompletion | undefined {
+  if (!isRecord(value)) return undefined
+  const pending = parsePending(value)
+  const status = value.status
+  if (pending === undefined) return undefined
+  if (status !== 'completed' && status !== 'cancelled' && status !== 'failed') return undefined
+  return { ...pending, status }
 }
 
 /** Validate the baseline rows; a malformed row drops the whole baseline. */
@@ -109,8 +176,10 @@ export function parseOnboardingDraft(value: unknown): OnboardingDraft | undefine
   return {
     step: count(value.step, 0),
     focus: count(value.focus, 0),
+    focusId: typeof value.focusId === 'string' && value.focusId !== '' ? value.focusId : undefined,
     baseline,
     pending: parsePending(value.pending),
+    completed: parseCompleted(value.completed),
     notice: typeof value.notice === 'string' && value.notice !== '' ? value.notice : undefined,
   }
 }
@@ -133,10 +202,12 @@ export function readOnboardingDraft(): OnboardingDraft | undefined {
  */
 export function writeOnboardingDraft(patch: Partial<OnboardingDraft>): OnboardingDraft {
   current = { ...(current ?? EMPTY_ONBOARDING_DRAFT), ...patch }
+  emit()
   return current
 }
 
 /** Drop the draft; called on both guide exits (finish and skip). */
 export function clearOnboardingDraft(): void {
   current = undefined
+  emit()
 }

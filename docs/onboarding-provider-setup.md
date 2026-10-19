@@ -118,18 +118,24 @@ Onboarding 只拿两个回调 prop。
                    ▼
             ┌─────────────┐   动作行 ❯ 登录订阅账号（列 provider，已登录/未登录同列）
             │   ready     │   动作行   添加模型提供方（API key）→ /provider add 流程
-            │ (动作列表)  │   动作行   重新检查
-            └──┬───┬───┬──┘   动作行   跳过这一步（= 下一步）
-               │   │   │
-   登录/加 key │   │   │ 重新检查
-               ▼   │   └──────────────▶ checking
-        ┌──────────┴──┐
-        │  adopting   │  目录差分：0 → none；1 → auto；N → 内联多选 + 默认单选
+            │ (动作列表)  │   动作行   重新检查 / 跳过这一步（= 下一步）
+            └──┬───┬───┬──┘
+               │   │   └────── 重新检查 ──────▶ checking
+   登录/加 key │   │
+               ▼   │
+        ┌──────────┴──┐   动作在跑：`pending` 一直留着；中途重挂只恢复进度，**不结算**
+        │  in-flight  │
+        └──────┬──────┘
+               ▼   动作结束：写 `draft.completed`（取消 / 失败也写，状态是 outcome）
+        ┌─────────────┐
+        │  completed  │
+        └──────┬──────┘
+               ▼   结算：在挂的实例做；订阅把"迟到的完成"送到它
+        ┌─────────────┐
+        │  adopting   │  目录差分：0 → none（只报结果）；1 → auto；N → 内联多选 + 默认单选
         └──────┬──────┘
                ▼
-        ┌─────────────┐
-        │  ready      │  提示"已接入 N 个模型，默认 X"
-        └─────────────┘
+            ready（提示"已接入 N 个模型，默认 X"）
 ```
 
 Esc 语义不变：任何时候 Esc 跳过整个引导（不记账）；接入子流程内部 Esc 由各自面板/
@@ -219,6 +225,12 @@ export function planModelAdoption(input: {
 - **凭据写入**：引导不自己写凭据；`/provider` 的回滚语义（先凭据后 profile，profile
   失败恢复旧 key，`providerWizard.ts:380-410`）原样保留。
 - **重复接入**：差分基线写进 draft，重挂后仍是同一基线；同一批模型不会被问第二次。
+- **结算时序（review 修正）**：`pending` 覆盖**整个动作期间**，`completed` 只在动作结束时写入；
+  结算必须有 `completed`。原因是问答面板可以在两次提问之间关闭（模型探测、profile 写入都在
+  提问之间），此时本屏被重挂而目录还没变——早结算会读到旧目录并把结果丢掉。跑动作的实例即使
+  已被卸载也会把 `completed` 写进 draft（若引导已关闭则跳过），在挂的实例通过
+  `subscribeOnboardingDraft` 收到通知后结算；三条路径（挂载、订阅、Promise 回调）加起来只结算
+  一次（`completed` 在结算开始时同步清空）。
 - **面板接管**：面板挂起时向导卸载。draft 的写入点必须发生在**发起动作之前**
   （基线 + 意图），否则动作回来时丢失上下文。
 - **写盘失败**：`switchModel` 返回 false 时给 `onboarding-model-switch-failed` 同款提示，
@@ -233,6 +245,8 @@ export function planModelAdoption(input: {
   `Tab` 换区，`Esc` 退一层（不关引导）。标记与焦点分开画（✓ = 已选中，❯ = 焦点），
   所以"Enter 落的是 ✓ 那一行"是可读的；这与既有的工作区模态层同构
   （`Onboarding.tsx:262-296`）。
+- 鼠标点击与 `Space` 走**同一个**勾选函数：被点掉的若是"标记的默认"，标记同样让给还选着的
+  第一个（早期版本只有键盘路径做了移交，导致默认区可能一个 ✓ 都没有）。
 - 全局 Esc 仍然跳过引导；`Ctrl+C` 与 Esc 同义（`Onboarding.tsx:300-305`）。
 - 底部提示行按当前子状态切换（动作列表 / 勾选 / 选默认），不写死一句话。
 
@@ -271,7 +285,7 @@ export function planModelAdoption(input: {
 
 | 门禁 | 结果 |
 | --- | --- |
-| `scripts/verify-onboarding-wizard.tsx` | **79/79 通过**（新增 J1–J10：动作行、兜底文案、0/1/N 三分支、Space/Enter 分工、draft 重挂、面板接管结算、标记移交） |
+| `scripts/verify-onboarding-wizard.tsx` | **84/84 通过**（新增 J1–J11：动作行、兜底文案、0/1/N 三分支、Space/Enter 分工、draft 重挂、面板接管结算、标记移交） |
 | `scripts/verify-onboarding-provider-plan.ts`（新增） | **21/21 通过** |
 | `scripts/verify-i18n.ts` | 通过（2077 条目，无死键、占位符一致） |
 | `scripts/verify-guide.mjs` | 通过（20 份手册逐字节一致） |
@@ -289,6 +303,11 @@ export function planModelAdoption(input: {
 | 结算后状态不刷新 | 刚登录的账号在状态区仍显示"未登录" | 结算与落默认之后各 `setCheckNonce(+1)`，重读凭证/登录状态/连通性 |
 | 迟到解析写脏 draft | 用户已退出引导，`switchModel` 才解析 → 给下一次 `/setup` 留一条过期提示 | 落地判断先看 `aliveRef`，卸载后既不写状态也不写 draft |
 | Chat 的 hook 在 early-return 之后 | 面板挂起时 Chat 提前 return，三个新 `useCallback` 不执行 → 面板关闭时 hook 数量变化（React 直接报错） | 三个回调上移到 `switchModelRecorded` 之后、所有 early-return 之前 |
+
+| 结算早于动作完成（review，Major） | 面板在两次提问之间关闭 → 本屏重挂、目录还没变 → 早结算读到旧目录；动作随后结束却无人接手 → **登录成功但模型永远不被接入** | `pending` 覆盖整个动作期间，`completed` 只在结束时写；结算必须有 `completed`；`subscribeOnboardingDraft` 把迟到的完成送到在挂实例。J9 重写成这个时序（未完成 → 不结算；完成 → 只结算一次），J11 覆盖"挂载时已完成" |
+| 焦点按下标恢复（review） | `runProviderAction` 写的是行号；重挂首帧 `oauth` 还没读回，清单更短 → 行号指向另一个动作 | draft 增 `focusId`，按动作 id 恢复；id 暂时不在清单里就落在第 0 行，清单长出来再回到同一动作 |
+| 鼠标勾选不移交标记（review） | 键盘 Space 有移交，鼠标 `onToggle` 没有 | 两条路径共用 `toggleAdoptSelection` |
+| 英文手册漏了 `←/→` 例外（review） | 中文列了"第一步的接入子层"，英文只列了滑块与钻入的模型列表 | 同步 `docs/interaction.en.md` 并重建 `guide/` |
 
 ## 8. 兼容与迁移
 

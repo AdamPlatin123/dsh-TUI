@@ -123,23 +123,29 @@ mount, written on change, and cleared on finish/skip.
 
 ```
             ┌─────────────┐
-  mount ──▶ │  checking   │  describeCredential + oauthProviderStatuses + listModels/listProviders
+  mount  ──▶│  checking   │  describeCredential + oauthProviderStatuses + listModels/listProviders
             └──────┬──────┘
                    ▼
-            ┌─────────────┐   action ❯ Sign in to a subscription (lists providers, signed-in or not)
-            │   ready     │   action   Add a provider (API key) → /provider add flow
-            │ (action row)│   action   Check again
-            └──┬───┬───┬──┘   action   Skip this step (= next step)
-               │   │   │
-   sign-in/key │   │   │ check again
-               ▼   │   └──────────────▶ checking
-        ┌──────────┴──┐
-        │  adopting   │  catalog diff: 0 → none; 1 → auto; N → inline multi-select + default pick
+            ┌─────────────┐   action ❯ Sign in to a subscription (providers, signed-in or not)
+            │   ready     │   action   Add a model provider (API key) → the /provider add flow
+            │ (action row)│   action   Check again / Skip this step (= next step)
+            └──┬───┬───┬──┘
+               │   │   └────── check again ──────▶ checking
+   sign-in/key │   │
+               ▼   │
+        ┌──────────┴──┐   in flight: `pending` stays set; a mid-run remount restores progress and does **not** settle
+        │  in-flight  │
+        └──────┬──────┘
+               ▼   the action ends: write `draft.completed` (cancelled/failed carry their status too)
+        ┌─────────────┐
+        │  completed  │
+        └──────┬──────┘
+               ▼   settle: by the mounted instance; the subscription delivers a late completion to it
+        ┌─────────────┐
+        │  adopting   │  catalog diff: 0 → none (report only); 1 → auto; N → inline multi-select + default pick
         └──────┬──────┘
                ▼
-        ┌─────────────┐
-        │  ready      │  notice "adopted N models, default X"
-        └─────────────┘
+            ready ("adopted N models, default X")
 ```
 
 Esc semantics are unchanged: at any point Esc skips the whole guide (without recording); inside
@@ -239,6 +245,13 @@ So the "add?" question becomes:
   `providerWizard.ts:380-410`) are preserved untouched.
 - **Repeated adoption**: the baseline lives in the draft, so a remount keeps the same baseline
   and the same batch is never asked about twice.
+- **Settle ordering (review fix)**: `pending` covers the WHOLE run and `completed` is written only
+  when the action ends; settling requires `completed`. The question panel can close *between* two
+  questions (model discovery and the profile write happen there), so the guide remounts while the
+  catalog has not changed — settling then would read the old catalog and drop the result. The
+  runner writes `completed` even when it has been unmounted (skipped if the guide was closed), and
+  the mounted instance is notified through `subscribeOnboardingDraft`; mount, subscription and the
+  promise callback together settle exactly once (`completed` is cleared synchronously first).
 - **Panel takeover**: the wizard unmounts while a panel is up, so the draft write must happen
   **before** starting the action (baseline + intent), or the context is lost.
 - **Write failure**: a false `switchModel` reports the same
@@ -255,6 +268,9 @@ So the "add?" question becomes:
   model). `↑`/`↓` only move the focus and never move the mark, `Tab` switches zone, `Esc` pops one
   layer. Mark and focus are drawn separately (✓ = selected, ❯ = focused), so "Enter applies the ✓
   row" is readable — isomorphic to the existing workspace modal (`Onboarding.tsx:262-296`).
+- A mouse click and `Space` share one toggle function: un-ticking the marked default hands the mark
+  to the first still-selected model (an earlier revision only did this on the keyboard path, so the
+  default zone could end up with no tick at all).
 - Global Esc still skips the guide; `Ctrl+C` is synonymous (`Onboarding.tsx:300-305`).
 - The bottom hint line follows the current sub-state instead of one hard-coded sentence.
 
@@ -295,7 +311,7 @@ Sync: the 44 upstream commits (a40c305a → 5e0146bc) **touched none of** `Onboa
 
 | Gate | Result |
 | --- | --- |
-| `scripts/verify-onboarding-wizard.tsx` | **79/79 passed** (new J1–J10: action rows, fallback copy, the 0/1/N branches, Space/Enter split, draft across a remount, panel-takeover settle, mark hand-over) |
+| `scripts/verify-onboarding-wizard.tsx` | **84/84 passed** (new J1–J11: action rows, fallback copy, the 0/1/N branches, Space/Enter split, draft across a remount, panel-takeover settle, mark hand-over) |
 | `scripts/verify-onboarding-provider-plan.ts` (new) | **21/21 passed** |
 | `scripts/verify-i18n.ts` | passed (2077 entries, no dead keys, placeholders consistent) |
 | `scripts/verify-guide.mjs` | passed (20 guide files byte-identical) |
@@ -313,6 +329,11 @@ Sync: the 44 upstream commits (a40c305a → 5e0146bc) **touched none of** `Onboa
 | Status was not refreshed after settling | A provider just signed in still read "not signed in" | Both settle and the default write bump `checkNonce`, re-reading credentials / sign-in state / connectivity |
 | Late resolution wrote a stale draft | The user left the guide, then `switchModel` resolved and left a stale notice for the next `/setup` | The landing check consults `aliveRef` first; after unmount nothing is written |
 | Chat's hooks sat after an early return | When a panel was pending Chat returned early, skipping the three new `useCallback`s → the hook count changed when the panel closed (React errors) | The three callbacks moved up next to `switchModelRecorded`, above every early return |
+
+| Settled before the action finished (review, major) | The panel closes between two questions → the guide remounts with an unchanged catalog → an early settle reads the old catalog, and the action finishes with nobody left to adopt its models (**a successful sign-in is never adopted**) | `pending` covers the whole run and `completed` is written only at the end; settling requires it; `subscribeOnboardingDraft` delivers a late completion to the mounted instance. J9 was rewritten for this order (not finished → no settle; finished → exactly one settle) and J11 covers "already completed at mount" |
+| Focus restored by index (review) | `runProviderAction` stored a row number; on the remount's first frame `oauth` is not back yet, so the list is shorter and the number points at another action | the draft gained `focusId` and restores by action id; an id that is not in the list yet falls back to row 0 and snaps back once the list grows |
+| Mouse toggle did not hand over the mark (review) | the keyboard `Space` path had the hand-over, `onToggle` did not | both paths share `toggleAdoptSelection` |
+| The English manual missed the `←/→` exception (review) | the Chinese one listed step 1's access sub-layer, the English one only the slider and a drilled-in model list | `docs/interaction.en.md` synced and `guide/` rebuilt |
 
 ## 8. Compatibility and migration
 
