@@ -136,6 +136,9 @@ const GATES = [
   'verify:preset-patch',
   'verify:session-mounts',
   'verify:handoff-stdin',
+  'verify:status-fields',
+  'verify:plugin-field-order',
+  'verify:plugin-field-picker',
 ]
 
 // The longest gates start first so none of them is left running alone at the

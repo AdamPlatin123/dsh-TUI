@@ -818,6 +818,15 @@ const GROUPS = {
 // 状态行的渲染面：投影值经 hook 到达屏幕、后台会话不得抢当前行、清空即消失、
 // 两个接缝同时有值时以投影为准（读侧迁移对显示是零变化）。
     ["verify-activity-store-render", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store-render.tsx']],
+// 插件底栏字段（接缝十一的 setField）：准入/归属/上限/ledger + 三槽渲染、
+// 零足迹、设置开关、minColumns、宽度阶梯、hover 详情与点击错误隔离。
+    ["verify-status-fields", ['node', '--import', 'tsx/esm', 'scripts/verify-status-fields.tsx']],
+// 底栏字段名单（statusBar.pluginFieldsOrder）：`*`/空串/三组的语法、canonical
+// 归一化、组即槽的渲染覆写，以及 key 语法/槽名与 status.ts 不漂移。
+    ["verify-plugin-field-order", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-order.ts']],
+// 底栏字段名单的设置面：三槽勾选、`*` 实体化、预填/收口、非法草稿零写入、
+// 未认领占位与活注册表。
+    ["verify-plugin-field-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-picker.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
 
