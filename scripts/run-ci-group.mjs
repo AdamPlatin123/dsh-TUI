@@ -1270,6 +1270,7 @@ const GROUPS = {
 // /model 保留会话与自动标题资格；路由及其异步快照跟随停放中的 agent。
     ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-model-route-lifetime", ['node', '--import', 'tsx/esm', 'scripts/verify-model-route-lifetime.ts']],
+    ["verify-model-lifecycle-fences", ['node', '--import', 'tsx/esm', 'scripts/verify-model-lifecycle-fences.ts']],
     ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],
     ["verify-session-tree-generations", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree-generations.ts']],
@@ -1480,6 +1481,7 @@ const GROUPS = {
 // 注明、剥后路径未命中时回退字面路径（真叫 `…#L…` 的文件按整文件附加
 // 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
 // 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
+    ["verify-image-downsample", ['node', '--import', 'tsx/esm', 'scripts/verify-image-downsample.tsx']],
     ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
 // 问卷 provider 抢注守卫回归（issue #98 安全收尾）：静默让位只授予宿主
 // 可验证的白名单在位者（本 TUI 的私有 symbol 标记）；在位者【自报】的

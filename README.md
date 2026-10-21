@@ -23,8 +23,12 @@
 > DSH's public exports, and is moving from a mounted plugin to an app with its
 > own entry and composition root, where DSH loads in process as the first-party
 > backend. Install to enable; uninstall leaves no patches behind.
+Image files referenced with `@path` use the same admission and resize/conversion policy as pasted images. Adjustment notices report the stored dimensions and format; required animation conversion is refused instead of dropping frames. Mention images and staged images still share count and stored-byte limits in source order.
+
 
 ## Highlights
+Resuming a DSH session preserves its recorded reasoning effort (or its live selection when reattaching). The saved default seeds new sessions; explicit `/effort` and effort-default settings changes still apply to the current session’s next request.
+
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; whale-girl images use a compact native-canvas footprint instead of leaving a large gap before the title; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.
@@ -300,7 +304,9 @@ the default home; reconnect it in the active home if needed. Provider
 `env_key` credentials retain the fallback described above.
 
 TPS includes hidden reasoning time and excludes tool execution time. Live
-text estimates are corrected when Codex reports output token usage.
+text estimates are corrected when Codex reports output token usage. Decode
+spans of 500ms or less are excluded from TPS samples; token and cost totals
+still include all reported usage.
 
 Native browsing/archive, fork/conversation rewind (the first message requires
 Codex app-server 0.160.1+), paged history, images,
@@ -408,6 +414,8 @@ File paths in prose can open the file-action menu; automatic detection does not 
 **Pasting**: the launchpad accepts clipboard images and pasted image paths as `[Image #N]` attachments; `Enter` sends them with the first message. Commands that do not accept images preserve the draft and its attachments. Image chips behave like chat: arrows step across them, Backspace at the end or Delete at the start removes the whole image, and Ctrl+W never splits a chip. Text pasted on the launchpad is folded to one line. In chat, native and bracketed paste keeps ordinary text and newlines, and never submits itself on arrival. On Windows terminals that deliver a paste as win32-input-mode key records, a record stream leaked into the payload is decoded back into the characters its `Uc` field encodes — newlines included — so the composer's line count matches what was pasted; only records with no character meaning are stripped (a multi-line paste no longer leaves stray `_`), and a complete record is always consumed before an ESC-less tail, so no payload character is deleted along with an orphan escape. Pasted CRLF collapses to a single newline; genuine underscores and bracketed-paste text are untouched.
 
 **Dropped files**: a native Windows desktop drop (Windows Terminal / OpenConsole) arrives as an OSC 8 hyperlink; the parser restores its `file://` URI to a decoded local path before paste hygiene runs, so the `]8;id=…;` parameter bytes never reach the draft. Image paths enter the existing image staging pipeline; other files are inserted as a referenceable path (a path containing whitespace arrives in the composer's quoted `"…"` single-token form). Only `file://` URIs are restored, and it is fail-closed: a remote authority/UNC, a payload carrying several distinct URIs, or a URI that carries several tokens is refused and stays literal text rather than guessed.
+If resume reports that another DSH process owns the writer, release the session in that process (for example, dsh web) and retry in the same TUI. The foreground session stays intact; do not delete session or lock files to bypass single-writer protection.
+
 
 Full reference: [Interaction and commands](docs/interaction.en.md).
 
