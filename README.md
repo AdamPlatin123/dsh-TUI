@@ -23,6 +23,10 @@
 > DSH's public exports, and is moving from a mounted plugin to an app with its
 > own entry and composition root, where DSH loads in process as the first-party
 > backend. Install to enable; uninstall leaves no patches behind.
+Split diff cards give one-sided additions and deletions the full body width, without an empty opposite pane. Ordinary edits remain side by side, and mixed files choose their layout separately before folding or streaming reveal.
+
+Compaction status stays on one line in narrow panes: phase and cancellation hints yield first, then the label is shortened; elapsed time is shown only as a complete field.
+
 Image files referenced with `@path` use the same admission and resize/conversion policy as pasted images. Adjustment notices report the stored dimensions and format; required animation conversion is refused instead of dropping frames. Mention images and staged images still share count and stored-byte limits in source order.
 
 
@@ -53,6 +57,9 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Built for long sessions** — event-driven projection, virtualization, bounded caches.
 
 Keys and commands: [Interaction and commands](docs/interaction.en.md). Everything else: [documentation index](docs/README.md).
+
+Plugin side panels stay enabled when unrelated settings change. Editing the enabled panel list still applies your explicit selection.
+
 
 ## Preview
 
@@ -414,6 +421,8 @@ File paths in prose can open the file-action menu; automatic detection does not 
 **Pasting**: the launchpad accepts clipboard images and pasted image paths as `[Image #N]` attachments; `Enter` sends them with the first message. Commands that do not accept images preserve the draft and its attachments. Image chips behave like chat: arrows step across them, Backspace at the end or Delete at the start removes the whole image, and Ctrl+W never splits a chip. Text pasted on the launchpad is folded to one line. In chat, native and bracketed paste keeps ordinary text and newlines, and never submits itself on arrival. On Windows terminals that deliver a paste as win32-input-mode key records, a record stream leaked into the payload is decoded back into the characters its `Uc` field encodes — newlines included — so the composer's line count matches what was pasted; only records with no character meaning are stripped (a multi-line paste no longer leaves stray `_`), and a complete record is always consumed before an ESC-less tail, so no payload character is deleted along with an orphan escape. Pasted CRLF collapses to a single newline; genuine underscores and bracketed-paste text are untouched.
 
 **Dropped files**: a native Windows desktop drop (Windows Terminal / OpenConsole) arrives as an OSC 8 hyperlink; the parser restores its `file://` URI to a decoded local path before paste hygiene runs, so the `]8;id=…;` parameter bytes never reach the draft. Image paths enter the existing image staging pipeline; other files are inserted as a referenceable path (a path containing whitespace arrives in the composer's quoted `"…"` single-token form). Only `file://` URIs are restored, and it is fail-closed: a remote authority/UNC, a payload carrying several distinct URIs, or a URI that carries several tokens is refused and stays literal text rather than guessed.
+The pixel whale, large title and context/TPS colors follow the same terminal color depth as other text: monochrome, 16-color, 256-color or truecolor. Apple Terminal and tmux use the shared fallback; `NO_COLOR` and `FORCE_COLOR` retain the existing shared color policy.
+
 If resume reports that another DSH process owns the writer, release the session in that process (for example, dsh web) and retry in the same TUI. The foreground session stays intact; do not delete session or lock files to bypass single-writer protection.
 
 
