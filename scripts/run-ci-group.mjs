@@ -420,6 +420,7 @@ const GROUPS = {
     ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
 // 全屏拖选自动复制后保留选区，重复 release 不重复复制；选区高亮跳过
 // 行尾填充/空白行，并保留代码缩进、软换行分隔空格和 Unicode 字符。
+    ['verify-selection-stale-guard', ['node', '--import', 'tsx/esm', 'scripts/verify-selection-stale-guard.tsx']],
     ['verify-copy-on-select', ['node', 'scripts/verify-copy-on-select.mjs']],
 // hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
 // 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
@@ -465,6 +466,7 @@ const GROUPS = {
 // 图片导出权限（目录 0700/文件 0600）、空 vs unavailable、
 // 死 Wayland 会话回退 xclip。
     ["verify-clipboard", ['node', 'scripts/verify-clipboard.mjs']],
+    ['verify-windows-copy', ['node', 'scripts/verify-windows-copy.mjs']],
 // Ctrl+V UI 端到端回归（stub wl-paste）：帮助面板在读取前关闭、
 // 剪贴板文本落入输入框、busy 闩锁释放后第二次粘贴仍生效。
     ["repro-clipboard", ['node', '--import', 'tsx/esm', 'scripts/repro-clipboard.tsx']],
