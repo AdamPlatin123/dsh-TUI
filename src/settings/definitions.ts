@@ -676,6 +676,18 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
     hintEn: d => `Fold/unfold the pending question panel. Default: ${d}.`,
     hintZh: d => `折叠/展开等待回答的提问面板。默认 ${d}。`,
   },
+  questionDetailUp: {
+    label: 'Panel preview previous page shortcut',
+    zh: '面板正文向上翻页快捷键',
+    hintEn: d => `Page up through question text or a compact approval preview without moving the choice focus. Default: ${d}.`,
+    hintZh: d => `向上翻阅问卷正文或紧凑审批预览，不移动选项焦点。默认 ${d}。`,
+  },
+  questionDetailDown: {
+    label: 'Panel preview next page shortcut',
+    zh: '面板正文向下翻页快捷键',
+    hintEn: d => `Page down through question text or a compact approval preview without moving the choice focus. Default: ${d}.`,
+    hintZh: d => `向下翻阅问卷正文或紧凑审批预览，不移动选项焦点。默认 ${d}。`,
+  },
   expandEditor: {
     label: 'Fullscreen editor shortcut',
     zh: '全屏草稿编辑快捷键',
