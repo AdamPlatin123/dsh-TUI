@@ -1682,9 +1682,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const applyEffortDefault = (value: SettingsValue): void => {
       const next = value.effortDefault ?? null
       if (next === lastEffortDefault) return
-      lastEffortDefault = next
       const level = next === null || next === 'auto' ? undefined : next
-      channel.setDefaultEffort(level)
+      // Capability backends restore their own effort. Boot is not a live edit:
+      // Auto and resumed sessions keep that selection until the user changes it.
+      const preserve = !settingsEditsLive && backendStart !== undefined && (level === undefined || backendStart.resumedSessionId !== undefined)
+      if (!preserve && backendStart !== undefined && !channel.ready) { lastEffortDefault = undefined; return }
+      if (!preserve && (channel.setDefaultEffort(level) as unknown) === false) { lastEffortDefault = undefined; return }
+      lastEffortDefault = next
     }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
@@ -1726,6 +1730,23 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     settingsEditsLive = false
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     settingsEditsLive = true
+    if (backendStart !== undefined) settingsCtx.effect(() => {
+      let active = true
+      let generation = channel.ready ? channel.agentBindingGeneration : undefined
+      const stop = channel.subscribe(() => {
+        if (!channel.ready || (lastEffortDefault !== undefined && generation === channel.agentBindingGeneration)) return
+        // Adoption publishes several synchronous updates before its binding generation.
+        queueMicrotask(() => {
+          if (!active || !channel.ready) return
+          if (generation !== undefined && generation !== channel.agentBindingGeneration) {
+            lastEffortDefault = scope.get().effortDefault ?? null
+          }
+          generation = channel.agentBindingGeneration
+          if (lastEffortDefault === undefined) applyEffortDefault(scope.get())
+        })
+      })
+      return () => { active = false; stop() }
+    })
     let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
     let lastLaunchpad = bootSettings.launchpad ?? config.launchpad ?? true
     settingsCtx.effect(() => scope.watch(next => {
@@ -1928,11 +1949,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('effortDefault'),
+          optionsSource: 'effort',
           format(value: unknown): string {
             // Unset in settings.yaml: show what a boot would actually start
             // on (the persisted /effort choice → the cordis effort default)
             // instead of a misleading blank.
-            if (value === undefined || value === null || value === 'auto') {
+            if (value === undefined || value === null) {
               return readEffortPref() ?? config.effort ?? 'auto'
             }
             return String(value)
