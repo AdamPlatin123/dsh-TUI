@@ -210,8 +210,19 @@ export function Onboarding({
   const [notice, setNotice] = React.useState<string | undefined>(
     externalNotice ?? (initialStep === undefined ? restored?.notice : undefined))
   const aliveRef = React.useRef(true)
+  /**
+   * 当前在跑的那一单接入动作的归属 id。
+   *
+   * 异步准备（读目录）先于 draft 落盘：这段窗口里用户可能关屏、本屏被卸载，
+   * 也可能又发起一单。归属登记在 `runProviderAction` 的 await 之前，`finish()`、
+   * 卸载、发起新一单都会作废它；目录回来先验归属，作废了就不许写 draft、也不许
+   * `start()`——否则迟到的回调会把已清空的 draft 复活，并替一个已经离开的用户
+   * 跑完登录。
+   */
+  const actionOwnerRef = React.useRef<number | undefined>(undefined)
   React.useEffect(() => () => {
     aliveRef.current = false
+    actionOwnerRef.current = undefined
   }, [])
 
   // ── 第一步：凭证 + 连通性 + 账号/模型接入 ────────────────────────────
@@ -332,6 +343,9 @@ export function Onboarding({
   const [tried, setTried] = React.useState<ReadonlySet<string>>(() => new Set())
 
   const finish = React.useCallback((outcome: 'skipped' | 'done'): void => {
+    // 关屏即作废在跑的那一单：目录读取可能还在路上，它的迟到回调不许复活
+    // draft、也不许再 `start()`。
+    actionOwnerRef.current = undefined
     // 两条出口都收掉进度：跳过的下一次启动还要从第一步重问，完成的更不该
     // 留着旧的 draft 去影响 `/setup`。
     clearOnboardingDraft()
@@ -499,6 +513,8 @@ export function Onboarding({
   /**
    * 跑一个接入动作：**先**把基线 + 意图写进 draft，再交给 Chat 的面板。
    * 顺序是关键——面板一挂起这一屏就卸载了，晚写的上下文没人接得住。
+   * 读目录（`channel.listModels()`）是这段窗口里最慢的一步，所以归属在 await
+   * 之前登记，目录回来先验归属：晚了就会先复活 draft、再替已经离开的用户跑登录。
    */
   const runProviderAction = React.useCallback(async (
     intent: Omit<OnboardingPendingAction, 'id'>,
@@ -509,7 +525,12 @@ export function Onboarding({
     // 每单一个 id：引导关掉再开、又发起新动作时，上一单迟到的回调不能把
     // 新一单的 `pending` 覆盖成它自己的完成态。
     const pending: OnboardingPendingAction = { ...intent, id: nextOnboardingActionId() }
+    // 归属先立、异步准备后行：读目录可能很慢，这段窗口里关屏/卸载/新一单都会
+    // 作废这一单（见 `actionOwnerRef`）。校验点放在目录返回处，而不是等登录
+    // 结束——晚一步就会先复活 draft、再替已经离开的用户跑一次 `start()`。
+    actionOwnerRef.current = pending.id
     const baseline = modelRefsOf(await channel.listModels().catch(() => [] as readonly LlmModelInfo[]))
+    if (!aliveRef.current || actionOwnerRef.current !== pending.id) return
     // 动作前的上下文先落盘：面板一挂起这一屏就卸载了，晚写的没人接得住。
     // `pending` 会一直留到动作结束——中途的重挂靠它知道"还有一单在跑"。
     writeOnboardingDraft({
@@ -1019,6 +1040,11 @@ export function Onboarding({
           <AdoptPanel
             adopt={adopt}
             providerLabel={providerLabel}
+            // 行预算 = 终端高 − 引导骨架 8 行（标题/两条 Divider/步进条/
+            // paddingTop/步骤描述+其 marginBottom/提示行）− 面板框架 7 行
+            // （marginTop/标题/说明/区标签各带 1 行 marginBottom 或自身 1 行）
+            // − 1 行余量；80×24 下为 8 行。
+            windowRows={Math.max(2, rows - 16)}
             onHover={(index) => setAdopt(previous => previous === undefined ? previous : ({ ...previous, index }))}
             onToggle={toggleAdoptSelection}
             onZone={(zone) => setAdopt(previous => previous === undefined ? previous : ({ ...previous, zone, index: 0 }))}
@@ -1276,6 +1302,7 @@ function AccessStatus({
 function AdoptPanel({
   adopt,
   providerLabel,
+  windowRows,
   onHover,
   onToggle,
   onZone,
@@ -1284,6 +1311,8 @@ function AdoptPanel({
 }: {
   adopt: AdoptState
   providerLabel: (id: string | undefined) => string
+  /** 列表区可用行数（终端高减去引导骨架与面板框架；含末尾操作行）。 */
+  windowRows: number
   onHover: (index: number) => void
   onToggle: (key: string) => void
   onZone: (zone: AccessZone) => void
@@ -1308,78 +1337,100 @@ function AdoptPanel({
       <Box marginBottom={1}>
         <Text dimColor wrap="truncate-end">{t('onboarding-access-adopt-note')}</Text>
       </Box>
-      {adopt.zone === 'models' ? (
-        <Box flexDirection="column">
-          <Box marginBottom={1}>
-            <Text dimColor>{t('onboarding-access-adopt-zone-models')}</Text>
-          </Box>
-          {plan.added.map((row, index) => (
-            <Box key={modelRefKey(row)} flexDirection="column" onMouseEnter={() => onHover(index)}>
+      {adopt.zone === 'models' ? (() => {
+        // 列表窗口化：模型可能几十个，全量渲染会把焦点行挤出屏幕（80×24 下
+        // 30 个模型时实测焦点行不可见），而 ↑/↓、Space、Enter 仍作用在
+        // `adopt.index` 上。末尾"确认"是操作行，固定保留在窗口之外（占 1 行）。
+        const confirmIndex = plan.added.length
+        const { start, end } = listWindow(plan.added.map(() => 1), adopt.index, Math.max(1, windowRows - 1))
+        return (
+          <Box flexDirection="column">
+            <Box marginBottom={1}>
+              <Text dimColor>{t('onboarding-access-adopt-zone-models')}</Text>
+            </Box>
+            {plan.added.slice(start, end).map((row, offset) => {
+              const index = start + offset
+              return (
+                <Box key={modelRefKey(row)} flexDirection="column" onMouseEnter={() => onHover(index)}>
+                  <ListItem
+                    isFocused={adopt.index === index}
+                    isSelected={adopt.selected.has(modelRefKey(row))}
+                    declareCursor={false}
+                    showScrollUp={index === start && start > 0}
+                    showScrollDown={index === end - 1 && end < plan.added.length}
+                    onClick={(event: ClickEvent) => {
+                      event.stopImmediatePropagation()
+                      onHover(index)
+                      onToggle(modelRefKey(row))
+                    }}
+                  >
+                    {row.name + '  ' + row.provider}
+                  </ListItem>
+                </Box>
+              )
+            })}
+            <Box flexDirection="column" onMouseEnter={() => onHover(confirmIndex)}>
               <ListItem
-                isFocused={adopt.index === index}
-                isSelected={adopt.selected.has(modelRefKey(row))}
+                isFocused={adopt.index === confirmIndex}
                 declareCursor={false}
                 onClick={(event: ClickEvent) => {
                   event.stopImmediatePropagation()
-                  onHover(index)
-                  onToggle(modelRefKey(row))
+                  onHover(confirmIndex)
+                  onConfirm()
                 }}
               >
-                {row.name + '  ' + row.provider}
-              </ListItem>
-            </Box>
-          ))}
-          <Box flexDirection="column" onMouseEnter={() => onHover(plan.added.length)}>
-            <ListItem
-              isFocused={adopt.index === plan.added.length}
-              declareCursor={false}
-              onClick={(event: ClickEvent) => {
-                event.stopImmediatePropagation()
-                onHover(plan.added.length)
-                onConfirm()
-              }}
-            >
-              {t('onboarding-access-adopt-confirm', { n: picked.length })}
-            </ListItem>
-          </Box>
-        </Box>
-      ) : (
-        <Box flexDirection="column">
-          <Box marginBottom={1}>
-            <Text dimColor>{t('onboarding-access-adopt-zone-default')}</Text>
-          </Box>
-          {picked.map((row, index) => (
-            <Box key={modelRefKey(row)} flexDirection="column" onMouseEnter={() => onHover(index)}>
-              <ListItem
-                isFocused={adopt.index === index}
-                isSelected={adopt.defaultKey === modelRefKey(row)}
-                declareCursor={false}
-                onClick={(event: ClickEvent) => {
-                  event.stopImmediatePropagation()
-                  onHover(index)
-                  onPick(row)
-                }}
-              >
-                {row.name + '  ' + row.provider}
-              </ListItem>
-            </Box>
-          ))}
-          <Box marginTop={1}>
-            <Box onMouseEnter={() => onZone('models')}>
-              <ListItem
-                isFocused={false}
-                declareCursor={false}
-                onClick={(event: ClickEvent) => {
-                  event.stopImmediatePropagation()
-                  onZone('models')
-                }}
-              >
-                {t('onboarding-access-adopt-back')}
+                {t('onboarding-access-adopt-confirm', { n: picked.length })}
               </ListItem>
             </Box>
           </Box>
-        </Box>
-      )}
+        )
+      })() : (() => {
+        // 默认区同理：只列勾中的模型，"返回模型区"是操作行，固定在窗口末尾
+        // （占 marginTop 1 + 行 1，所以列表预算再减 2）。
+        const { start, end } = listWindow(picked.map(() => 1), adopt.index, Math.max(1, windowRows - 2))
+        return (
+          <Box flexDirection="column">
+            <Box marginBottom={1}>
+              <Text dimColor>{t('onboarding-access-adopt-zone-default')}</Text>
+            </Box>
+            {picked.slice(start, end).map((row, offset) => {
+              const index = start + offset
+              return (
+                <Box key={modelRefKey(row)} flexDirection="column" onMouseEnter={() => onHover(index)}>
+                  <ListItem
+                    isFocused={adopt.index === index}
+                    isSelected={adopt.defaultKey === modelRefKey(row)}
+                    declareCursor={false}
+                    showScrollUp={index === start && start > 0}
+                    showScrollDown={index === end - 1 && end < picked.length}
+                    onClick={(event: ClickEvent) => {
+                      event.stopImmediatePropagation()
+                      onHover(index)
+                      onPick(row)
+                    }}
+                  >
+                    {row.name + '  ' + row.provider}
+                  </ListItem>
+                </Box>
+              )
+            })}
+            <Box marginTop={1}>
+              <Box onMouseEnter={() => onZone('models')}>
+                <ListItem
+                  isFocused={false}
+                  declareCursor={false}
+                  onClick={(event: ClickEvent) => {
+                    event.stopImmediatePropagation()
+                    onZone('models')
+                  }}
+                >
+                  {t('onboarding-access-adopt-back')}
+                </ListItem>
+              </Box>
+            </Box>
+          </Box>
+        )
+      })()}
     </Box>
   )
 }
