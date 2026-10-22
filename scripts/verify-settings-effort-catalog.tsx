@@ -85,10 +85,12 @@ const findWatcher = (node: import('typescript').Node): void => {
 findWatcher(pluginSource)
 assert.equal(watcherDeclarations.size, 2)
 assert.notEqual(readinessStatement, '', 'production readiness/catalog subscription is exercised')
-const watcherJs = ts.transpileModule(`let settingsEditsLive = false;
+const watcherJs = ts.transpileModule(`let bootApplication = false;
 ${watcherDeclarations.get('lastEffortDefault')}
 ${watcherDeclarations.get('applyEffortDefault')}
-const apply = (value, live) => { settingsEditsLive = live; applyEffortDefault(value) };
+// The production flag is true only while boot's first snapshot is applied,
+// so the harness's "live" argument is its negation.
+const apply = (value, live) => { bootApplication = !live; applyEffortDefault(value) };
 apply.start = () => { ${readinessStatement} };
 return apply`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
 const applyCapabilityDefault = new Function('channel', 'backendStart', watcherJs)(capabilityChannel, { resumedSessionId: 'effort-fixture' }) as (value: { effortDefault: string }, live: boolean) => void
