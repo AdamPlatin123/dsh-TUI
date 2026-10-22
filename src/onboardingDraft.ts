@@ -21,8 +21,8 @@
  *
  * Lifecycle: written on change, read on mount, cleared when the guide closes
  * either way (finish or skip) — a stale draft must never steer the next
- * `/setup`. Best effort and total: a corrupt entry is simply dropped, and the
- * guide starts at step 0 exactly as it did before this module existed.
+ * `/setup`. The slot is in-process only: nothing is serialized, so there is no
+ * stored shape to parse or normalize, and a fresh process starts at step 0.
  *
  * @module @deepseek-harness-tui/dsh-tui/onboardingDraft
  */
@@ -141,72 +141,6 @@ export function subscribeOnboardingDraft(listener: () => void): () => void {
   listeners.add(listener)
   return () => {
     listeners.delete(listener)
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function count(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback
-}
-
-/** Validate the pending action; anything unrecognized reads as "none". */
-function parsePending(value: unknown): OnboardingPendingAction | undefined {
-  if (!isRecord(value)) return undefined
-  const id = value.id
-  const kind = value.kind
-  // An action without a valid id cannot be told apart from a later one, so it
-  // reads as "no action" rather than as a candidate for a stale completion.
-  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) return undefined
-  if (kind !== 'sign-in' && kind !== 'add-provider') return undefined
-  const provider = typeof value.provider === 'string' && value.provider !== '' ? value.provider : undefined
-  return { id, kind, ...(provider === undefined ? {} : { provider }) }
-}
-
-/** Validate the completion record; anything unrecognized reads as "not finished". */
-function parseCompleted(value: unknown): OnboardingCompletion | undefined {
-  if (!isRecord(value)) return undefined
-  const pending = parsePending(value)
-  const status = value.status
-  if (pending === undefined) return undefined
-  if (status !== 'completed' && status !== 'cancelled' && status !== 'failed') return undefined
-  return { ...pending, status }
-}
-
-/** Validate the baseline rows; a malformed row drops the whole baseline. */
-function parseBaseline(value: unknown): readonly ProviderModelRef[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const rows: ProviderModelRef[] = []
-  for (const entry of value) {
-    if (!isRecord(entry)) return undefined
-    const { provider, id, name } = entry
-    if (typeof provider !== 'string' || typeof id !== 'string' || typeof name !== 'string') return undefined
-    rows.push({ provider, id, name })
-  }
-  return rows
-}
-
-/**
- * Parse a draft (exported for the regression: the shape rules are worth
- * pinning without touching the module's single slot).
- *
- * @param value - Raw stored value.
- * @returns The normalized draft; `undefined` when nothing usable is stored.
- */
-export function parseOnboardingDraft(value: unknown): OnboardingDraft | undefined {
-  if (!isRecord(value)) return undefined
-  const baseline = parseBaseline(value.baseline)
-  if (baseline === undefined) return undefined
-  return {
-    step: count(value.step, 0),
-    focus: count(value.focus, 0),
-    focusId: typeof value.focusId === 'string' && value.focusId !== '' ? value.focusId : undefined,
-    baseline,
-    pending: parsePending(value.pending),
-    completed: parseCompleted(value.completed),
-    notice: typeof value.notice === 'string' && value.notice !== '' ? value.notice : undefined,
   }
 }
 

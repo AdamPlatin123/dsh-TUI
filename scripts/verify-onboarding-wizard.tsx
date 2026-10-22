@@ -806,7 +806,7 @@ const oauthRow = (provider: string) => ({
   s.close()
 }
 {
-  // J6：draft 形状规则（面板接管期间的进度记忆）。
+  // J6：draft 生命周期（面板接管期间的进度记忆）：写入/读回/清空，不测形状解析。
   const draft = await import('../src/onboardingDraft.js')
   draft.clearOnboardingDraft()
   const empty = draft.readOnboardingDraft() === undefined
@@ -821,21 +821,6 @@ const oauthRow = (provider: string) => ({
     empty && written.step === 2 && written.focus === 1
     && written.baseline.length === 1 && written.pending?.provider === 'a'
     && typeof written.pending?.id === 'number' && written.notice === 'n')
-  check('J6a2 focusId / completed 按形状解析',
-    draft.parseOnboardingDraft({ baseline: [], focusId: 'signin' })?.focusId === 'signin'
-    && draft.parseOnboardingDraft({ baseline: [], focusId: 7 })?.focusId === undefined
-    && draft.parseOnboardingDraft({ baseline: [], completed: { id: 3, kind: 'sign-in', provider: 'x', status: 'completed' } })?.completed?.status === 'completed'
-    && draft.parseOnboardingDraft({ baseline: [], completed: { kind: 'sign-in', status: 'completed' } })?.completed === undefined
-    && draft.parseOnboardingDraft({ baseline: [], completed: { id: 3, kind: 'sign-in', status: 'nope' } })?.completed === undefined)
-  check('J6b parse 归一化坏数字、拒绝坏基线/坏 pending',
-    draft.parseOnboardingDraft({ step: 'x', focus: -1, baseline: [] })?.step === 0
-    && draft.parseOnboardingDraft({ step: 1.7, baseline: [] })?.step === 1
-    && draft.parseOnboardingDraft({ baseline: 'nope' }) === undefined
-    && draft.parseOnboardingDraft({ baseline: [], pending: { kind: 'nope' } })?.pending === undefined
-    // 没有 id 的 pending 无法与后来的一单区分 → 读作"没有动作"
-    && draft.parseOnboardingDraft({ baseline: [], pending: { kind: 'sign-in' } })?.pending === undefined
-    && draft.parseOnboardingDraft({ baseline: [], pending: { id: 0, kind: 'sign-in' } })?.pending === undefined
-    && draft.parseOnboardingDraft({ baseline: [], pending: { id: 2, kind: 'sign-in' } })?.pending?.id === 2)
   draft.clearOnboardingDraft()
   check('J6c clear 真的清空', draft.readOnboardingDraft() === undefined)
 }
