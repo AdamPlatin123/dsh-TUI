@@ -14,6 +14,9 @@
  *   A2 `@~\Downloads\note.txt`   → 同义（Windows 分隔符）
  *   A3 `@~/Downloads/nothere.txt`→ 仍然 missing（不许把“什么都当命中”）
  *
+ * 附加侧调用真实提交链上的 expandComposerMentions（input-delivery.ts），
+ * 不是只剩测试在用的 channel/mentions.ts 的 expandMentions。
+ *
  * 运行：node --import tsx/esm scripts/verify-tilde-home-completion-e2e.mjs
  * 退出码：0 = 全过；1 = 有失败（修前预期为 1）。
  */
@@ -21,7 +24,7 @@
 // HOME 必须在 import src 之前定死：paths.ts 的 DATA_DIR 在模块加载时算。
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-tilde-home-'))
 process.env.HOME = home
@@ -75,7 +78,7 @@ const fsService = {
 }
 
 const { listPathCandidates } = await import('../src/dsh-adapter/channel/paths.js')
-const { expandMentions } = await import('../src/dsh-adapter/channel/mentions.js')
+const { expandComposerMentions } = await import('../src/dsh-adapter/channel/composer-mentions.js')
 
 let failures = 0
 let checks = 0
@@ -135,7 +138,7 @@ const ids = async (query, cwd = fixture.cwd) => {
 
 // ── 附加侧 ────────────────────────────────────────────────────────────────
 const attach = async text => {
-  const result = await expandMentions(fsService, fixture.cwd, text)
+  const result = await expandComposerMentions(fsService, fixture.cwd, text)
   return {
     attached: result.attached ?? [],
     missing: result.missing ?? [],
@@ -176,7 +179,8 @@ const attach = async text => {
   const blockText = result.blocks.map(block => block.text ?? '').join('\n')
   const expanded = join(home, 'Downloads', 'sub')
   check('A6 目录型 `@~/…` 的 `<attached-directory path>` 同样展开（R-1）',
-    blockText.includes(`path="${expanded}"`) || blockText.includes(`path="${expanded}/"`),
+    // 目录尾分隔符随平台：POSIX 为 `/`，Windows 的 join 产出 `\`。
+    [expanded, `${expanded}/`, `${expanded}${sep}`].some(path => blockText.includes(`path="${path}"`)),
     blockText.slice(0, 200))
 }
 

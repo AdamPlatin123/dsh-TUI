@@ -396,7 +396,11 @@ console.log('--- C/D: composer render ---')
 {
   // E — `@~/…` 提及解析（issue #1706）：前导 `~/` 必须展开到 HOME（`~\` 等价），
   // 目标必须真的被附加，而不是静默落进 missing。HOME 已隔离到临时目录。
+  // E1/E2 走真实提交路径（createChannel → submit → input-delivery 的
+  // expandComposerMentions → agent.followup，与 B2 同一条投递链）：只测
+  // channel/mentions.ts 的 expandMentions 测不到真实发送，它不在提交链上。
   const { expandMentions } = await import('../src/dsh-adapter/channel.js')
+  const { expandComposerMentions } = await import('../src/dsh-adapter/channel/composer-mentions.js')
   const { expandHomePrefix } = await import('../src/utils/paths.js')
   // R-4：直接钉住前缀展开本身（间接覆盖不够）——`~/` 与 `~\` 等价、裸 `~` 与
   // `~user/` 不展开、绝对路径原样透传。
@@ -437,24 +441,48 @@ console.log('--- C/D: composer render ---')
     },
   }
   const workspace = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'dshtui-mention-ws-'))
+  const sent = []
+  const ctx = new Context()
+  const provide = ctx.provide.bind(ctx)
+  provide('fs', mentionFs)
+  const channel = createChannel(ctx, {
+    id: 'agent-e',
+    status: 'idle',
+    options: {},
+    ctx: { on: () => () => {} },
+    session: { id: 'sess-e', seq: 0, events: [], header: {} },
+    followup(message) { sent.push(message) },
+    steer(message) { sent.push(message) },
+    inbox: { remove: () => true },
+    cancel() {},
+    whenIdle: () => Promise.resolve(),
+  }, { model: 'm0', cwd: workspace, provider: 'p0', activity: false })
+  const attachedFile = blocks => blocks.find(block => block.type === 'text' && block.text.startsWith('<attached-file '))
   try {
-    const expansion = await expandMentions(mentionFs, workspace, '看一下 @~/Downloads/note.txt')
-    check('E1 @~/… 展开到 HOME 并真的附加（不是 missing）',
-      expansion.missing.length === 0
-      && expansion.attached.length === 1
-      && expansion.blocks.some(block => block.type === 'text' && block.text.includes('home note body'))
-      // 模型侧必须拿到可解析的路径（fs 工具不展开 `~`）；用户可见列表仍是原串。
-      && expansion.blocks.some(block => block.type === 'text' && block.text.includes(`path="${homeNote}"`))
-      && expansion.attached[0] === '~/Downloads/note.txt',
-      JSON.stringify({ attached: expansion.attached, missing: expansion.missing, homeNote }))
+    channel.submit('看一下 @~/Downloads/note.txt')
+    // 模型侧必须拿到可解析的路径（fs 工具不展开 `~`）；正文块仍是用户原串。
+    check('E1 真实提交：@~/… 展开到 HOME 并真的附加（模型侧是展开后的绝对路径）',
+      await settled(() => sent.length === 1
+        && sent[0].content[0].text === '看一下 @~/Downloads/note.txt'
+        && attachedFile(sent[0].content)?.text.startsWith(`<attached-file path="${homeNote}">\nhome note body`) === true),
+      sent.length === 1 ? JSON.stringify(sent[0].content) : 'no delivery')
     // `~\` 前缀与 `~/` 等价；后半段在本机（POSIX）必须用 `/`——POSIX 不把
     // 反斜杠当分隔符，全反斜杠形态只有在 Windows 上才落到同一个文件。
-    const backslash = await expandMentions(mentionFs, workspace, '再看 @~\\Downloads/note.txt')
-    check('E2 @~\\ 前缀与 @~/ 等价（模型侧同样拿到展开路径）',
-      backslash.missing.length === 0 && backslash.attached.length === 1
-      && backslash.blocks.some(block => block.type === 'text' && block.text.includes(`path="${homeNote}"`))
-      && backslash.attached[0] === '~\\Downloads/note.txt',
-      JSON.stringify({ attached: backslash.attached, missing: backslash.missing }))
+    channel.submit('再看 @~\\Downloads/note.txt')
+    check('E2 真实提交：@~\\ 前缀与 @~/ 等价（模型侧同样拿到展开路径）',
+      await settled(() => sent.length === 2
+        && attachedFile(sent[1].content)?.text.startsWith(`<attached-file path="${homeNote}">`) === true),
+      sent.length === 2 ? JSON.stringify(sent[1].content) : 'no second delivery')
+    // 两个展开器必须同口径（issue #1706 的附件一半就是只改了其中一个）：同一输入、
+    // 同一 fs，附加 / 缺失与模型侧块逐字一致。
+    const typed = '对照 @~/Downloads/note.txt @~/Downloads/nothere.txt'
+    const composer = await expandComposerMentions(mentionFs, workspace, typed)
+    const legacy = await expandMentions(mentionFs, workspace, typed)
+    check('E3 expandComposerMentions 与 expandMentions 对 ~/ 同口径（附加、缺失、模型侧块一致）',
+      composer.attached.length === 1 && composer.missing.length === 1
+      && JSON.stringify([composer.attached, composer.missing, composer.blocks])
+        === JSON.stringify([legacy.attached, legacy.missing, legacy.blocks]),
+      JSON.stringify({ composer: [composer.attached, composer.missing], legacy: [legacy.attached, legacy.missing] }))
   } finally {
     nodeFs.rmSync(workspace, { recursive: true, force: true })
   }
