@@ -72,8 +72,9 @@ elsewhere:
 
 - G1 Turn step 1 from a read-only check into an **access page**: subscription sign-in, API-key
   configuration and re-check happen inside the guide; stop pushing `DEEPSEEK_API_KEY`.
-- G2 Catch what sign-in/config produced: nothing new → no question; exactly one model →
-  auto-default; several → ask which to adopt and which becomes the default.
+- G2 Catch what a subscription sign-in produced: nothing new → no question; exactly one model →
+  auto-default; several → ask which to adopt and which becomes the default. A key route's
+  enablement and switch are asked by the `/provider` wizard itself; the guide only reports (see 3.5).
 - G3 Keep step 3's default model consistent with the adoption result (no second picking pass).
 - G4 Hints must be true and cross-platform (drop `~/.deepseek/config.json`, give a runnable
   Windows form).
@@ -142,7 +143,7 @@ mount, written on change, and cleared on finish/skip.
         └──────┬──────┘
                ▼   settle: by the mounted instance; the subscription delivers a late completion to it
         ┌─────────────┐
-        │  adopting   │  catalog diff: 0 → none (report only); 1 → auto; N → inline multi-select + default pick
+        │  adopting   │  catalog diff: 0 → none (report only); 1 → auto; N → inline multi-select + default pick; key route → report only
         └──────┬──────┘
                ▼
             ready ("adopted N models, default X")
@@ -172,7 +173,9 @@ the access sub-flow, Esc is consumed by the panel/inline layer and returns to `r
 2. The wizard asks route/endpoint/protocol/key/model multi-select itself and **writes the
    credential first, then the profile, rolling back on failure**
    (`providerWizard.ts:380-410`). Its model multi-select *is* the "add?" question for key routes.
-3. On return we enter `adopting` with only the **newly appeared** models as default candidates.
+3. On return the guide only reports (how many models were added, which model is the default): the
+   wizard already asked what to enable and whether to switch, and wrote the answers, so the guide
+   does not enter `adopting` or touch the default (see 3.5).
 
 **C. Already configured (env / credential store / existing route)**
 

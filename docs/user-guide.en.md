@@ -42,11 +42,13 @@ dsh-tui
    offers **actions** — `Sign in to a subscription (OAuth)` (ChatGPT / Claude / Grok, or DeepSeek
    account browser sign-in, each annotated with its masked sign-in state), `Add a model provider
    (API key)` (the same wizard as `/provider`: a built-in catalog or a custom endpoint), `Check
-   again`, `Skip this step`. After a sign-in or key write, the **newly available models are caught**:
+   again`, `Skip this step`. After a subscription sign-in, the **newly available models are caught**:
    none → just a report; exactly one → it becomes the default; several → an inline adoption layer
    (`Space` **selects**, `Enter` **confirms**: in the model zone Space toggles what to adopt and Enter
    moves on to "which becomes the default"; in the default zone Space marks a row and Enter writes it;
-   `↑`/`↓` move, `Tab` switches zone). When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
+   `↑`/`↓` move, `Tab` switches zone). Adding a provider leaves which models to enable and whether to
+   switch to the `/provider` wizard itself; back in the guide it only reports the result, without
+   asking again or changing the default the wizard settled. When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
    **real** manual paths — the `refs:` block of `$DSH_HOME/.credentials.yaml` and PowerShell's
    user-level variable / cmd's `setx` — instead of a config file nothing reads.
    `←/→` change step, `Tab` switches between the two panes, `↑/↓` move the selection, `Enter` runs

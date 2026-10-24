@@ -2798,6 +2798,7 @@ const dict = {
   'onboarding-access-added-none': { zh: '这次没有新增可用模型（若取消了登录，可再试一次）', en: 'No new models this time (if you cancelled the sign-in, try again)' },
   'onboarding-access-added-none-for': { zh: '{{provider}} 这次没有新增可用模型', en: '{{provider}} brought in no new models this time' },
   'onboarding-access-added-auto': { zh: '已接入 {{provider}}，默认模型设为 {{name}}', en: 'Adopted {{provider}}; default model set to {{name}}' },
+  'onboarding-access-added-provider': { zh: '已接入 {{provider}} 的 {{n}} 个模型；默认模型：{{model}}', en: 'Added {{n}} models from {{provider}}; default model: {{model}}' },
   'onboarding-access-adopt-title': { zh: '{{provider}} 接入 {{n}} 个可用模型', en: '{{provider}} brought in {{n}} models' },
   'onboarding-access-adopt-title-multi': { zh: '接入 {{n}} 个可用模型（{{providers}} 个 provider）', en: '{{n}} models became available ({{providers}} providers)' },
   'onboarding-access-adopt-note': {

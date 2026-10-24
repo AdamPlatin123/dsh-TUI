@@ -18,8 +18,8 @@
  *      `Chat` 的"不记账"与"记账"分支。
  *   J. 第一步的接入（v2）：动作行按接缝出现、缺接缝时给平台正确的兜底文案
  *      （不再有 `~/.deepseek/config.json`）；登录后按 0/1/N 三分支处理新模型
- *      （0 不问、1 直接设默认、多个进内联接入层选默认）；draft 让步骤在
- *      卸载-重挂后保持。
+ *      （0 不问、1 直接设默认、多个进内联接入层选默认）；加 key 由 /provider
+ *      向导自己问启用与切换，引导只报结果（J13）；draft 让步骤在卸载-重挂后保持。
  *
  * 运行：node --import tsx/esm scripts/verify-onboarding-wizard.tsx
  */
@@ -990,6 +990,62 @@ const oauthRow = (provider: string) => ({
     JSON.stringify(channel.calls))
   b.close()
   draft.clearOnboardingDraft()
+}
+
+{
+  // J13：「添加模型提供方」跑的是 /provider 向导——启用哪些模型（模型多选）、要不要
+  // 切过去（provider-q-switch），向导自己已经问过。回到引导只报结果：再跑 auto /
+  // 接入层，会推翻用户在向导里选的「保持当前模型」，并把同一批模型再问一遍。
+  const trio = [
+    { provider: 'mock', id: 'a', name: 'Alpha' },
+    { provider: 'mock', id: 'b', name: 'Beta' },
+    { provider: 'mock', id: 'c', name: 'Gamma' },
+  ]
+  const cases = [
+    { name: '一个新模型 + 保持当前模型', added: [{ provider: 'mock', id: 'solo', name: 'Solo' }], switched: false },
+    { name: '三个新模型 + 保持当前模型', added: trio, switched: false },
+    { name: '三个新模型 + 向导里切到第一个', added: trio, switched: true },
+  ]
+  for (const item of cases) {
+    const ev: Ev[] = []
+    const catalog: { list: readonly { provider: string; id: string; name: string }[] } = {
+      list: [{ provider: 'deepseek', id: 'deepseek-chat', name: 'deepseek-chat' }],
+    }
+    // 只给加 key 的接缝（没有登录行），动作行 0 就是「添加模型提供方」。
+    const channel = makeChannel({
+      listModels: async () => catalog.list,
+      providerSetup: () => ({}),
+    })
+    const s = await openWizard(ev, {
+      step: 0,
+      channel,
+      // 向导写好 profile：目录多出这批模型；「切过去」时由向导自己调 switchModel，
+      // live 路由随之变（桩 channel 的 switchModel 只记账，这里手动跟上）。
+      addProvider: async () => {
+        catalog.list = [...catalog.list, ...item.added]
+        if (item.switched) {
+          const first = item.added[0]!
+          await channel.switchModel(first.provider, first.id)
+          channel.provider = first.provider
+          channel.model = first.id
+        }
+        return 'added'
+      },
+    })
+    await settled(() => s.screen().includes('❯ 添加模型提供方'))
+    s.send('\r')
+    const wizardSwitches = item.switched ? 1 : 0
+    const expectedDefault = item.switched ? item.added[0]!.name : 'deepseek-chat'
+    check(`J13a ${item.name}：引导只报结果，默认是向导定下的那个（${expectedDefault}）`,
+      await settled(() => s.screen().includes(`已接入 mock 的 ${item.added.length} 个模型；默认模型：${expectedDefault}`)),
+      s.screen())
+    check(`J13b ${item.name}：引导自己不调 switchModel（只有向导的 ${wizardSwitches} 次）`,
+      channel.calls.filter(call => call.startsWith('switchModel:')).length === wizardSwitches,
+      JSON.stringify(channel.calls))
+    check(`J13c ${item.name}：不进接入层（启用哪些已在向导里问过）`,
+      !s.screen().includes('接入哪些') && !s.screen().includes('哪个设为默认模型'), s.screen())
+    s.close()
+  }
 }
 
 if (failures === 0) console.log(`\nverify-onboarding-wizard: ${checks} checks, all passed`)

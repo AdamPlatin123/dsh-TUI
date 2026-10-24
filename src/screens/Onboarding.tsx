@@ -66,9 +66,10 @@ type ConnState =
 /**
  * 第一步的三层：动作列表 → 选账号登录 → 接入模型（内联模态层）。
  *
- * `adopt` 只在"登录/写 key 之后真的有新模型、且不止一个"时出现——一个模型
- * 不问（直接设为默认），一个都没有也不问。三分支的判定在
- * `components/onboardingProviderPlan` 里，是纯函数。
+ * `adopt` 只在"订阅登录之后真的有新模型、且不止一个"时出现——一个模型
+ * 不问（直接设为默认），一个都没有也不问；加 key 的启用与切换由 `/provider`
+ * 向导自己问，这里只报结果。三分支的判定在 `components/onboardingProviderPlan`
+ * 里，是纯函数。
  */
 type AccessPhase = 'actions' | 'signin' | 'adopt'
 type AccessZone = 'models' | 'default'
@@ -156,7 +157,8 @@ function hintKeyFor(step: OnboardingStep, phase: AccessPhase, onLast: boolean): 
  * 的 key 流程都要用共享问答面板（设备码、授权 URL、密钥输入），而那套面板
  * 归 Chat 的 `questionStore`。面板挂起时本屏会被卸载、回答后重挂，所以进度
  * 落在 `src/onboardingDraft.ts`（模块级，不是 React state）——挂载时读回，
- * 动作回来时按"动作前的目录基线"做差分，再按 0/1/N 决定是否问默认模型。
+ * 动作回来时按"动作前的目录基线"做差分：订阅登录按 0/1/N 决定是否问默认模型，
+ * 加 key 只报结果（向导已经问过）。
  */
 export function Onboarding({
   channel,
@@ -438,7 +440,7 @@ export function Onboarding({
   }, [accessActionIds, oauth])
 
   /**
-   * 动作结束之后的唯一收口：读回动作前的目录基线 → 差分 → 0/1/N 决策。
+   * 动作结束之后的唯一收口：读回动作前的目录基线 → 差分 → 0/1/N 决策（加 key 只报结果）。
    * 前提是 draft 里已经有 `completed`（动作真的跑完了），并且本实例还在挂；
    * `pending`/`completed` 同时清空，保证重挂、订阅回调、Promise 回调三条路
    * 径加起来只结算一次。
@@ -484,6 +486,20 @@ export function Onboarding({
       const text = label === ''
         ? t('onboarding-access-added-none')
         : t('onboarding-access-added-none-for', { provider: label })
+      setNotice(text)
+      writeOnboardingDraft({ baseline: [], notice: text })
+      return
+    }
+    if (completion.kind === 'add-provider') {
+      // 加 key 跑的是 `/provider` 向导：启用哪些模型（模型多选）、要不要切过去
+      // （provider-q-switch），向导自己已经问过并落了盘。这里只报结果——再走
+      // auto / 接入层，会推翻用户在向导里选的「保持当前模型」，还把同一批模型再问一遍。
+      const live = models.find(model => model.provider === channel.provider && model.id === channel.model)
+      const text = t('onboarding-access-added-provider', {
+        provider: label,
+        n: plan.added.length,
+        model: live?.name ?? channel.model,
+      })
       setNotice(text)
       writeOnboardingDraft({ baseline: [], notice: text })
       return
@@ -1293,7 +1309,7 @@ function AccessStatus({
 }
 
 /**
- * 接入层：登录/写 key 之后新出现的模型，"要不要接入、哪个当默认"。
+ * 接入层：订阅登录之后新出现的模型，"要不要接入、哪个当默认"。
  *
  * 只有 N>1 才会走到这里（0 不问、1 直接落默认）。模型区每行可勾选，末尾
  * 一行是"确认"哨兵；默认区只列勾中的模型，Enter 就是落点。Esc 退一层，
