@@ -1,53 +1,50 @@
 # Accounts and models in first-run onboarding (Onboarding v2 design)
 
-Status: design settled; implementation on `feat/onboarding-provider-setup` (base `a40c305a`).
-Related: the first wizard (#1255), the `/provider` wizard, `dsh-auth` subscription sign-in,
-`/settings` credential writes.
+Related: #1646 (this design), the first wizard (#1255), the `/provider` wizard, `dsh-auth`
+subscription sign-in, `/settings` credential writes.
 
 This document answers one question: **how should the first-run guide get "which models can this
-machine use" configured**, instead of pushing the user at an environment variable. Every claim
-below has a code landing point; line numbers are from `a40c305a` and should be re-found by symbol
-after the change.
+machine use" configured**, instead of pushing the user at an environment variable. Code landing
+points are named by module and symbol; search by name.
 
 ## 1. The problem
 
-### 1.1 Today (v1)
+### 1.1 Step 1 in v1
 
-`ONBOARDING_STEPS = ['apikey', 'look', 'model', 'keys']` (`src/components/onboardingModel.ts:14`).
-The first step, `ApiKeyStep` (`src/screens/Onboarding.tsx:619`), is a **read-only check page**:
+The first entry of `ONBOARDING_STEPS` used to be `apikey`, rendered by `ApiKeyStep`
+(`src/screens/Onboarding.tsx`), a **read-only check page**:
 
-- `channel.describeCredential('DEEPSEEK_API_KEY')` reports presence only (`:127`);
-- `channel.balanceInfo()` runs one real connectivity check (`:131`);
-- when the key is missing it prints two hints (`:650-653`): `DEEPSEEK_API_KEY=sk-…` (POSIX
-  shape with a PowerShell aside) and `~/.deepseek/config.json { "apiKey": … }`;
-- on the keyboard, Enter only means "check again" (`:418-421`).
+- `channel.describeCredential('DEEPSEEK_API_KEY')` reports presence only;
+- `channel.balanceInfo()` runs one real connectivity check;
+- when the key is missing it prints two hints: `DEEPSEEK_API_KEY=sk-…` (POSIX shape with a
+  PowerShell aside) and `~/.deepseek/config.json { "apiKey": … }`;
+- on the keyboard, Enter only means "check again".
 
 So the user cannot configure anything on that page. Every real configuration surface lives
 elsewhere:
 
-| Entry point | What it can do | Evidence |
+| Entry point | What it can do | Landing point |
 | --- | --- | --- |
-| `/provider` | add/edit/delete provider routes, type an API key, subscription OAuth (when `ctx.dshAuth` is mounted) | `src/dsh-adapter/providerWizard.ts:153`, `:205-214`, `:1010` |
-| `/auth login <provider>` | subscription OAuth (including the Host's `deepseek-account`) | `src/dsh-adapter/oauth/index.ts:267`, `oauth/service.ts:96-140` |
-| `/login` | status plus a pointer ("Manage DSH credentials with /provider…") | `src/screens/Chat.tsx:3842`, `src/i18n.ts:692` |
-| `/settings` | only the **web-search** secret field is writable (its default ref happens to be `DEEPSEEK_API_KEY`) | `src/dsh-adapter/channel/settings-host.ts:83-92` |
+| `/provider` | add/edit/delete provider routes, type an API key, subscription OAuth (when `ctx.dshAuth` is mounted) | `runProviderWizard`, `runOAuthWizard` in `src/dsh-adapter/providerWizard.ts` |
+| `/auth login <provider>` | subscription OAuth (including the Host's `deepseek-account`) | `src/dsh-adapter/oauth/` |
+| `/login` | status plus a pointer ("Manage DSH credentials with /provider…") | Chat's `login` command |
+| `/settings` | only the **web-search** secret field is writable (its default ref happens to be `DEEPSEEK_API_KEY`) | `src/dsh-adapter/channel/settings-host.ts` |
 
 ### 1.2 Concrete defects
 
 1. **Read-only vs expectation**: the first screen of a fresh install only reports "not
    configured" and offers no action, which reads as "you cannot configure it here".
-2. **One hint is wrong**: nothing in DSH reads `~/.deepseek/config.json`. The real store on
-   0.2.1-rc.2 is `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) plus
-   environment variables; upstream's *Configure models* guide hands key writing to the web
-   Models page. The path is equally absent from the 0.1.7-rc.1 / 0.2.0-rc.2 `dsh-llm-deepseek`
-   packages.
+2. **One hint is wrong**: nothing in DSH reads `~/.deepseek/config.json`. The real store is
+   `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) plus environment variables;
+   upstream's documentation hands key writing to the web Models page. The path is equally absent
+   from `dsh-llm-deepseek`.
 3. **The env-var hint is POSIX-shaped**: on Windows the durable answer is a user-level
-   environment variable (exactly what the one-click bundle writes,
-   `scripts/make-installer-bundle.mjs:151-165`), and `~` is not expanded by cmd/PowerShell.
+   environment variable (exactly what the one-click bundle writes, see
+   `scripts/make-installer-bundle.mjs`), and `~` is not expanded by cmd/PowerShell.
 4. **Post-login content is dropped**: the `dsh-auth` catalog is **credential-gated** —
    `CredentialGatedAdapter.listModels()` returns `[]` for a provider with no stored credential
-   (`src/dsh-adapter/oauth/index.ts:139-163`). "Signed in" and "these models appear in the
-   catalog" are therefore one observable state change, and the guide should catch it; v1 does not.
+   (`src/dsh-adapter/oauth/index.ts`). "Signed in" and "these models appear in the catalog" are
+   therefore one observable state change, and the guide should catch it; v1 does not.
 5. **No default model comes out of it**: after signing in or adding a key the user is still on
    the read-only page and must pick a default again in step 3 or `/model`.
 
@@ -55,14 +52,13 @@ elsewhere:
 
 - A missing key does **not** hide the wizard: DSH resolves the key per request (`resolveAuth`),
   model discovery swallows `MISSING_CREDENTIAL` into an empty catalog, and `agents.create` never
-  touches credentials, so `channel.startupFailure`
-  (`src/dsh-adapter/channel/core/compose.ts:944`) does not fire for a missing key and the wizard
-  opens as usual (the repo's own installed-profile probe dismisses it with `Esc 跳过引导` on an
-  isolated HOME: `scripts/verify-installed-startup.mjs:174-182`).
+  touches credentials, so `channel.startupFailure` does not fire for a missing key and the wizard
+  opens as usual (the repo's own installed-profile probe, `scripts/verify-installed-startup.mjs`,
+  dismisses it with `Esc 跳过引导` on an isolated HOME).
 - No platform branch gates onboarding:
   `onboardingOnBoot = dshBoot && noResume && shouldOfferOnboarding()`
-  (`src/dsh-adapter/plugin.ts:2370`), and `shouldOfferOnboarding` only reads
-  `~/.dsh-tui/onboarding.json` (`src/onboardingPrefs.ts:120`).
+  (`src/dsh-adapter/plugin.ts`), and `shouldOfferOnboarding` only reads
+  `~/.dsh-tui/onboarding.json` (`src/onboardingPrefs.ts`).
 - The wizard still earns its place: it is the only place that aligns **language/theme + default
   model/effort/workspace + shortcuts** in one pass.
 
@@ -74,12 +70,13 @@ elsewhere:
   configuration and re-check happen inside the guide; stop pushing `DEEPSEEK_API_KEY`.
 - G2 Catch what a subscription sign-in produced: nothing new → no question; exactly one model →
   auto-default; several → ask which to adopt and which becomes the default. A key route's
-  enablement and switch are asked by the `/provider` wizard itself; the guide only reports (see 3.5).
+  enablement and switch are asked by the `/provider` wizard itself (with several models it lists
+  each one for the user to pick, or keeps the current model); the guide only reports (see 3.5).
 - G3 Keep step 3's default model consistent with the adoption result (no second picking pass).
 - G4 Hints must be true and cross-platform (drop `~/.deepseek/config.json`, give a runnable
   Windows form).
 - G5 Add no UI→adapter **value** import and no new port method (reuse `providerSetup()`,
-  `oauthProviderStatuses()`, `listModels()`, `switchModel()`).
+  `oauthProviderStatuses()`, `listModels()`, `switchModel()`, `notifications`).
 
 **Non-goals**
 
@@ -88,8 +85,7 @@ elsewhere:
 - N2 The DSH account domain stays Host-owned (PKCE, callback, token store).
 - N3 No low-level editing inside the guide (e.g. `cordis.patch.yml`).
 - N4 The four-step skeleton and the accounting contract ("Esc skips without recording; only
-  finishing records") stay as they are (`src/screens/Onboarding.tsx:465-473`,
-  `src/onboardingPrefs.ts:97-109`).
+  finishing records") stay as they are (`finish` in `Onboarding`, `src/onboardingPrefs.ts`).
 
 ## 3. Architecture
 
@@ -103,22 +99,24 @@ src/screens/Onboarding.tsx        ← screen: state machine + rendering + keyboa
 src/components/onboardingProviderPlan.ts   ← pure: catalog diff, 0/1/N decision, candidate order
 src/onboardingDraft.ts            ← module store: memory across question-panel takeovers
 src/screens/Chat.tsx              ← seam owner: questionStore.ask / provider action callbacks / refresh
-src/dsh-adapter/providerWizard.ts ← existing values: runProviderWizard, runOAuthLogin (semantics untouched)
+src/dsh-adapter/providerWizard.ts ← existing values: runProviderWizard, runOAuthLogin
 src/dsh-adapter/oauth/index.ts    ← existing values: dsh-auth service and its gated catalog (untouched)
 ```
 
-**Why the action callbacks live in Chat, not in Onboarding**: Chat already owns `questionStore`
-(`Chat.tsx:3309`), the two existing value imports (`Chat.tsx:47`) and the "refresh
-models/providers/completion after `/provider`" tail (`Chat.tsx:3317-3331`). Putting them there
-reuses all of it with **no new boundary exception**; Onboarding receives two callback props.
+**Why the action callbacks live in Chat, not in Onboarding**: Chat already owns `questionStore`,
+the existing value import from `providerWizard.js` and the "refresh models/providers/completion
+after `/provider`" tail. Putting them there reuses all of it with **no new boundary exception**;
+the `/provider` command and the guide's "Add a model provider" share one `runProviderSetup` (one
+set of deps, one catalog tail), and Onboarding receives two callback props.
 
 **Why progress lives in a module store**: question and approval panels share one interrupt lane
 with full-screen surfaces — while a panel is pending the screen is unmounted and **remounted**
-afterwards (`Chat.tsx:6283-6294`; `screenOpen` includes `onboardingOpen`). If the access flow uses
-the panel (API-key entry, OAuth device codes / authorize URLs), the wizard's React state is lost
-during the takeover. `src/onboardingDraft.ts` therefore stores the current step, focus, the
-pre-action catalog baseline, the pending provider/models, and one notice line; it is read on
-mount, written on change, and cleared on finish/skip.
+afterwards (Chat's `interruptPanel && screenOpen` branch; `screenOpen` includes
+`onboardingOpen`). The access flow uses the panel (API-key entry, OAuth device codes / authorize
+URLs), so the wizard's React state is lost during the takeover. `src/onboardingDraft.ts` therefore
+stores the current step, focus (row and action id), the pre-action catalog baseline, the action in
+flight, its completion, and one notice line; it is read on mount, written on change, and cleared
+on finish/skip. It is in-process only and never serialized.
 
 ### 3.2 State machine (step 1)
 
@@ -128,7 +126,7 @@ mount, written on change, and cleared on finish/skip.
             └──────┬──────┘
                    ▼
             ┌─────────────┐   action ❯ Sign in to a subscription (providers, signed-in or not)
-            │   ready     │   action   Add a model provider (API key) → the /provider add flow
+            │   ready     │   action   Add a model provider (API key) → the /provider wizard
             │ (action row)│   action   Check again / Skip this step (= next step)
             └──┬───┬───┬──┘
                │   │   └────── check again ──────▶ checking
@@ -137,8 +135,8 @@ mount, written on change, and cleared on finish/skip.
         ┌──────────┴──┐   in flight: `pending` stays set; a mid-run remount restores progress and does **not** settle
         │  in-flight  │
         └──────┬──────┘
-               ▼   the action ends: write `draft.completed` (cancelled/failed carry their status too)
-        ┌─────────────┐
+               ▼   the action ends: write `draft.completed` (added / changed / cancelled / failed,
+        ┌─────────────┐   plus the newest notification the flow raised meanwhile)
         │  completed  │
         └──────┬──────┘
                ▼   settle: by the mounted instance; the subscription delivers a late completion to it
@@ -156,24 +154,30 @@ the access sub-flow, Esc is consumed by the panel/inline layer and returns to `r
 
 **A. Subscription sign-in (OAuth)**
 
-1. First frame reads `channel.oauthProviderStatuses()` (`undefined` when `dsh-auth` is not
-   mounted → the action row is disabled with a reason instead of pretending to work).
+1. The first frame reads `channel.oauthProviderStatuses()`. When `dsh-auth` is not mounted
+   (`undefined` or empty) the sign-in row is **not drawn** rather than pretending to work; likewise
+   "Add a model provider" is not drawn without `providerSetup()`.
 2. Enter on a row calls Chat's `onProviderSignIn(provider)` →
-   `runOAuthLogin(deps, oauth, provider)` (`src/dsh-adapter/providerWizard.ts:995`) → the panel
-   drives device codes / authorize URLs / the browser (`openInBrowser`; its win32 branch already
-   handles cmd's `&` quoting, `src/dsh-adapter/oauth/opener.ts:21-38`).
+   `runOAuthLogin(deps, oauth, provider)` → the panel drives device codes / authorize URLs / the
+   browser (`openInBrowser` in `src/dsh-adapter/oauth/opener.ts`; its win32 branch already handles
+   cmd's `&` quoting). An already signed-in account offers re-login / sign out / cancel.
 3. The login writes dsh-auth's own credential file; the **next `listModels()`** already shows
    that provider's models (`CredentialGatedAdapter` re-reads the credential per call).
-4. After the remount, the `adopting` phase diffs (3.4).
+4. Settling diffs the catalog (3.4).
 
-**B. API key (the `/provider` add flow)**
+**B. API key (the `/provider` wizard)**
 
-1. The action row calls Chat's `onProviderAddProvider()` → `runProviderWizard(...)`, exactly
-   like `/provider`.
+1. The action row calls Chat's `runProviderSetup()` → `runProviderWizard(...)`, exactly like
+   `/provider`.
 2. The wizard asks route/endpoint/protocol/key/model multi-select itself and **writes the
-   credential first, then the profile, rolling back on failure**
-   (`providerWizard.ts:380-410`). Its model multi-select *is* the "add?" question for key routes.
-3. On return the guide only reports (how many models were added, which model is the default): the
+   credential first, then the profile, rolling back on failure**. Its model multi-select *is* the
+   "add?" question for key routes.
+3. After the write the wizard asks "Switch to which model from the new provider?": every enabled
+   model is listed, followed by "Keep the current model" (its description names the current
+   model). With several models the user names the default explicitly instead of always getting the
+   first one. Enabling a built-in catalog whole (no model ticked) asks nothing and points at
+   `/model` instead.
+4. Back in the guide it only reports (how many models were added, which model is the default): the
    wizard already asked what to enable and whether to switch, and wrote the answers, so the guide
    does not enter `adopting` or touch the default (see 3.5).
 
@@ -214,147 +218,140 @@ export function planModelAdoption(input: {
 ### 3.5 What "adopt" actually persists (honesty decision)
 
 This is easy to turn into a fake button, which the repo explicitly rejects (see the key-card
-comment in `onboardingModel.ts:34-37`). The three paths persist different things, so the copy must
+comment in `onboardingModel.ts`). The three paths persist different things, so the copy must
 match:
 
 | Path | What is persisted | Copy in the guide |
 | --- | --- | --- |
-| OAuth sign-in | the provider credential (the plugin's own store); models are **usable as soon as you are signed in** (gated catalog) | "These models are available now — pick one as the default" |
-| `/provider` key route | the route profile (including the selected `models`) + the credential ref | "Wrote N models — pick one as the default" |
-| Default model | `channel.switchModel(provider, id)` → `~/.dsh-tui/model.json` (`src/dsh-adapter/channel/model-switch.ts`) | "Default model: X" |
+| OAuth sign-in | the provider credential (the plugin's own store); models are **usable as soon as you are signed in** (gated catalog) | one: "Adopted X; default model set to Y"; several: the adoption layer "X brought in N models" |
+| `/provider` key route | the route profile (including the selected `models`) + the credential ref; the model picked on the switch question | "Added N models from X; default model: Y" |
+| Default model | `channel.switchModel(provider, id)` → `~/.dsh-tui/model.json` (`src/dsh-adapter/channel/model-switch.ts`) | "Default model: Y" |
 
 So the "add?" question becomes:
-- key routes: answered by `/provider`'s own model multi-select (real persistence) — the guide
-  does not ask twice;
-- OAuth: **no pretend enable list**; the question is "Adopt <provider>'s N models and pick a
-  default?", where N>1 first multi-selects (which ones enter the default candidates) and then
-  single-selects the default; with exactly one, nothing is asked and it is defaulted directly.
+- key routes: answered by `/provider`'s own model multi-select and switch question (real
+  persistence) — the guide does not ask twice;
+- OAuth: **no pretend enable list**; with N>1 it first multi-selects (which ones enter the default
+  candidates) and then single-selects the default; with exactly one, nothing is asked and it is
+  defaulted directly.
+
+A sign-out, a route edit or a route delete can also come out of these two actions (picking a
+signed-in account on the sign-in row, "Edit" in `/provider`). They are not adds, so settling
+reports the flow's own line ("Signed out of …", "Deleted …") instead of "no new models".
 
 ### 3.6 Relationship to step 3 (model / effort / workspace)
 
-- After step 1 adopts, step 3 marks the newly adopted provider as "new" and preselects the model
-  that just became the default.
-- If the user skips adoption, step 3 keeps v1 behaviour (full catalog, empty-catalog hint); the
-  empty hint now points at `/provider` **and** `/auth`.
+- Settling makes step 3 re-read models and providers (`catalogNonce`), and the default model is
+  persisted by `switchModel`, so the current model step 3 shows is the one step 1 settled — no
+  second picking pass.
+- Step 3 itself is unchanged: the same full catalog, and an empty catalog points at `/provider`.
 
 ## 4. Failure, rollback, idempotence
 
+- **Failure causes stay visible**: both flows report causes only through `channel.notify`
+  (write failed, sign-in failed, invalid route id, OAuth unmounted, …), and the full-screen guide
+  covers the notification bar. The runner records the id of the last notification before
+  `start()` and, when the action ends, writes the newest one after it into `completed.notice`;
+  settling shows "That configuration did not complete: <cause>", and the generic copy only when no
+  new notification arrived. A notification that was already there before the run does not count.
 - **Sign-in fails/cancels**: `runOAuthLogin` already normalizes `UserQuestionError` to
-  `'cancelled'` and everything else to `'failed'` with a notification
-  (`providerWizard.ts:1056-1070`). The guide only consumes the result; `adopting` with zero new
-  models degrades to `none`.
+  `'cancelled'` and everything else to `'failed'` with a notification. Cancel/failure reads no
+  catalog and returns to the action layer.
 - **Credential writes**: the guide never writes credentials itself; `/provider`'s rollback
-  semantics (credential first, profile second, restore the old key when the profile write fails;
-  `providerWizard.ts:380-410`) are preserved untouched.
+  semantics (credential first, profile second, restore the old key when the profile write fails)
+  are preserved untouched.
 - **Repeated adoption**: the baseline lives in the draft, so a remount keeps the same baseline
   and the same batch is never asked about twice.
-- **Action id (review fix)**: `pending` carries a monotonic id. Closing the guide does not cancel
-  the provider flow, so a leftover promise can finish after the user reopened `/setup` and started
-  a NEW action; writing its `completed` unconditionally would overwrite that action's `pending` and
-  make the guide settle the abandoned run while the live one loses its result. The completion is
-  written only when `draft.pending.id` is our own (see §7.2).
-- **Settle ordering (review fix)**: `pending` covers the WHOLE run and `completed` is written only
-  when the action ends; settling requires `completed`. The question panel can close *between* two
-  questions (model discovery and the profile write happen there), so the guide remounts while the
-  catalog has not changed — settling then would read the old catalog and drop the result. The
-  runner writes `completed` even when it has been unmounted (skipped if the guide was closed), and
-  the mounted instance is notified through `subscribeOnboardingDraft`; mount, subscription and the
-  promise callback together settle exactly once (`completed` is cleared synchronously first).
-- **Panel takeover**: the wizard unmounts while a panel is up, so the draft write must happen
-  **before** starting the action (baseline + intent), or the context is lost.
+- **Action ownership**: `runProviderAction` registers ownership **before** reading the baseline
+  (`await channel.listModels()`); `finish()`, unmounting and starting a new action all void it.
+  When the catalog comes back ownership is checked first, and a voided action neither writes the
+  draft nor calls `start()` — otherwise a late read would resurrect a cleared draft and finish a
+  sign-in for a user who already left.
+- **Action id**: `pending` carries a monotonic id. Closing the guide does not cancel the provider
+  flow, so a leftover promise can finish after the user reopened `/setup` and started a NEW action;
+  writing its `completed` unconditionally would overwrite that action's `pending`. The completion
+  is written only when `draft.pending.id` is our own.
+- **Settle ordering**: `pending` covers the WHOLE run and `completed` is written only when the
+  action ends; settling requires `completed`. The question panel can close *between* two questions
+  (model discovery and the profile write happen there), so the guide remounts while the catalog
+  has not changed — settling then would read the old catalog and drop the result. The runner
+  writes `completed` even when it has been unmounted (skipped if the guide was closed), and the
+  mounted instance is notified through `subscribeOnboardingDraft`; an unmounted instance never
+  settles. Mount, subscription and the promise callback together settle exactly once (`completed`
+  is cleared synchronously first).
+- **Refresh after settling**: settling and the default write both re-read credentials / sign-in
+  state / connectivity, so a provider just signed in no longer reads "not signed in"; a late
+  `switchModel` after the guide closed changes no state and leaves no notice for the next
+  `/setup`.
 - **Write failure**: a false `switchModel` reports the same
   `onboarding-model-switch-failed` message rather than failing silently.
 
 ## 5. Keyboard, mouse, Esc
 
 - Step 1's action rows are `ListItem`s (existing hover/click contract): ↑/↓ move focus, Enter
-  triggers.
+  triggers. The list grows asynchronously ("check again / skip" first, "sign in / add key" once
+  the status read lands), so focus is tracked and restored by **action id**, not by index.
 - The inline adoption layer (N branch) is the guide's own modal layer, and the two keys do one job
   each: **`Space` selects** (in the model zone it toggles the focused row; in the default zone it
   marks the focused row as the default) and **`Enter` confirms** (the model zone confirms this
   batch and moves to the default pick; the default zone writes the marked row as the default
   model). `↑`/`↓` only move the focus and never move the mark, `Tab` switches zone, `Esc` pops one
   layer. Mark and focus are drawn separately (✓ = selected, ❯ = focused), so "Enter applies the ✓
-  row" is readable — isomorphic to the existing workspace modal (`Onboarding.tsx:262-296`).
-- A mouse click and `Space` share one toggle function: un-ticking the marked default hands the mark
-  to the first still-selected model (an earlier revision only did this on the keyboard path, so the
-  default zone could end up with no tick at all).
-- Global Esc still skips the guide; `Ctrl+C` is synonymous (`Onboarding.tsx:300-305`).
+  row" is readable — isomorphic to the existing workspace modal.
+- Both zones are windowed with `listWindow`: there can be dozens of models, and the focused row
+  must stay inside the viewport, or Space/Enter become blind actions.
+- A mouse click and `Space` share one toggle function (`toggleAdoptSelection`): un-ticking the
+  marked default hands the mark to the first still-selected model.
+- Global Esc still skips the guide; `Ctrl+C` is synonymous.
 - The bottom hint line follows the current sub-state instead of one hard-coded sentence.
 
 ## 6. Gate and contract impact
 
 - **No port change**: no new `ChannelUi` method → `src/adapter/channel/ui-policy.ts`,
   `scripts/verify-adapter-ports.*` and `verify-adapter-effect-class.*` stay as they are.
-- **No new boundary exception**: Onboarding imports no value from `src/dsh-adapter/`; Chat's
-  existing import line (`Chat.tsx:47`) gains no symbol.
+- **No new boundary exception**: Onboarding has only `import type` from `src/dsh-adapter/`;
+  Chat's `providerWizard.js` import line only gains `type ProviderWizardOutcome`.
+  `ProviderWizardDeps` gains an optional `currentModel` (the switch question's "Keep the current
+  model" row names it).
 - **i18n**: new keys need both zh and en and a literal reference in `src/` or `scripts/`
   (`scripts/verify-i18n.ts` dead-key/completeness checks); no new `DYNAMIC_PREFIXES`.
-- **Regressions**: `scripts/verify-onboarding-wizard.tsx` (component contract) and
-  `scripts/verify-launchpad-onboarding-chat.tsx` (Chat integration: `/setup`, Esc accounting,
-  model/effort/workspace) must stay green; the latter's fake channel has no
-  `oauthProviderStatuses`, so every new read goes through optional chaining.
+- **Regressions**: see section 7; the fake channel in
+  `scripts/verify-launchpad-onboarding-chat.tsx` has no `oauthProviderStatuses`, so new reads of
+  optional seams go through optional chaining.
 
-## 7. Test plan
+## 7. Tests
 
-1. New `scripts/verify-onboarding-provider-plan.ts` (pure, no React): the three branches,
-   idempotent repeated diffs, `defaultPick` preferring the live route, provider filtering.
-2. Extend `scripts/verify-onboarding-wizard.tsx` (fake channel + fake sign-in callback):
-   - with no key, step 1 renders action rows and no longer shows `~/.deepseek/config.json`;
-   - one new model → automatic `switchModel`, no question;
-   - three new models → the inline multi-select appears, preselection is right, confirming
-     switches to the chosen model;
-   - nothing new → notice only, no `switchModel`;
-   - `onProviderSignIn` receives the right provider;
-   - the draft keeps step/focus across an unmount-remount.
-3. `node --import tsx/esm scripts/verify-i18n.ts`: completeness, placeholders, dead keys.
-4. `node --import tsx/esm scripts/verify-launchpad-onboarding-chat.tsx`: Chat integration intact.
+1. `scripts/verify-onboarding-provider-plan.ts` (pure, no React): the three branches, idempotent
+   repeated diffs, `defaultPick` preferring the live route, provider filtering.
+2. `scripts/verify-onboarding-wizard.tsx` (real Ink + headless xterm, fake channel + fake action
+   callbacks):
+   - action rows follow the seams, and the fallback no longer mentions `~/.deepseek/config.json`;
+   - the 0/1/N branches, the Space/Enter split, the mark hand-over;
+   - the draft: step and focus survive an unmount-remount, no early settle during a panel
+     takeover, a late completion settles exactly once, and an old run never overwrites a new one;
+   - adding a key only reports and never overrides the wizard's choice (J13);
+   - failure causes and sign-out/delete results are visible inside the guide (J14/J15);
+   - after closing, a late catalog read starts no sign-in and writes no draft, and with two
+     blocked catalog reads the old run is voided (J16/J17);
+   - at 80×24 with 30 new models, the focused row of both adoption zones stays in the viewport (J18).
+3. `scripts/verify-provider-wizard.mjs`: the switch question lists every enabled model and ends
+   with "Keep the current model", and picking the second switches to the second (3b).
+4. `scripts/verify-i18n.ts` and `scripts/verify-launchpad-onboarding-chat.tsx` (Chat
+   integration: `/setup`, Esc accounting, model/effort/workspace).
 
-### 7.1 Actual results (2026-10-20, after syncing `origin/main` `5e0146bc`)
+`verify-i18n` runs in the `verify:build` gate chain; the other scripts are registered in
+`scripts/run-ci-group.mjs`.
 
-Sync: the 44 upstream commits (a40c305a → 5e0146bc) **touched none of** `Onboarding.tsx` /
-`onboardingModel.ts` / `providerWizard.ts` / `oauth/`; `git stash pop` applied without conflicts and
-`ProviderWizardOutcome` is unchanged.
-
-
-| Gate | Result |
-| --- | --- |
-| `scripts/verify-onboarding-wizard.tsx` | **88/88 passed** (new J1–J12: action rows, fallback copy, the 0/1/N branches, Space/Enter split, draft across a remount, panel-takeover settle, mark hand-over) |
-| `scripts/verify-onboarding-provider-plan.ts` (new) | **21/21 passed** |
-| `scripts/verify-i18n.ts` | passed (2077 entries, no dead keys, placeholders consistent) |
-| `scripts/verify-guide.mjs` | passed (20 guide files byte-identical) |
-| `scripts/verify-adapter-boundary.ts` | passed (no new UI→adapter value import) |
-| `tsc -p tsconfig.json --noEmit` | zero errors in the changed files (the remaining errors come from this machine's node_modules drifting behind main's dependency line) |
-| `scripts/verify-launchpad-onboarding-chat.tsx` | 5/235 this run; the **stable failure set is Z8×2 / Z9 / Z10×2** (clipboard/image — no clipboard toolchain here), identical to the clean `origin/main` baseline. A separate `N4a/N4b` pair (launchpad command-palette mouse click) is a timing flake: **the clean baseline hit it twice in a row (7/235)** too, so it is unrelated to this change. The A/B points `NPM_CONFIG_REGISTRY` at an unreachable address to suppress the "update available" condition |
-
-### 7.2 Review fixes (found in self-review, already fixed)
-
-| Problem | Symptom | Fix |
-| --- | --- | --- |
-| The action list grows asynchronously, focus tracked by index | The first frame only has "check again / skip"; once the status read lands, "sign in / add key" are prepended → focus silently moves from "check again" to "sign in" and one Enter hits the wrong action | Focus is tracked by **action id**; a fresh mount pins no row (`accessFocusId = undefined` = first row) and only a remount restores the draft's index |
-| The unmounted instance settles first | The panel opens → the screen unmounts → the in-flight promise resolves and the dead instance clears `pending`, so the remounted instance finds nothing to settle → models from the sign-in are never adopted | `settlePendingAction` checks `aliveRef` first and leaves `pending` untouched when unmounted; J9 pins it with a never-resolving sign-in + unmount + remount |
-| `cancelled`/`failed` also ran the settle | A failure surfaced as "no new models", hiding the real reason | Both only clear `pending` and return to the action layer; a failure gets its own local echo (the notification bar is invisible under a full-screen guide) |
-| Status was not refreshed after settling | A provider just signed in still read "not signed in" | Both settle and the default write bump `checkNonce`, re-reading credentials / sign-in state / connectivity |
-| Late resolution wrote a stale draft | The user left the guide, then `switchModel` resolved and left a stale notice for the next `/setup` | The landing check consults `aliveRef` first; after unmount nothing is written |
-| Chat's hooks sat after an early return | When a panel was pending Chat returned early, skipping the three new `useCallback`s → the hook count changed when the panel closed (React errors) | The three callbacks moved up next to `switchModelRecorded`, above every early return |
-
-| Settled before the action finished (review, major) | The panel closes between two questions → the guide remounts with an unchanged catalog → an early settle reads the old catalog, and the action finishes with nobody left to adopt its models (**a successful sign-in is never adopted**) | `pending` covers the whole run and `completed` is written only at the end; settling requires it; `subscribeOnboardingDraft` delivers a late completion to the mounted instance. J9 was rewritten for this order (not finished → no settle; finished → exactly one settle) and J11 covers "already completed at mount" |
-| Focus restored by index (review) | `runProviderAction` stored a row number; on the remount's first frame `oauth` is not back yet, so the list is shorter and the number points at another action | the draft gained `focusId` and restores by action id; an id that is not in the list yet falls back to row 0 and snaps back once the list grows |
-| Mouse toggle did not hand over the mark (review) | the keyboard `Space` path had the hand-over, `onToggle` did not | both paths share `toggleAdoptSelection` |
-| The English manual missed the `←/→` exception (review) | the Chinese one listed step 1's access sub-layer, the English one only the slider and a drilled-in model list | `docs/interaction.en.md` synced and `guide/` rebuilt |
-
-| A stale run overwrote the new pending (review, minor) | close the guide → reopen `/setup` and start a new action → the old run's late callback wrote its completion over the new pending | `OnboardingPendingAction` gained a monotonic `id`; the completion is written only for that id; J12 covers close → new run → old run late → the new run still settles |
 ## 8. Compatibility and migration
 
-- **`ONBOARDING_VERSION` is not bumped**: per `src/onboardingPrefs.ts:34-39` only an **added
-  step** bumps it. This is a capability upgrade inside the same steps (step 1 changes meaning,
-  step 3 gains preselection), and re-running the guide on every existing install is not wanted.
-  If "accounts and models" later becomes a fifth step, bump then.
+- **`ONBOARDING_VERSION` is not bumped**: per `src/onboardingPrefs.ts` only an **added step**
+  bumps it. This is a capability upgrade inside the same steps (step 1 changes meaning), and
+  re-running the guide on every existing install is not wanted. If "accounts and models" later
+  becomes a fifth step, bump then.
 - **DSH version line**: `describeCredential` / `providerSetup()` / `oauthProviderStatuses()` are
   existing optional seams (absent ⇒ degrade), so on a 0.1.x host step 1 falls back to
   "status + environment-variable hints" without crashing.
-- **Hosts without `dsh-auth`**: the sign-in row is disabled with the reason; the `/provider` key
-  path still works.
+- **Hosts without `dsh-auth`**: the sign-in row is not drawn; the `/provider` key path still
+  works.
 
 ## 9. Windows-specific fixes (mirrors 1.2)
 
@@ -374,7 +371,7 @@ Sync: the 44 upstream commits (a40c305a → 5e0146bc) **touched none of** `Onboa
     `@deepseek-ai/dsh-api-settings-controller`); the TUI's `/provider` uses the same seam via
     `providerSetup().writeCredential(ref, value)`.
   - **No owner restriction**: `isReservedCredentialRef` only guards **plugin-registered settings
-    sections** and the generic `/settings` secret write (`settings-host.ts:213`); `/provider`'s write
+    sections** and the generic `/settings` secret write (`settings-host.ts`); `/provider`'s write
     never passes through it, so `writeCredential('DEEPSEEK_API_KEY', key)` is architecturally valid.
   - **No schema to lean on**: DSH's `apiKeyEnv` field only declares `role: 'credential-ref'` (a name);
     the web page hard-codes its key input, and settings descriptors carry no generic "secret field"

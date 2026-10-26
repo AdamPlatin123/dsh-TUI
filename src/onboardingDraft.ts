@@ -47,15 +47,24 @@ export interface OnboardingPendingAction {
 }
 
 /**
- * How an in-flight access action ended. The neutral three-way vocabulary the
- * guide consumes; the adapter's richer outcome union is mapped onto it at the
- * write site.
+ * How an in-flight access action ended. The neutral vocabulary the guide
+ * consumes; the adapter's richer outcome union is mapped onto it at the write
+ * site. `changed` is a flow that finished without adding anything by intent
+ * (a sign-out, a route edit or delete), so the guide must not report it as an
+ * add that brought nothing.
  */
-export type OnboardingCompletionStatus = 'completed' | 'cancelled' | 'failed'
+export type OnboardingCompletionStatus = 'added' | 'changed' | 'cancelled' | 'failed'
 
 /** The finished action's result, written by whoever ran it. */
 export interface OnboardingCompletion extends OnboardingPendingAction {
   readonly status: OnboardingCompletionStatus
+  /**
+   * The flow's newest notification since the action started — a failure's
+   * cause, or what a change did. The flows report only through the
+   * notification bar, which the full-screen guide covers, so the guide
+   * repeats it.
+   */
+  readonly notice?: string | undefined
 }
 
 /** Mechanical guide progress (see the module doc for why it exists). */

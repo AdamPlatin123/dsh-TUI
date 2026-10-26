@@ -46,8 +46,9 @@ dsh-tui
    none → just a report; exactly one → it becomes the default; several → an inline adoption layer
    (`Space` **selects**, `Enter` **confirms**: in the model zone Space toggles what to adopt and Enter
    moves on to "which becomes the default"; in the default zone Space marks a row and Enter writes it;
-   `↑`/`↓` move, `Tab` switches zone). Adding a provider leaves which models to enable and whether to
-   switch to the `/provider` wizard itself; back in the guide it only reports the result, without
+   `↑`/`↓` move, `Tab` switches zone). Adding a provider leaves which models to enable and which of
+   them to switch to (or keeping the current model) to the `/provider` wizard itself; back in the guide
+   it only reports the result, without
    asking again or changing the default the wizard settled. When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
    **real** manual paths — the `refs:` block of `$DSH_HOME/.credentials.yaml` and PowerShell's
    user-level variable / cmd's `setx` — instead of a config file nothing reads.

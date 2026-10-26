@@ -244,9 +244,10 @@ export function Onboarding({
    * 模型提供方"插到最前面。焦点因此按**动作 id**记，不按下标——否则用户的焦点
    * 会在清单变长的瞬间从"重新检查"静默变成"登录"，一次回车就点错东西。
    */
-  const providerSetupHost = React.useMemo(() => channel.providerSetup?.(), [channel])
   const canSignIn = onProviderSignIn !== undefined && (oauth?.length ?? 0) > 0
-  const canConfigure = onProviderAddProvider !== undefined && providerSetupHost !== undefined
+  // 每次渲染现读：channel 对象本身不换，按它 memo 会把"挂载时还没解析出来"的
+  // 结果冻结在整个引导期间。
+  const canConfigure = onProviderAddProvider !== undefined && channel.providerSetup?.() !== undefined
   const accessActionIds = React.useMemo<readonly AccessActionId[]>(() => [
     ...(canSignIn ? ['signin' as const] : []),
     ...(canConfigure ? ['add' as const] : []),
@@ -457,12 +458,14 @@ export function Onboarding({
     // 的那个实例才是该结算的人。这里先退出去，把 draft 原样留给它。
     if (!aliveRef.current) return
     writeOnboardingDraft({ pending: undefined, completed: undefined })
-    // 取消/失败没有目录变化，只留一句本地回声：具体原因由 Chat 的流程自己报
-    // （`/provider` 的 notify 也在那里），而整屏盖着时外面的通知条看不见。
+    // 取消/失败没有目录变化。具体原因只在流程自己的通知里，而整屏盖着时外面的
+    // 通知条看不见，所以跑动作的实例把那一句带进了 completion，这里接着显示。
     if (completion.status === 'cancelled' || completion.status === 'failed') {
       const text = completion.status === 'cancelled'
         ? t('onboarding-access-cancelled')
-        : t('onboarding-access-action-failed')
+        : completion.notice === undefined
+          ? t('onboarding-access-action-failed')
+          : t('onboarding-access-action-failed-reason', { reason: completion.notice })
       setAccessPhase('actions')
       setNotice(text)
       writeOnboardingDraft({ baseline: [], notice: text })
@@ -482,6 +485,14 @@ export function Onboarding({
         : {}),
     })
     const label = providerLabel(plan.provider ?? (completion.kind === 'sign-in' ? completion.provider : undefined))
+    // 登出、改路由、删路由本来就不为新增：报流程自己的那一句（已登出 / 已删除…），
+    // 不拿"没有新增模型"去描述它。目录与状态在上面已经重读。
+    if (completion.status === 'changed' && plan.added.length === 0) {
+      const text = completion.notice ?? t('onboarding-access-changed')
+      setNotice(text)
+      writeOnboardingDraft({ baseline: [], notice: text })
+      return
+    }
     if (plan.decision === 'none') {
       const text = label === ''
         ? t('onboarding-access-added-none')
@@ -558,12 +569,17 @@ export function Onboarding({
       completed: undefined,
       notice: undefined,
     })
+    // 流程的反馈（失败原因、登出/删除的结果）只走通知条：记下开跑前最后一条的
+    // id，结束后取它之后最新的那一条带进 completion。
+    const noticeMark = channel.notifications.at(-1)?.id
     const outcome = await start().catch(() => 'failed' as ProviderWizardOutcome)
-    const status = outcome === 'cancelled' ? 'cancelled' : outcome === 'failed' ? 'failed' : 'completed'
+    const status = outcome === 'cancelled' || outcome === 'failed' || outcome === 'added' ? outcome : 'changed'
+    const latest = channel.notifications.at(-1)
+    const notice = latest !== undefined && (noticeMark === undefined || latest.id > noticeMark) ? latest.text : undefined
     // 只有"桌上还是我这一单"才写完成态：引导已经被关掉（draft 清空），或者
     // 用户又发起了一单（pending.id 变了）时，这一单的结果没有归属，丢掉。
     if (readOnboardingDraft()?.pending?.id === pending.id) {
-      writeOnboardingDraft({ completed: { ...pending, status }, pending: undefined })
+      writeOnboardingDraft({ completed: { ...pending, status, notice }, pending: undefined })
     }
     // 在挂的实例（可能是重挂出来的那一个）在这里结算；这里的实例已经卸载时，
     // settle 会早退，由订阅到 completed 的在挂实例接手。

@@ -19,7 +19,9 @@
  *   J. 第一步的接入（v2）：动作行按接缝出现、缺接缝时给平台正确的兜底文案
  *      （不再有 `~/.deepseek/config.json`）；登录后按 0/1/N 三分支处理新模型
  *      （0 不问、1 直接设默认、多个进内联接入层选默认）；加 key 由 /provider
- *      向导自己问启用与切换，引导只报结果（J13）；draft 让步骤在卸载-重挂后保持。
+ *      向导自己问启用与切换，引导只报结果（J13）；draft 让步骤在卸载-重挂后保持；
+ *      流程的失败原因与登出/删除结果在整屏引导里看得见（J14/J15）；迟到的目录
+ *      读取不复活已作废的动作、接入层在 80×24 下窗口化（J16–J18）。
  *
  * 运行：node --import tsx/esm scripts/verify-onboarding-wizard.tsx
  */
@@ -126,9 +128,16 @@ function makeChannel(over: Record<string, unknown> = {}) {
       calls.push('switchWorkspace:' + target.cwd)
       return true
     },
+    /** 通知条（最新在末尾）：流程的失败原因与结果只从这里出。 */
+    notifications: [] as { id: number; text: string }[],
     ...over,
   }
   return channel
+}
+
+/** 模拟流程发一条通知（id 单调，与真 channel 一致）。 */
+function notifyOn(channel: { notifications: { id: number; text: string }[] }, text: string): void {
+  channel.notifications.push({ id: (channel.notifications.at(-1)?.id ?? 0) + 1, text })
 }
 
 interface Ev { type: string; value?: unknown }
@@ -871,6 +880,7 @@ const oauthRow = (provider: string) => ({
   catalog.list = [{ provider: 'xai', id: 'grok-4', name: 'Grok 4' }]
   const second = await openWizard(ev, { keepDraft: true, channel: remountChannel })
   await settled(() => second.screen().includes('登录订阅账号'))
+  // 固定窗:探针 断言"动作未完成时什么都不结算"：没有可轮询的完成条件。
   await new Promise(resolve => setTimeout(resolve, 120))
   check('J9b 动作未完成时重挂不结算（不拿旧目录做决定）',
     !second.channel.calls.some(call => call.startsWith('switchModel:')),
@@ -883,6 +893,7 @@ const oauthRow = (provider: string) => ({
     await settled(() => draft.readOnboardingDraft()?.pending === undefined
       && draft.readOnboardingDraft()?.completed === undefined),
     JSON.stringify(draft.readOnboardingDraft()))
+  // 固定窗:探针 断言"不会再结算第二次"：没有可轮询的完成条件。
   await new Promise(resolve => setTimeout(resolve, 60))
   check('J9e 只结算一次',
     second.channel.calls.filter(call => call === 'switchModel:xai/grok-4').length === 1,
@@ -902,7 +913,7 @@ const oauthRow = (provider: string) => ({
     focusId: 'signin',
     baseline: [],
     pending: undefined,
-    completed: { kind: 'sign-in', provider: 'xai', status: 'completed' },
+    completed: { id: 1, kind: 'sign-in', provider: 'xai', status: 'added' },
   })
   const catalog = {
     list: [{ provider: 'xai', id: 'grok-4', name: 'Grok 4' }],
@@ -977,6 +988,7 @@ const oauthRow = (provider: string) => ({
   // provider 过滤掉，测的就不是"两单交错"而是"登录了别的号"。
   catalog.list = [{ provider: 'openai-codex', id: 'gpt-5.6', name: 'GPT-5.6' }]
   releaseA?.() // A 迟到：不能把 B 的 pending 顶掉，也不能替 B 结算
+  // 固定窗:探针 断言"迟到的 A 什么都不做"：没有可轮询的完成条件。
   await new Promise(resolve => setTimeout(resolve, 120))
   check('J12b A 的迟到完成被丢弃：B 的 pending 原样还在，也没有完成态',
     draft.readOnboardingDraft()?.pending?.id === draftB?.pending?.id
@@ -993,9 +1005,9 @@ const oauthRow = (provider: string) => ({
 }
 
 {
-  // J13：「添加模型提供方」跑的是 /provider 向导——启用哪些模型（模型多选）、要不要
-  // 切过去（provider-q-switch），向导自己已经问过。回到引导只报结果：再跑 auto /
-  // 接入层，会推翻用户在向导里选的「保持当前模型」，并把同一批模型再问一遍。
+  // J13：「添加模型提供方」跑的是 /provider 向导——启用哪些模型（模型多选）、切到
+  // 其中哪一个还是保持当前（provider-q-switch），向导自己已经问过。回到引导只报结果：
+  // 再跑 auto / 接入层，会推翻用户在向导里的选择，并把同一批模型再问一遍。
   const trio = [
     { provider: 'mock', id: 'a', name: 'Alpha' },
     { provider: 'mock', id: 'b', name: 'Beta' },
@@ -1004,7 +1016,7 @@ const oauthRow = (provider: string) => ({
   const cases = [
     { name: '一个新模型 + 保持当前模型', added: [{ provider: 'mock', id: 'solo', name: 'Solo' }], switched: false },
     { name: '三个新模型 + 保持当前模型', added: trio, switched: false },
-    { name: '三个新模型 + 向导里切到第一个', added: trio, switched: true },
+    { name: '三个新模型 + 向导里切到 Beta', added: trio, switched: true },
   ]
   for (const item of cases) {
     const ev: Ev[] = []
@@ -1024,10 +1036,10 @@ const oauthRow = (provider: string) => ({
       addProvider: async () => {
         catalog.list = [...catalog.list, ...item.added]
         if (item.switched) {
-          const first = item.added[0]!
-          await channel.switchModel(first.provider, first.id)
-          channel.provider = first.provider
-          channel.model = first.id
+          const picked = item.added[1]!
+          await channel.switchModel(picked.provider, picked.id)
+          channel.provider = picked.provider
+          channel.model = picked.id
         }
         return 'added'
       },
@@ -1035,7 +1047,7 @@ const oauthRow = (provider: string) => ({
     await settled(() => s.screen().includes('❯ 添加模型提供方'))
     s.send('\r')
     const wizardSwitches = item.switched ? 1 : 0
-    const expectedDefault = item.switched ? item.added[0]!.name : 'deepseek-chat'
+    const expectedDefault = item.switched ? item.added[1]!.name : 'deepseek-chat'
     check(`J13a ${item.name}：引导只报结果，默认是向导定下的那个（${expectedDefault}）`,
       await settled(() => s.screen().includes(`已接入 mock 的 ${item.added.length} 个模型；默认模型：${expectedDefault}`)),
       s.screen())
@@ -1046,6 +1058,197 @@ const oauthRow = (provider: string) => ({
       !s.screen().includes('接入哪些') && !s.screen().includes('哪个设为默认模型'), s.screen())
     s.close()
   }
+}
+
+{
+  // J14：引导整屏盖住了通知条，而流程的失败原因只走 notify——结算时把开跑之后
+  // 最新的那一条并进引导自己的提示行；开跑前就在的旧通知不算这一单的原因。
+  const channel = makeChannel({ providerSetup: () => ({}) })
+  const s = await openWizard([], {
+    step: 0,
+    channel,
+    addProvider: async () => {
+      notifyOn(channel, '写入 provider 配置失败：settings-rejected')
+      return 'failed'
+    },
+  })
+  await settled(() => s.screen().includes('❯ 添加模型提供方'))
+  s.send('\r')
+  check('J14a 失败时引导显示流程自己的原因',
+    await settled(() => s.screen().includes('这次配置没有完成：写入 provider 配置失败：settings-rejected')),
+    s.screen())
+  s.close()
+  const stale = makeChannel({ providerSetup: () => ({}) })
+  notifyOn(stale, '开跑前的旧通知')
+  const t2 = await openWizard([], { step: 0, channel: stale, addProvider: async () => 'failed' })
+  await settled(() => t2.screen().includes('❯ 添加模型提供方'))
+  t2.send('\r')
+  check('J14b 流程没发新通知 → 通用失败文案，不拿旧通知冒充原因',
+    await settled(() => t2.screen().includes('这次配置没有完成，可以重试或换一种方式'))
+    && !t2.screen().includes('开跑前的旧通知'), t2.screen())
+  t2.close()
+}
+{
+  // J15：登出、删路由不是"新增"——报流程自己的那一句，不说"没有新增可用模型"。
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    oauthProviderStatuses: async () => [oauthRow('xai')],
+    providerSetup: () => ({ oauth: {} }),
+  })
+  const s = await openWizard([], {
+    step: 0,
+    channel,
+    signIn: async () => {
+      notifyOn(channel, '已退出 xai 的登录')
+      return 'signed-out'
+    },
+  })
+  await settled(() => s.screen().includes('登录订阅账号'))
+  s.send('\r')
+  await settled(() => s.screen().includes('选择要登录的账号'))
+  s.send('\r')
+  check('J15a 登出 → 报"已退出"，不报"没有新增"',
+    await settled(() => s.screen().includes('已退出 xai 的登录'))
+    && !s.screen().includes('没有新增可用模型'), s.screen())
+  s.close()
+  const removed = makeChannel({ providerSetup: () => ({}) })
+  const t2 = await openWizard([], { step: 0, channel: removed, addProvider: async () => 'deleted' })
+  await settled(() => t2.screen().includes('❯ 添加模型提供方'))
+  t2.send('\r')
+  check('J15b 删路由且流程没发通知 → 通用"设置已更新"，不报"没有新增"',
+    await settled(() => t2.screen().includes('设置已更新，没有新增模型'))
+    && !t2.screen().includes('没有新增可用模型'), t2.screen())
+  t2.close()
+}
+{
+  // J16（PR #1647 review R1）：动作里的目录读取还没回来就 Esc 关掉引导。迟到的
+  // 读取不得再 start()（替已经离开的用户跑登录），也不得把已清空的 draft 写回来。
+  const draft = await import('../src/onboardingDraft.js')
+  // 只卡"动作里的那一次"：挂载期的读取会随 checkNonce/catalogNonce 重跑，按调用
+  // 次数判会把挂载读错认成动作读。
+  let deferNext = false
+  let release: (() => void) | undefined
+  const signInCalls: string[] = []
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    oauthProviderStatuses: async () => [oauthRow('xai')],
+    providerSetup: () => ({ oauth: {} }),
+    listModels: async () => {
+      if (!deferNext) return MODELS
+      deferNext = false
+      return new Promise(resolve => { release = () => resolve(MODELS) })
+    },
+  })
+  const ev: Ev[] = []
+  const s = await openWizard(ev, {
+    step: 0,
+    channel,
+    signIn: async (provider) => { signInCalls.push(provider); return 'added' },
+  })
+  await settled(() => s.screen().includes('登录订阅账号'))
+  await s.send('\r')
+  await settled(() => s.screen().includes('选择要登录的账号'))
+  deferNext = true
+  await s.send('\r')
+  check('J16 前置：动作里的目录读取被卡住', await settled(() => release !== undefined))
+  await s.send('\u001b')
+  check('J16 前置：Esc 退出引导且 draft 已清空',
+    await settled(() => ev.some(e => e.type === 'close' && e.value === 'skipped'))
+    && draft.readOnboardingDraft() === undefined, JSON.stringify(ev))
+  s.close()
+  release?.()
+  // 固定窗:探针 断言"迟到的读取什么都不做"：没有可轮询的完成条件。
+  await new Promise(resolve => setTimeout(resolve, 120))
+  check('J16a 关屏后迟到的目录读取不调登录', signInCalls.length === 0, JSON.stringify(signInCalls))
+  check('J16b 也不把 draft 写回来', draft.readOnboardingDraft() === undefined,
+    JSON.stringify(draft.readOnboardingDraft()))
+}
+{
+  // J17（review R1）：两单的目录读取都卡住，先放旧单——它的归属已被新单作废，
+  // 不得 start()、不得写 draft 归属；新单照常启动。
+  const draft = await import('../src/onboardingDraft.js')
+  let deferNext = false
+  const releases: (() => void)[] = []
+  const signInCalls: string[] = []
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    oauthProviderStatuses: async () => [oauthRow('xai')],
+    providerSetup: () => ({ oauth: {} }),
+    listModels: async () => {
+      if (!deferNext) return MODELS
+      deferNext = false
+      return new Promise(resolve => { releases.push(() => resolve(MODELS)) })
+    },
+  })
+  const s = await openWizard([], {
+    step: 0,
+    channel,
+    signIn: async (provider) => { signInCalls.push(provider); return 'added' },
+  })
+  await settled(() => s.screen().includes('登录订阅账号'))
+  for (let round = 1; round <= 2; round++) {
+    await s.send('\r')
+    await settled(() => s.screen().includes('选择要登录的账号'))
+    deferNext = true
+    await s.send('\r')
+    await settled(() => releases.length === round)
+  }
+  check('J17 前置：两单都已发起且目录读取被卡住', releases.length === 2, String(releases.length))
+  releases[0]?.()
+  // 固定窗:探针 断言"旧单迟到什么都不做"：没有可轮询的完成条件。
+  await new Promise(resolve => setTimeout(resolve, 120))
+  check('J17a 旧单迟到不启动登录', signInCalls.length === 0, JSON.stringify(signInCalls))
+  check('J17b 旧单迟到不写 draft 归属（pending / completed 都没有）',
+    draft.readOnboardingDraft()?.pending === undefined && draft.readOnboardingDraft()?.completed === undefined,
+    JSON.stringify(draft.readOnboardingDraft()))
+  releases[1]?.()
+  check('J17c 新单照常启动登录（恰好一次）',
+    await settled(() => signInCalls.length === 1), JSON.stringify(signInCalls))
+  s.close()
+  draft.clearOnboardingDraft()
+}
+{
+  // J18（review R2）：80×24 下 30 个新模型，接入层两个区都要窗口化——焦点行落在
+  // 视口外时 Space/Enter 仍作用在它上面，等于盲操作。
+  const many = Array.from({ length: 30 }, (_, index) => ({
+    provider: 'xai',
+    id: `model-${index}`,
+    name: `xai-model-${String(index).padStart(2, '0')}`,
+  }))
+  let catalog: readonly { provider: string; id: string; name: string }[] = MODELS
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    oauthProviderStatuses: async () => [oauthRow('xai')],
+    providerSetup: () => ({ oauth: {} }),
+    listModels: async () => catalog,
+  })
+  const s = await openWizard([], {
+    step: 0,
+    columns: 80,
+    rows: 24,
+    channel,
+    signIn: async () => { catalog = [...MODELS, ...many]; return 'added' },
+  })
+  await settled(() => s.screen().includes('登录订阅账号'))
+  await s.send('\r')
+  await settled(() => s.screen().includes('选择要登录的账号'))
+  await s.send('\r')
+  check('J18 前置：30 个新模型进了接入层', await settled(() => s.screen().includes('xai-model-00')), s.screen())
+  // 只看焦点行不够：整帧溢出时 xterm 滚到底，末行焦点照样"可见"，但页头已经被
+  // 顶出屏幕。窗口化的不变量是两者同屏——整帧装得下，焦点行也在里面。
+  const fitsWithFocus = (): boolean => s.screen().includes('❯ xai-model-29') && s.screen().includes('第 1 / 4 步')
+  for (let index = 0; index < 29; index++) await s.send('\u001b[B')
+  check('J18a 模型区焦点行（第 30 个）在 80×24 视口内，页头也还在',
+    await settled(fitsWithFocus), s.screen())
+  await s.send('\t')
+  for (let index = 0; index < 29; index++) await s.send('\u001b[B')
+  check('J18b 默认区焦点行同样在视口内，页头也还在',
+    await settled(fitsWithFocus), s.screen())
+  await s.send(' ')
+  await s.send('\r')
+  check('J18c 落点就是屏幕上那一行',
+    await settled(() => s.channel.calls.includes('switchModel:xai/model-29')), JSON.stringify(s.channel.calls))
+  s.close()
 }
 
 if (failures === 0) console.log(`\nverify-onboarding-wizard: ${checks} checks, all passed`)

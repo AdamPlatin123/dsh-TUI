@@ -876,12 +876,14 @@ export function Chat({
       notify: (text, options) => channel.notify(text, options),
       pushLocal: (title, lines) => channel.pushLocal(title, lines),
     }, oauth, provider).then((outcome) => {
-      if (outcome === 'added') refreshProviderCatalog()
+      // A sign-out empties that provider's catalog just as a sign-in fills it.
+      if (outcome === 'added' || outcome === 'signed-out') refreshProviderCatalog()
       return outcome
     }).catch(() => 'failed' as ProviderWizardOutcome)
   }, [channel, questionStore, refreshProviderCatalog])
 
-  const onboardingAddProvider = React.useCallback((): Promise<ProviderWizardOutcome> => {
+  /** `/provider` and the guide's add-provider action: one wizard wiring, one catalog tail. */
+  const runProviderSetup = React.useCallback((): Promise<ProviderWizardOutcome> => {
     const host = channel.providerSetup()
     if (host === undefined) {
       channel.notify(t('provider-unavailable'), { color: 'warning', timeoutMs: 8000 })
@@ -894,7 +896,13 @@ export function Chat({
       pushLocal: (title, lines) => channel.pushLocal(title, lines),
       working: () => channel.working,
       switchModel: (provider, model) => switchModelRecorded(provider, model),
+      currentModel: () => channel.model,
     }).then((outcome) => {
+      // A catalog-changing outcome invalidates every cached model surface so
+      // `/model` (picker + completion) reflects it immediately; the wizard's
+      // live-switch branch already dropped the completion cache via
+      // switchModelRecorded — this covers keep-current, add, edit, delete and
+      // OAuth login/logout.
       if (outcome === 'added' || outcome === 'updated' || outcome === 'deleted' || outcome === 'signed-out') {
         refreshProviderCatalog()
       }
@@ -3467,36 +3475,10 @@ export function Chat({
         // Interactive add-provider wizard (/provider): drives the shared
         // question panel, persists profile + key via the channel's settings/
         // credentials seams. No picker state — AskUserQuestionPanel renders it.
+        // The wizard notifies on every handled failure, and the runner never
+        // rejects.
         setHelpOpen(false)
-        const host = channel.providerSetup()
-        if (!host) {
-          channel.notify(t('provider-unavailable'), { color: 'warning', timeoutMs: 8000 })
-          return true
-        }
-        void runProviderWizard({
-          host,
-          ask: (request, options) => questionStore.ask(request, options),
-          notify: (text, options) => channel.notify(text, options),
-          pushLocal: (title, lines) => channel.pushLocal(title, lines),
-          working: () => channel.working,
-          switchModel: (provider, model) => switchModelRecorded(provider, model),
-        }).then((outcome) => {
-          // A catalog-changing outcome invalidates every cached model surface
-          // so `/model` (picker + completion) reflects it immediately — the
-          // same consistency the picker's per-open refetch provides, minus
-          // the stale flash on the next open. The wizard's live-switch branch
-          // already dropped the completion cache via switchModelRecorded;
-          // this covers keep-current, add, edit, delete and OAuth login/logout.
-          if (outcome === 'added' || outcome === 'updated'
-            || outcome === 'deleted' || outcome === 'signed-out') {
-            channel.invalidateModelCompletion()
-            void channel.listModels().then(setModels)
-            void channel.listProviders().then(setProviderInfos).catch(() => setProviderInfos([]))
-          }
-        }).catch(() => {
-          // The wizard notifies on every handled failure; this only swallows
-          // an unexpected reject so it never surfaces as an unhandled promise.
-        })
+        void runProviderSetup()
         return true
       }
       case 'thinking':
@@ -6543,7 +6525,7 @@ export function Chat({
         onClose={closeOnboarding}
         onApplyLang={applyLang}
         onProviderSignIn={onboardingSignIn}
-        onProviderAddProvider={onboardingAddProvider}
+        onProviderAddProvider={runProviderSetup}
         onRunCommand={(name) => {
           // 与落地页的 onAction 同一条规则：打开整屏界面的命令要先把向导收掉。
           // 走 `closeOnboarding('skipped')` 而不是直接置 false——用户是去试命令、

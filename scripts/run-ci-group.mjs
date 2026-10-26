@@ -63,7 +63,8 @@ const GROUPS = {
 // 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
 // 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
 // （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）；
-// J 组是第一步 v2 的账号与模型接入（动作行、0/1/N 默认决策、draft 重挂）。
+// J 组是第一步 v2 的账号与模型接入（动作行、0/1/N 默认决策、draft 重挂、
+// 失败原因与登出结果可见、迟到的目录读取作废、接入层窗口化）。
     ['verify-onboarding-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-onboarding-wizard.tsx']],
 // 接入判定是纯函数：0/1/N 三分支、差分幂等、provider 过滤、默认预选与勾选落点。
     ['verify-onboarding-provider-plan', ['node', '--import', 'tsx/esm', 'scripts/verify-onboarding-provider-plan.ts']],
