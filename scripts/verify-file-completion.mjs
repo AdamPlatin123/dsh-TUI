@@ -161,7 +161,7 @@ try {
       literalTilde.some(entry => entry.path === './~/literal.txt'),
       `./~/ must reach a real directory named "~":\n${literalTilde.map(entry => entry.path).join('\n')}`,
     )
-    console.log('PASS: ./~/ reaches a literal "~" directory (home wins for bare ~/)')
+    console.log('PASS: ./~/ reaches a literal "~" directory')
 
     // `~user/` 不是字面前缀，不许展开。
     await mkdir(join(fixture, '~user'))

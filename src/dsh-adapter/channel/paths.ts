@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { rankFileCandidates, type FileCandidate } from '../../utils/fileSuggestions.js'
 import { expandHomePrefix, homeDir } from '../../utils/paths.js'
 import type { FileSuggestionFs } from './types.js'
@@ -82,9 +82,10 @@ export async function listPathCandidates(fs: FileSuggestionFs, cwd: string, quer
   // A leading literal `~/` (or `~\`) expands against the host home at ANY
   // depth — issue #1706: after picking `~/Downloads/` the next level used to be
   // joined onto the workspace and the menu silently vanished. Drive-letter and
-  // POSIX-absolute prefixes still pass through untouched.
+  // POSIX-absolute prefixes still pass through untouched; `isAbsolute` also
+  // keeps a UNC home (`\\server\share\user`) off the workspace join.
   const homeExpanded = expandHomePrefix(directoryPart)
-  const expanded = homeExpanded.startsWith('/') || /^[A-Za-z]:[\\/]/.test(homeExpanded)
+  const expanded = isAbsolute(homeExpanded) || /^[A-Za-z]:[\\/]/.test(homeExpanded)
     ? homeExpanded
     : join(cwd, homeExpanded || '.')
   try {

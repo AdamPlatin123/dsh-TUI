@@ -402,7 +402,7 @@ console.log('--- C/D: composer render ---')
   const { expandMentions } = await import('../src/dsh-adapter/channel.js')
   const { expandComposerMentions } = await import('../src/dsh-adapter/channel/composer-mentions.js')
   const { expandHomePrefix } = await import('../src/utils/paths.js')
-  // R-4：直接钉住前缀展开本身（间接覆盖不够）——`~/` 与 `~\` 等价、裸 `~` 与
+  // 直接钉住前缀展开本身（间接覆盖不够）——`~/` 与 `~\` 等价、裸 `~` 与
   // `~user/` 不展开、绝对路径原样透传。
   const absoluteInput = '/abs/keep/x'
   check('E0 expandHomePrefix：只展开字面前缀（~/、~\\），裸 ~ / ~user / 绝对路径不动',
@@ -466,9 +466,9 @@ console.log('--- C/D: composer render ---')
         && sent[0].content[0].text === '看一下 @~/Downloads/note.txt'
         && attachedFile(sent[0].content)?.text.startsWith(`<attached-file path="${homeNote}">\nhome note body`) === true),
       sent.length === 1 ? JSON.stringify(sent[0].content) : 'no delivery')
-    // `~\` 前缀与 `~/` 等价；后半段在本机（POSIX）必须用 `/`——POSIX 不把
-    // 反斜杠当分隔符，全反斜杠形态只有在 Windows 上才落到同一个文件。
-    channel.submit('再看 @~\\Downloads/note.txt')
+    // `~\` 前缀与 `~/` 等价；前缀声明了 home 路径之后，后半段的反斜杠也按分隔符
+    // 归一（`expandHomePrefix`），所以全反斜杠形态在任何平台都落到同一个文件。
+    channel.submit('再看 @~\\Downloads\\note.txt')
     check('E2 真实提交：@~\\ 前缀与 @~/ 等价（模型侧同样拿到展开路径）',
       await settled(() => sent.length === 2
         && attachedFile(sent[1].content)?.text.startsWith(`<attached-file path="${homeNote}">`) === true),

@@ -8,8 +8,9 @@
  *   C3 `~/Downloads/sub/`        → 逐级补全到第三层
  *   C4 `~`（无斜杠）              → 与 `~/` 同义
  *   C5 `~\Downloads\`（Windows 分隔符形态）→ 与 `~/Downloads/` 等价
- *   C6 cwd 里真的存在名为 `~` 的目录时：`~/Downloads/` 仍按 home 展开（组长口径：
- *      与 shell 一致）；字面目录要走 `@./~` 形式，不能被这里误当 home。
+ *   C6 cwd 里真的存在名为 `~` 的目录时：`~/Downloads/` 仍按 home 展开（与 shell
+ *      一致）；字面目录要走 `@./~` 形式，不能被这里误当 home。
+ *   C8 （仅 Windows）home 是 UNC 路径时，`~/` 解析到 UNC 本身，不拼到 cwd 下。
  *   A1 `@~/Downloads/note.txt`   → 真附加（不是 missing）
  *   A2 `@~\Downloads\note.txt`   → 同义（Windows 分隔符）
  *   A3 `@~/Downloads/nothere.txt`→ 仍然 missing（不许把“什么都当命中”）
@@ -136,6 +137,27 @@ const ids = async (query, cwd = fixture.cwd) => {
     list.some(path => path.includes('trap.txt')), JSON.stringify(list))
 }
 
+if (process.platform === 'win32') {
+  // UNC 只在 Windows 是绝对路径：home 落在 `\\server\share\…` 时，`~/` 要解析到
+  // 它本身，不能当相对路径拼到 cwd 下（补全与发送侧的 `isAbsolute` 同口径）。
+  const unc = '\\\\fileserver\\home$\\alice'
+  const saved = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME }
+  process.env.USERPROFILE = unc
+  process.env.HOME = unc
+  const resolved = []
+  const recording = { ...fsService, async resolve(path) { resolved.push(path); return { displayPath: path } }, async listDir() { return [] } }
+  try {
+    await listPathCandidates(recording, fixture.cwd, '~/', undefined, 20)
+  } finally {
+    process.env.USERPROFILE = saved.USERPROFILE
+    process.env.HOME = saved.HOME
+  }
+  check('C8 UNC home：`~/` 解析到 UNC 本身，不拼到 cwd 下',
+    resolved.length === 1 && resolved[0].startsWith('\\\\fileserver\\'), JSON.stringify(resolved))
+} else {
+  console.log('skip C8 UNC home（只在 Windows 上有 UNC 绝对路径）')
+}
+
 // ── 附加侧 ────────────────────────────────────────────────────────────────
 const attach = async text => {
   const result = await expandComposerMentions(fsService, fixture.cwd, text)
@@ -164,21 +186,21 @@ const attach = async text => {
     JSON.stringify({ attached: result.attached, missing: result.missing }))
 }
 
-// ── R-1（提交前 review）：模型侧路径必须是展开后的绝对路径 ────────────────
+// ── 模型侧路径必须是展开后的绝对路径（fs 工具不展开 `~`，#1706）─────────────
 {
   const result = await attach('@~/Downloads/note.txt 请读这个')
   const blockText = result.blocks.map(block => block.text ?? '').join('\n')
   const expanded = join(home, 'Downloads', 'note.txt')
-  check('A4 模型侧 `<attached-file path>` 是展开后的绝对路径（R-1）',
+  check('A4 模型侧 `<attached-file path>` 是展开后的绝对路径',
     blockText.includes(`path="${expanded}"`), blockText.slice(0, 200))
-  check('A5 用户可见 attached 仍是原串（R-1 只改模型侧）',
+  check('A5 用户可见 attached 仍是原串（只改模型侧）',
     result.attached.includes('~/Downloads/note.txt'), JSON.stringify(result.attached))
 }
 {
   const result = await attach('@~/Downloads/sub/')
   const blockText = result.blocks.map(block => block.text ?? '').join('\n')
   const expanded = join(home, 'Downloads', 'sub')
-  check('A6 目录型 `@~/…` 的 `<attached-directory path>` 同样展开（R-1）',
+  check('A6 目录型 `@~/…` 的 `<attached-directory path>` 同样展开',
     // 目录尾分隔符随平台：POSIX 为 `/`，Windows 的 join 产出 `\`。
     [expanded, `${expanded}/`, `${expanded}${sep}`].some(path => blockText.includes(`path="${path}"`)),
     blockText.slice(0, 200))
