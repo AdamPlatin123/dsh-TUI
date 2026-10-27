@@ -29,7 +29,7 @@ Fullscreen text selection belongs to its starting pane (chat, sidebar or one dif
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
-| `Ctrl+B` | Side panel, three states: closed → open and focus the right column; open with the chat focused → focus the right column; panel focused → close and return to the chat. Splits only under `fullscreen` at a content width of ≥93 columns; on narrow terminals and in inline mode the key does nothing (`/jobs` & co. keep their full-screen panels — see the user guide §2.8) |
+| `Ctrl+B` | Side panel, three states: closed → open and focus the right column; open with the chat focused → focus the right column; panel focused → close and return to the chat. Splits only under `fullscreen` at a content width of ≥93 columns; on narrow terminals and in inline mode the key does nothing (`/jobs` & co. keep their full-screen panels — see the user guide §2.8); with the panel focused, `↑`/`↓`/`PgUp`/`PgDn` go to the active panel (jobs selects and scrolls, todo scrolls a long goal with `↑`/`↓`) |
 | `Alt+Z` | Zoom the active side panel (the chat column keeps its minimum width); press again to restore |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
@@ -253,6 +253,9 @@ Type `@` at **any position** of the message to open file completion.
 - Keep typing to filter; `Tab`/`Enter` to pick; directories can be entered further.
 - Plain fragments match **fuzzily** — `@ment` matches `src/utils/mentions.ts` (prefix/boundary and short-path boosts).
 - Path-shaped queries (`@src/`, `@./`, `@../`, `@~/`, `@D:\`, or anything containing a separator) read **only that directory** for local completion.
+- `~/` and `~\` expand to home at **any depth** (`@~/a/b/c` names the same directory as `@<home>/a/b/c`); the two spellings are equivalent, and a non-Windows terminal expands `~\` before completing too.
+- `~user/` is **not** expanded (it is a literal path); when the current directory really has a child named `~`, `@~/…` still expands to home (shell semantics) — use `@./~/…` for the literal directory.
+- Completion and the attachment produced on send share the same expansion: a `~/` path the menu can list resolves through the same home path.
 - `Esc` closes only the current `@` token's menu; async refreshes keep your selected candidate.
 - Text files and directory listings are attached as text; PNG, JPEG, WebP, and GIF files are sent as durable Harness image blocks.
 - Reads use the active workspace filesystem, including provider-owned workspaces.

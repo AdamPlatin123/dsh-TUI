@@ -50,7 +50,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **LaTeX math** — `$…$` and `$$…$$` formulas as Unicode text, fractions and limits stacked in display blocks; `mathRendering: image` typesets block and one-row inline formulas as terminal images on graphics terminals.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
-- **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; drag the divider to resize it. All eight built-in panels are enabled by default, and so are plugin panels registered later (`sidePanel.panels: '*'`; untick a row in `/settings` to switch to an explicit list). The header shows each inactive panel's symbol; hover to see its name. Narrow terminals and inline mode keep full-screen panels.
+- **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; drag the divider to resize it. All eight built-in panels are enabled by default, and so are plugin panels registered later (`sidePanel.panels: '*'`; untick a row in `/settings` to switch to an explicit list). The header shows each inactive panel's symbol; hover to see its name. Narrow terminals and inline mode keep full-screen panels. In the `todo` panel a long goal wraps to the panel width with its phase on a separate row; when the content exceeds the viewport, focus the panel and scroll with `↑`/`↓` or the wheel (every todo is reachable too) (the compact goal row above the chat input stays a single truncated line with a hover tooltip).
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata. Title, trajectory-strip and session-state animations update independently of the transcript and pause when idle or unfocused.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block with a measured used count in both hover details.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
@@ -69,6 +69,8 @@ Plugin side panels stay enabled when unrelated settings change. Editing the enab
 
 
 Workspace side-panel counts match the session manager: the current conversation counts; empty logs, subagents, fork ancestors and archived sessions do not. Registered workspaces with no visible conversations remain at zero. Loading and read errors are shown separately; press `r` to refresh.
+
+When a DSH 0.2.1+ Agent moves its session to another directory (the `working_directory` tool or a Git worktree), the status line, Git branch, `@` completion, `!` commands, clicked paths, skill commands and loaded context follow it, including after `/resume`. The session stays registered under the project it started in. Relative paths in cards rendered before a move resolve against the session's current directory when clicked; absolute paths keep their target.
 
 Fullscreen mouse selection stays in the pane where the gesture starts, including chat, sidebar and either diff column. Diagonal, word and line selection copy that pane’s text; soft wraps join independently, source newlines remain, and divider drags only resize.
 
@@ -127,11 +129,11 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.1-rc.2`. This adapter supports its
+The primary compatibility target is DSH `0.2.1-rc.3`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
-On DSH rc.2, `/settings` also selects DeepSeek Search / Fetch APIs and edits their
+On DSH 0.2.1-rc.2 and later, `/settings` also selects DeepSeek Search / Fetch APIs and edits their
 endpoint and result limits, supporting custom Loader entry IDs and a masked API
 key input saved through DSH's credential store. Official Flash model labels show the `1017` release
 marker while retaining the `deepseek-flash` model ID.
@@ -183,7 +185,7 @@ source builds, and troubleshooting, including migration from the former
 
 Automation: `dst -p "task"`, `dst run --json`, `dst session list --json`.
 The independent engine does not load the TUI or inherit its profile/preferences;
-it uses official DSH headless/services (validated on 0.2.0-rc.2 and 0.2.1-rc.2).
+it uses official DSH headless/services (validated on 0.2.0-rc.2, 0.2.1-rc.2 and 0.2.1-rc.3).
 `dst cli --help` lists its commands; `dst dsh <argv...>` forwards native DSH.
 See [Automation CLI](docs/cli.en.md) for protocol, limits, resume restrictions,
 and Node/Python/PowerShell integration examples.
@@ -364,7 +366,7 @@ team record stays in the session and comes back when the bundle is enabled
 again.
 
 If the running DSH does not ship the bundle (`/plugin list` stays silent),
-switch DSH to one of the supported lines first (`0.2.1-rc.2`, `0.2.1-alpha.5`,
+switch DSH to one of the supported lines first (`0.2.1-rc.3`, `0.2.1-rc.2`, `0.2.1-alpha.5`,
 `0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
 run `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<your-dsh-version>`:
 the team packages ship in lockstep with DSH and pin their DSH peers exactly,
@@ -595,7 +597,7 @@ Each bundle may declare one backend, and its handler id must match the declarati
 
 Seam grading and API notes: [Plugin development](docs/plugins.en.md). The organization maintains the listing only; it does not endorse community plugins.
 
-Installing a plugin from inside the TUI: `/plugin install <package | path | git url>`. It goes through the host's profile plugin manager — a pre-install notice, a trust confirmation, cancellable progress, build-script approval and exact-version exemptions. Packages on the first-party feed this package ships (`tui-profile/feed/first-party.json`, pinned per release and decided offline) skip the trust confirmation, and only a spec that names that exact version qualifies: a bare name, a tag or a range is resolved again at install time, so it is confirmed with the person instead. What was confirmed is what gets installed — the run pins the exact `name@version` the inspection read — and a turn that is still running refuses the install (finish it, or `/new`, first). The same actions remain available from the CLI (`dsh plugin --profile dsh-tui …`).
+Installing a plugin from inside the TUI: `/plugin install <package | path | git url>`. It goes through the host's profile plugin manager — a pre-install notice, a trust confirmation, cancellable progress, build-script approval and exact-version exemptions. Packages on the first-party feed this package ships (`tui-profile/feed/first-party.json`, pinned per release and decided offline) skip the trust confirmation, and only a spec that names that exact version qualifies: a bare name, a tag or a range is resolved again at install time, so it is confirmed with the person instead. What was confirmed is what gets installed — the run pins the exact `name@version` the inspection read — and a turn that is still running refuses the install (finish it, or `/new`, first). The same actions remain available from the CLI (`dsh plugin --profile dsh-tui …`). The confirmation lists the permissions the package declares; `Enter` installs **and grants** — the grant is written to `~/.dsh-tui/extension-grants.json` before the install starts, and a failed install rolls that write back. A registry package's declaration cannot be read before it lands, so a `grant` step follows a successful install: `Enter` grants, `Esc` skips (the install stays). Declared permissions this host does not know are skipped and named. On a terminal too short for a permission row, the list folds to a count or the key hint carries the count; the package identity, the notice and the keys stay visible.
 
 A spec names one of three things:
 
@@ -613,9 +615,9 @@ Failed installs show up to six redacted log lines; lines larger than 16 KiB are 
 
 Managing what is installed: `/plugin remove <bundle>`, `/plugin enable <name | row id>` and `/plugin disable <name | row id>`. A bundle is a composition layer and a row is one patch entry, so the two are separate actions, and a bundle name is matched before any row identity. A module name shared by multiple rows requires a specific row ID. **Gate 2 refuses the three ways this app could switch itself off** — removing or disabling the bundle that provides it, the host layer `dsh-base`, or one of its own rows — and says which rule it broke, without calling the service at all; that holds whether or not hot reload is live, which is the path the host's own guard misses. `enable` is never refused by gate 2 (it is the repair action). Every enable and removal asks first; `disable` asks only about a host-layer row. The host does not attest installed package sources, so even an exact feed match requires confirmation before enabling.
 
-These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files), and a removal never deletes your own data: anything left under `~/.dsh-tui` is reported once and left for you to delete.
+These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files). **Grants follow the lifecycle**: `enable` enables and grants the declared permissions, `disable` disables and revokes the permissions that component declared, and `remove` **deletes the component's `grants`/`denies` entries** after the removal — grants are keyed by component id, so leaving them behind lets any later package reusing that id inherit them silently; a reinstall asks again. Backend data directories, storage namespaces and the effect ledger stay, and the residue report names each source by its path. A failed grant write never blocks an install or enable — it is reported instead. Grants are behavioural constraints, not a security boundary.
 
-`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams, Auto review and Session search), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
+`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams, Auto review, Session search and Git worktrees), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
 
 ## Documentation
 
@@ -657,6 +659,8 @@ No sandbox of its own: dsh-TUI uses the active DSH profile's filesystem, shell, 
 **Auto review** (DSH, experimental): `/plugin list` advertises it; after `/plugin enable @deepseek-ai/dsh-experimental-auto-review`, the `auto` preset (shown as "Auto review", tagged `EXP`) appears in `/permission` and its completions live, and disappears when the plugin is removed. It is session-only: the model reviews every tool call before it runs, there is no file sandbox, and each call costs one extra model request; its approval prompts show the localized reason, and a subagent denial reads "Auto review denied; not executed". Picking it in the picker first shows a risk confirmation (`Enter` enables, `Esc` goes back; in fullscreen its Enable / Go back rows are clickable); a typed `/permission auto` switches directly. Once the current session has selected it, the picker skips the confirmation and Shift+Tab stops skipping it.
 
 **Session search** (DSH, experimental): `/plugin list` advertises it; after `/plugin enable @deepseek-ai/dsh-experimental-session-search`, an agent gains five read-only tools (`session_search`, `session_event_search`, `session_trace`, `session_event_trace`, `session_event_read`) over earlier sessions in the same workspace — cross-session access requires an identical `cwd`. The index is in memory and is built on the first search; nothing is written to disk. This app keeps the kernel Minimal preset at its single persistent-shell tool, so Minimal never shows these five tools or their usage guidance.
+
+**Git worktrees** (DSH, experimental): `/plugin list` advertises it; after `/plugin enable @deepseek-ai/dsh-experimental-tool-worktree`, an agent gains `create_worktree`, which creates a new Git branch and a checkout under `.agents/worktrees/<name>` of the current repository (from `HEAD` or a local revision; uncommitted files stay in the source checkout) and moves the session into it — the status line, Git branch and `@` completion follow, while the session stays registered under its project. Its card reads `Worktree("<branch>")` with the checkout path and base revision. Nothing is cleaned up: remove the checkout with `git worktree remove <path>` and the branch separately with `git branch -D <branch>` (the agent leaves with `working_directory`; once the checkout is gone, the next request returns the session to the project). A leftover branch makes a later `create_worktree` with the same name fail. Calling it from inside a worktree nests the new checkout under that worktree. Moving does not change file permissions or already-open terminals. This app hides `create_worktree` from the kernel Minimal preset and the bundled liangshen preset: their persistent shell (liangshen's on macOS and Linux) keeps the directory it started in, so after a move it would still edit the source checkout.
 
 **Upstream auto-retry** (DSH): whenever a session binds (boot, `/model` switch, resume), the TUI seeds a retry policy — 5 attempts, transport-drop-aware failure codes including `STREAM_CLOSED` (a dropped upstream stream) — on **the provider route that session actually uses**, through the official `llm-pi-ai` settings section (the policy the kernel's `llm-retry` plugin executes). Only routes without an explicit `retryPolicy` are seeded — dormant channels are never written — and `upstreamRetry: false` in cordis.yml opts out.
 
