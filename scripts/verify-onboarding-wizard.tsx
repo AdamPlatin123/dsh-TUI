@@ -5,7 +5,7 @@
  *
  *   A. 骨架：四步各自渲染得出内容，头部进度是 `第 N / 4 步`；步骤条只在
  *      够宽够高时画（窄了整条撤，进度改由头部承担，信息不丢）。
- *   B. 第一步（apikey）：凭证只报"有没有"、余额串走 `formatBalance`、失败
+ *   B. 第一步（access）：凭证只报"有没有"、余额串走 `formatBalance`、失败
  *      分类走 `connFailText`；Enter 是"重新检查"（再打一次 describeCredential）。
  *   C. 第二步（look）：两个面板（语言/主题）都在，Tab 在两个面板间切。
  *   D. 第三步（model）：Tab 依次走 模型 → 强度 → 工作区；模型区 Enter 先钻
@@ -18,10 +18,12 @@
  *      `Chat` 的"不记账"与"记账"分支。
  *   J. 第一步的接入（v2）：动作行按接缝出现、缺接缝时给平台正确的兜底文案
  *      （不再有 `~/.deepseek/config.json`）；登录后按 0/1/N 三分支处理新模型
- *      （0 不问、1 直接设默认、多个进内联接入层选默认）；加 key 由 /provider
- *      向导自己问启用与切换，引导只报结果（J13）；draft 让步骤在卸载-重挂后保持；
- *      流程的失败原因与登出/删除结果在整屏引导里看得见（J14/J15）；迟到的目录
- *      读取不复活已作废的动作、接入层在 80×24 下窗口化（J16–J18）。
+ *      （0 不问、1 直接设默认、多个进内联选默认层：单选 + 保持当前模型，不做多选）；
+ *      加 key 由 /provider 向导自己问启用与切换，引导只报结果（J13）；draft 让步骤
+ *      在卸载-重挂后保持；流程的失败原因与登出/删除结果在整屏引导里看得见（J14/J15）；
+ *      迟到的目录读取不复活已作废的动作、选默认层在 80×24 下窗口化（J16–J18）；
+ *      有别的接入时 DeepSeek 专用检查不报失败（J19/J20）；登录行与执行同一接缝、
+ *      晚到的 dsh-auth 不需要重新检查（J21）；失败/取消提示不用成功色（J22）。
  *
  * 运行：node --import tsx/esm scripts/verify-onboarding-wizard.tsx
  */
@@ -648,13 +650,14 @@ const oauthRow = (provider: string) => ({
     await settled(() => asked === 'xai'), asked)
   check('J3b 只有一个新增模型 → 自动设为默认',
     await settled(() => s.channel.calls.includes('switchModel:xai/grok-4')), JSON.stringify(s.channel.calls))
-  check('J3c 一个模型不问接入层，只报结果',
+  check('J3c 一个模型不进选默认层，只报结果',
     await settled(() => s.screen().includes('默认模型设为 Grok 4'))
-    && !s.screen().includes('哪个设为默认模型'), s.screen())
+    && !s.screen().includes('保持当前模型'), s.screen())
   s.close()
 }
 {
-  // J4：三个新增模型 → 内联接入层；勾选可改，默认预选当前路由。
+  // J4（review R1）：三个新增模型 → 内联选默认层。只有单选：登录后这些模型已经
+  // 全部可用，没有可保存的"接入子集"，所以不出现勾选，提示也不报"已接入 N 个"。
   const ev: Ev[] = []
   const catalog: { list: readonly { provider: string; id: string; name: string }[] } = { list: [] }
   const s = await openWizard(ev, {
@@ -681,35 +684,26 @@ const oauthRow = (provider: string) => ({
   s.send('\r')
   await settled(() => s.screen().includes('选择要登录的账号'))
   s.send('\r')
-  check('J4a 多个新增 → 画出接入层（默认全选）',
-    await settled(() => s.screen().includes('接入 3 个可用模型') && s.screen().includes('已选 3 个')), s.screen())
-  await s.send(' ') // 在第一行上取消勾选
-  check('J4b Space 取消勾选后计数跟着变',
-    await settled(() => s.screen().includes('已选 2 个')), s.screen())
-  await s.send(' ') // 再勾回来
-  await settled(() => s.screen().includes('已选 3 个'))
-  s.send('\t') // 换到"哪个设为默认"
-  check('J4c Tab 进入默认区，焦点与标记都落在预选的那一行（不在列表头也是它）',
-    await settled(() => s.screen().includes('哪个设为默认模型') && s.screen().includes('❯ Grok 4  xai ✓')), s.screen())
-  s.send('\u001b[B') // ↓ 只移动焦点（Grok 4 Mini）
-  check('J4d ↓ 只移动焦点，标记（✓）不跟着走',
-    await settled(() => s.screen().includes('❯ Grok 4 Mini  xai')
-      && !s.screen().includes('❯ Grok 4 Mini  xai ✓')
-      && s.screen().includes('  Grok 4  xai ✓')), s.screen())
-  await s.send(' ') // Space = 选中当前行（Grok 4 Mini）
-  check('J4e Space 把标记移到当前行',
-    await settled(() => s.screen().includes('❯ Grok 4 Mini  xai ✓')
-      && !s.screen().includes('  Grok 4  xai ✓')), s.screen())
-  s.send('\u001b[A') // ↑ 焦点回 Grok 4，但不按 Space → 标记仍是 Grok 4 Mini
-  await settled(() => s.screen().includes('❯ Grok 4  xai '))
+  check('J4a 多个新增 → 画出选默认层，末尾有"保持当前模型"',
+    await settled(() => s.screen().includes('接入 3 个可用模型') && s.screen().includes('保持当前模型')), s.screen())
+  check('J4b 没有多选：不出现勾选计数，也没有"接入哪些"',
+    !s.screen().includes('已选') && !s.screen().includes('接入哪些') && !s.screen().includes('Space'), s.screen())
+  check('J4c 焦点落在预选（当前路由 Grok 4，不在列表头也是它）',
+    s.screen().includes('❯ Grok 4  xai') && !s.screen().includes('❯ Grok 4 Mini'), s.screen())
+  await s.send(' ') // Space 在单选层里没有含义：什么都不改
+  await s.send('\u001b[B') // ↓ 到 Grok 4 Mini
+  check('J4d ↓ 移动焦点', await settled(() => s.screen().includes('❯ Grok 4 Mini  xai')), s.screen())
   s.send('\r')
-  check('J4f Enter 确定的是「选中的那一个」（标记优先于焦点）',
-    await settled(() => s.channel.calls.includes('switchModel:xai/grok-4-mini')), JSON.stringify(s.channel.calls))
+  check('J4e Enter 把焦点那一行落成默认（只落一次）',
+    await settled(() => s.channel.calls.includes('switchModel:xai/grok-4-mini'))
+    && s.channel.calls.filter(call => call.startsWith('switchModel:')).length === 1, JSON.stringify(s.channel.calls))
+  check('J4f 提示只说默认模型，不报"已接入 N 个模型"',
+    await settled(() => s.screen().includes('默认模型设为 Grok 4 Mini')) && !s.screen().includes('个模型，默认'),
+    s.screen())
   s.close()
 }
 {
-  // J8：模型区的 Space 与 Enter 分工——Space 只勾选，Enter 才确定（进默认区）；
-  // 一个都没勾时 Enter = 这次不选默认（模型仍然可用），直接收层。
+  // J8：末尾那行"保持当前模型"与 Esc 同义——不调 switchModel，模型照样可用。
   const ev: Ev[] = []
   const catalog: { list: readonly { provider: string; id: string; name: string }[] } = { list: [] }
   const s = await openWizard(ev, {
@@ -733,25 +727,19 @@ const oauthRow = (provider: string) => ({
   await settled(() => s.screen().includes('选择要登录的账号'))
   s.send('\r')
   await settled(() => s.screen().includes('接入 2 个可用模型'))
-  s.send('\r') // Enter（焦点在第 0 行模型上）= 确定这批勾选，而不是勾掉这一行
-  check('J8a 模型区 Enter = 确定（进默认区），不会把当前行勾掉',
-    await settled(() => s.screen().includes('哪个设为默认模型')), s.screen())
-  s.send('\t') // 回模型区
-  await settled(() => s.screen().includes('接入哪些'))
-  await s.send(' ') // Space 勾掉第 0 行（Space 不移动焦点）
-  await s.send('\u001b[B') // ↓ 到第 1 行
-  await s.send(' ') // Space 勾掉第 1 行 → 一个都不剩
-  check('J8b Space 逐个取消后计数归零',
-    await settled(() => s.screen().includes('确认接入（已选 0 个）')), s.screen())
+  check('J8a "保持当前模型"带上当前模型名', s.screen().includes('当前：deepseek-chat'), s.screen())
+  await s.send('\u001b[B')
+  await s.send('\u001b[B') // 两个模型之后就是"保持当前模型"
+  await s.send('\u001b[B') // 再按不越界
+  check('J8b ↓ 走到"保持当前模型"且不越界', await settled(() => s.screen().includes('❯ 保持当前模型')), s.screen())
   s.send('\r')
-  check('J8c 一个都没勾时 Enter = 跳过选默认（不调 switchModel，也不问）',
-    await settled(() => s.screen().includes('没有勾选任何模型'))
+  check('J8c 保持当前模型 = 不调 switchModel，退回动作列表',
+    await settled(() => s.screen().includes('已保持当前模型') && s.screen().includes('重新检查'))
     && !s.channel.calls.some(call => call.startsWith('switchModel:')), JSON.stringify(s.channel.calls))
   s.close()
 }
 {
-  // J10：勾掉"被标记为默认"的那一行时，标记要让给还选着的模型——否则默认区
-  // 会出现"一个 ✓ 都没有、Enter 却落在 picked[0]"的错位。
+  // J10：鼠标与键盘同一个落点——点模型行就把它设为默认，点"保持当前模型"不动默认。
   const ev: Ev[] = []
   const catalog: { list: readonly { provider: string; id: string; name: string }[] } = { list: [] }
   const s = await openWizard(ev, {
@@ -778,15 +766,38 @@ const oauthRow = (provider: string) => ({
   await settled(() => s.screen().includes('选择要登录的账号'))
   s.send('\r')
   await settled(() => s.screen().includes('接入 2 个可用模型'))
-  await s.send(' ') // 勾掉被标记的那一行（Grok 3）
-  await settled(() => s.screen().includes('已选 1 个'))
-  s.send('\r') // 确认 → 默认区
-  check('J10 勾掉预选行后，标记让给还选着的模型（默认区仍有 ✓）',
-    await settled(() => s.screen().includes('哪个设为默认模型') && s.screen().includes('Grok 4  xai ✓')), s.screen())
-  s.send('\r')
-  check('J10b 落点就是那个仍有标记的模型',
+  check('J10a 当前路由不在新增里 → 焦点在第一个新增模型', s.screen().includes('❯ Grok 3  xai'), s.screen())
+  await s.click('Grok 4  xai')
+  check('J10b 点模型行 = 设为默认（与 Enter 同一条路）',
     await settled(() => s.channel.calls.includes('switchModel:xai/grok-4')), JSON.stringify(s.channel.calls))
   s.close()
+  catalog.list = []
+  const kept = await openWizard([], {
+    step: 0,
+    channel: makeChannel({
+      describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+      listModels: async () => catalog.list,
+      oauthProviderStatuses: async () => [oauthRow('xai')],
+      providerSetup: () => ({ oauth: {} }),
+    }),
+    signIn: async () => {
+      catalog.list = [
+        { provider: 'xai', id: 'grok-3', name: 'Grok 3' },
+        { provider: 'xai', id: 'grok-4', name: 'Grok 4' },
+      ]
+      return 'added'
+    },
+  })
+  await settled(() => kept.screen().includes('登录订阅账号'))
+  kept.send('\r')
+  await settled(() => kept.screen().includes('选择要登录的账号'))
+  kept.send('\r')
+  await settled(() => kept.screen().includes('接入 2 个可用模型'))
+  await kept.click('保持当前模型') // 自上而下第一处是那一行（底部提示行在它下面）
+  check('J10c 点"保持当前模型" = 不调 switchModel',
+    await settled(() => kept.screen().includes('已保持当前模型'))
+    && !kept.channel.calls.some(call => call.startsWith('switchModel:')), JSON.stringify(kept.channel.calls))
+  kept.close()
 }
 {
   // J5：登录成功但没有新模型 → 只报结果，不动默认。
@@ -824,12 +835,12 @@ const oauthRow = (provider: string) => ({
     focus: 1,
     baseline: [{ provider: 'a', id: 'b', name: 'c' }],
     pending: { id: 1, kind: 'sign-in', provider: 'a' },
-    notice: 'n',
+    notice: { text: 'n', tone: 'error' },
   })
-  check('J6a 空 → undefined；写后可读回全部字段',
+  check('J6a 空 → undefined；写后可读回全部字段（提示连同语气）',
     empty && written.step === 2 && written.focus === 1
     && written.baseline.length === 1 && written.pending?.provider === 'a'
-    && typeof written.pending?.id === 'number' && written.notice === 'n')
+    && typeof written.pending?.id === 'number' && written.notice?.text === 'n' && written.notice.tone === 'error')
   draft.clearOnboardingDraft()
   check('J6c clear 真的清空', draft.readOnboardingDraft() === undefined)
 }
@@ -1054,8 +1065,8 @@ const oauthRow = (provider: string) => ({
     check(`J13b ${item.name}：引导自己不调 switchModel（只有向导的 ${wizardSwitches} 次）`,
       channel.calls.filter(call => call.startsWith('switchModel:')).length === wizardSwitches,
       JSON.stringify(channel.calls))
-    check(`J13c ${item.name}：不进接入层（启用哪些已在向导里问过）`,
-      !s.screen().includes('接入哪些') && !s.screen().includes('哪个设为默认模型'), s.screen())
+    check(`J13c ${item.name}：不进选默认层（启用与切换已在向导里问过）`,
+      !s.screen().includes('保持当前模型'), s.screen())
     s.close()
   }
 }
@@ -1208,8 +1219,8 @@ const oauthRow = (provider: string) => ({
   draft.clearOnboardingDraft()
 }
 {
-  // J18（review R2）：80×24 下 30 个新模型，接入层两个区都要窗口化——焦点行落在
-  // 视口外时 Space/Enter 仍作用在它上面，等于盲操作。
+  // J18（review R2）：80×24 下 30 个新模型，选默认层要窗口化——焦点行落在
+  // 视口外时 Enter 仍作用在它上面，等于盲操作。
   const many = Array.from({ length: 30 }, (_, index) => ({
     provider: 'xai',
     id: `model-${index}`,
@@ -1233,22 +1244,166 @@ const oauthRow = (provider: string) => ({
   await s.send('\r')
   await settled(() => s.screen().includes('选择要登录的账号'))
   await s.send('\r')
-  check('J18 前置：30 个新模型进了接入层', await settled(() => s.screen().includes('xai-model-00')), s.screen())
+  check('J18 前置：30 个新模型进了选默认层', await settled(() => s.screen().includes('xai-model-00')), s.screen())
   // 只看焦点行不够：整帧溢出时 xterm 滚到底，末行焦点照样"可见"，但页头已经被
   // 顶出屏幕。窗口化的不变量是两者同屏——整帧装得下，焦点行也在里面。
-  const fitsWithFocus = (): boolean => s.screen().includes('❯ xai-model-29') && s.screen().includes('第 1 / 4 步')
+  const fits = (needle: string) => (): boolean => s.screen().includes(needle) && s.screen().includes('第 1 / 4 步')
   for (let index = 0; index < 29; index++) await s.send('\u001b[B')
-  check('J18a 模型区焦点行（第 30 个）在 80×24 视口内，页头也还在',
-    await settled(fitsWithFocus), s.screen())
-  await s.send('\t')
-  for (let index = 0; index < 29; index++) await s.send('\u001b[B')
-  check('J18b 默认区焦点行同样在视口内，页头也还在',
-    await settled(fitsWithFocus), s.screen())
-  await s.send(' ')
+  check('J18a 焦点行（第 30 个）在 80×24 视口内，页头也还在',
+    await settled(fits('❯ xai-model-29')), s.screen())
+  await s.send('\u001b[B')
+  check('J18b 再往下是"保持当前模型"：同样在视口内，页头也还在',
+    await settled(fits('❯ 保持当前模型')), s.screen())
+  await s.send('\u001b[A')
   await s.send('\r')
   check('J18c 落点就是屏幕上那一行',
     await settled(() => s.channel.calls.includes('switchModel:xai/model-29')), JSON.stringify(s.channel.calls))
   s.close()
+}
+{
+  // J19（review R2）：没有 DeepSeek key、余额检查 no-key，但订阅账号已登录——第一步
+  // 不再说"没有可用的凭证"，而是说明 DeepSeek 检查已跳过、已接入了谁；登录结算后的
+  // 成功提示仍在。
+  let signedIn = false
+  let catalog: readonly { provider: string; id: string; name: string }[] = MODELS
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    balanceInfo: async () => ({ ok: false, reason: 'no-key' }),
+    listModels: async () => catalog,
+    oauthProviderStatuses: async () => [{ ...oauthRow('xai'), signedIn }],
+    providerSetup: () => ({ oauth: {} }),
+  })
+  const s = await openWizard([], {
+    step: 0,
+    channel,
+    signIn: async () => {
+      signedIn = true
+      catalog = [...MODELS, { provider: 'xai', id: 'grok-4', name: 'Grok 4' }]
+      return 'added'
+    },
+  })
+  check('J19 前置：登录前（什么都没有）照常报缺凭证',
+    await settled(() => s.screen().includes(connFailText('no-key'))), s.screen())
+  await settled(() => s.screen().includes('❯ 登录订阅账号'))
+  s.send('\r')
+  await settled(() => s.screen().includes('选择要登录的账号'))
+  s.send('\r')
+  check('J19a 登录后成功提示在，且不再出现"没有可用的凭证"',
+    await settled(() => s.screen().includes('默认模型设为 Grok 4')
+      && s.screen().includes('已跳过 DeepSeek 余额检查') && s.screen().includes('已接入：xai'))
+    && !s.screen().includes(connFailText('no-key')), s.screen())
+  check('J19b 凭证行改为中性说明（不再是 ✗ 还没检测到）',
+    s.screen().includes('只有 DeepSeek 官方 API 需要') && !s.screen().includes('✗ 还没检测到'), s.screen())
+  check('J19c 有可用接入时不再堆手工设置的兜底文案',
+    !s.screen().includes('credentials.yaml') && !s.screen().includes('setx'), s.screen())
+  s.close()
+}
+{
+  // J20（review R2；本地演示里撞到的那一组）：用 /provider 配好的 key 路由同样算
+  // "能用"——只有 key 真的在的路由才算，DEEPSEEK_API_KEY 那一条不算。
+  const channel = makeChannel({
+    describeCredential: async (name: string) => ({ configured: name === 'DEMO_GW_API_KEY', source: 'config', writable: true }),
+    balanceInfo: async () => ({ ok: false, reason: 'no-key' }),
+    providerSetup: () => ({
+      listConfiguredProviders: () => [
+        { route: 'demo-gw', ref: 'DEMO_GW_API_KEY', shadowed: false, isCatalog: false },
+        { route: 'stale-gw', ref: 'STALE_GW_API_KEY', shadowed: false, isCatalog: false },
+        { route: 'deepseek-official', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true },
+      ],
+    }),
+  })
+  const s = await openWizard([], { step: 0, channel, addProvider: async () => 'cancelled' })
+  check('J20a 配好 key 的路由让 DeepSeek 检查变成中性说明',
+    await settled(() => s.screen().includes('已接入：demo-gw')) && !s.screen().includes(connFailText('no-key')), s.screen())
+  check('J20b key 不在的路由与 DEEPSEEK_API_KEY 路由都不算接入',
+    !s.screen().includes('stale-gw') && !s.screen().includes('deepseek-official'), s.screen())
+  s.close()
+}
+{
+  // J21（review R3）：登录行的可见性与执行走同一个接缝（`providerSetup()?.oauth`）。
+  // 只有 dsh-auth、没有 /provider 宿主服务时不画登录行（点了只会报未挂载）；
+  // dsh-auth 晚于首帧组合进来时，登录行不必等"重新检查"。
+  const bare = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    oauthProviderStatuses: async () => [oauthRow('xai')],
+  })
+  const s = await openWizard([], { step: 0, channel: bare, signIn: async () => 'failed' })
+  await settled(() => s.screen().includes('重新检查') && s.screen().includes('订阅登录不可用'))
+  check('J21a 有 dsh-auth 但没有 providerSetup → 不画登录行，兜底不断言"未挂载 dsh-auth"',
+    !s.screen().includes('登录订阅账号（OAuth）') && s.screen().includes('当前组合里订阅登录不可用')
+    && !s.screen().includes('未挂载 dsh-auth'), s.screen())
+  s.close()
+  let composed = false
+  const late = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    oauthProviderStatuses: async () => composed ? [oauthRow('xai')] : undefined,
+    providerSetup: () => composed ? { oauth: {} } : undefined,
+  })
+  const l = await openWizard([], { step: 0, channel: late, signIn: async () => 'cancelled', addProvider: async () => 'cancelled' })
+  await settled(() => l.screen().includes('重新检查') && called(late, 'describeCredential'))
+  const checksBefore = late.calls.filter(call => call.startsWith('describeCredential')).length
+  composed = true
+  await l.send('\u001b[B') // 任意一次重画（真机里是 channel 版本变化）
+  check('J21b 晚到的 dsh-auth：不点"重新检查"登录行也会出现',
+    await settled(() => l.screen().includes('登录订阅账号（OAuth）'))
+    && late.calls.filter(call => call.startsWith('describeCredential')).length === checksBefore, l.screen())
+  l.close()
+}
+{
+  // J22（review R5）：提示行带语气——失败用 error、取消用 warning、成功用 success，
+  // 重挂后从 draft 读回也是同一个语气。
+  const draft = await import('../src/onboardingDraft.js')
+  const outcomes: ('failed' | 'cancelled' | 'added')[] = ['failed', 'cancelled', 'added']
+  let catalog: readonly { provider: string; id: string; name: string }[] = MODELS
+  const channel = makeChannel({
+    describeCredential: async () => ({ configured: false, source: 'none', writable: true }),
+    listModels: async () => catalog,
+    oauthProviderStatuses: async () => [oauthRow('xai')],
+    providerSetup: () => ({ oauth: {} }),
+  })
+  const s = await openWizard([], {
+    step: 0,
+    channel,
+    signIn: async () => {
+      const outcome = outcomes.shift() ?? 'added'
+      if (outcome === 'added') catalog = [...MODELS, { provider: 'xai', id: 'grok-4', name: 'Grok 4' }]
+      return outcome
+    },
+  })
+  const signIn = async (): Promise<void> => {
+    await settled(() => s.screen().includes('❯ 登录订阅账号'))
+    s.send('\r')
+    await settled(() => s.screen().includes('选择要登录的账号'))
+    s.send('\r')
+  }
+  /** 目标文本首格的前景色（xterm 的调色板/RGB 编码值）。 */
+  const fg = (needle: string): number | undefined => {
+    const at = findCell(s.term, needle)
+    if (at === null) return undefined
+    const buffer = s.term.buffer.active
+    return buffer.getLine(buffer.viewportY + at.row - 1)?.getCell(at.col - 1)?.getFgColor()
+  }
+  await signIn()
+  await settled(() => s.screen().includes('这次配置没有完成'))
+  const failedTone = draft.readOnboardingDraft()?.notice?.tone
+  const failedFg = fg('这次配置没有完成')
+  await signIn()
+  await settled(() => s.screen().includes('已取消，没有写入任何东西'))
+  const cancelledTone = draft.readOnboardingDraft()?.notice?.tone
+  const cancelledFg = fg('已取消，没有写入任何东西')
+  await signIn()
+  await settled(() => s.screen().includes('默认模型设为 Grok 4'))
+  const addedTone = draft.readOnboardingDraft()?.notice?.tone
+  const addedFg = fg('默认模型设为 Grok 4')
+  check('J22a draft 里的语气：失败 error、取消 warning、成功 success',
+    failedTone === 'error' && cancelledTone === 'warning' && addedTone === 'success',
+    JSON.stringify({ failedTone, cancelledTone, addedTone }))
+  check('J22b 屏幕上三种提示是三种颜色（失败/取消不再是成功色）',
+    failedFg !== undefined && cancelledFg !== undefined && addedFg !== undefined
+    && new Set([failedFg, cancelledFg, addedFg]).size === 3,
+    JSON.stringify({ failedFg, cancelledFg, addedFg }))
+  s.close()
+  draft.clearOnboardingDraft()
 }
 
 if (failures === 0) console.log(`\nverify-onboarding-wizard: ${checks} checks, all passed`)

@@ -129,10 +129,10 @@ Chat 已经持有 `questionStore` 与 `providerWizard.js` 的既有值 import，
         └──────┬──────┘
                ▼   结算：在挂的实例做；订阅把"迟到的完成"送到它
         ┌─────────────┐
-        │  adopting   │  目录差分：0 → none（只报结果）；1 → auto；N → 内联多选 + 默认单选；加 key → 只报结果
+        │  adopting   │  目录差分：0 → none（只报结果）；1 → auto；N → 内联选默认（单选 + 保持当前模型）；加 key → 只报结果
         └──────┬──────┘
                ▼
-            ready（提示"已接入 N 个模型，默认 X"）
+            ready（提示一句结果："已接入 X，默认模型设为 Y" 等）
 ```
 
 Esc 语义不变：任何时候 Esc 跳过整个引导（不记账）；接入子流程内部 Esc 由各自面板/
@@ -144,6 +144,10 @@ Esc 语义不变：任何时候 Esc 跳过整个引导（不记账）；接入�
 
 1. 首帧读 `channel.oauthProviderStatuses()`。未挂 `dsh-auth`（返回 `undefined` 或空）时
    **不画**登录行，而不是假装能点；同理没有 `providerSetup()` 时不画"添加模型提供方"。
+   登录行的可见性与执行走同一个接缝：Chat 执行登录取的是 `providerSetup()?.oauth`，所以只有它
+   在时才画登录行——"有 dsh-auth、没有 `/provider` 宿主服务"的组合不出现点了就报未挂载的死入口，
+   兜底文案也只说"当前组合里订阅登录不可用"，不断言是哪个插件没挂。登录状态在重新检查、打开
+   选账号层、以及 `oauth` 接缝晚于首帧出现时都会重读，晚到的组合不必等用户点"重新检查"。
 2. 用户在某一行 Enter → Chat 提供的 `onProviderSignIn(provider)` →
    `runOAuthLogin(deps, oauth, provider)` → 面板走设备码/授权 URL/浏览器
    （`src/dsh-adapter/oauth/opener.ts` 的 `openInBrowser`，win32 分支已处理 `&` 引号问题）。
@@ -202,14 +206,21 @@ export function planModelAdoption(input: {
 
 | 路径 | 持久化的东西 | 引导里的措辞 |
 | --- | --- | --- |
-| OAuth 登录 | provider 凭据（插件自己的存储）；模型**登录后即可用**（凭据门控目录） | 1 个："已接入 X，默认模型设为 Y"；多个：接入层"X 接入 N 个可用模型" |
+| OAuth 登录 | provider 凭据（插件自己的存储）；模型**登录后即可用**（凭据门控目录） | 1 个："已接入 X，默认模型设为 Y"；多个：选默认层"X 接入 N 个可用模型"，选中后同一句 |
 | `/provider` key 路由 | 路由 profile（含选中的 `models`）+ 凭据 ref；切换题选中的模型 | "已接入 X 的 N 个模型；默认模型：Y" |
 | 默认模型 | `channel.switchModel(provider, id)` → `~/.dsh-tui/model.json`（`src/dsh-adapter/channel/model-switch.ts`） | "默认模型：Y" |
 
 因此"是否增加"这个问句：
 - key 路由：由 `/provider` 自己的模型多选与切换题回答（真持久化），引导不重复问；
-- OAuth：**不假装有 enable 列表**，N>1 时先多选（决定哪些进默认候选），再单选默认；
-  只有一个时连问都不问，直接设为默认。
+- OAuth：**不假装有 enable 列表**。登录后这些模型已经全部可用，`/model` 与第 3 步读的都是全量
+  目录，没有任何地方保存"接入哪几个"——多选只会让用户以为做了筛选。所以 N>1 时只问"哪个当
+  默认"（单选，末尾一行"保持当前模型"）；只有一个时连问都不问，直接设为默认。
+
+第一步的凭证行与余额检查只针对 DeepSeek 官方 API（`balanceInfo` 只认 `DEEPSEEK_API_KEY`）。
+已经有别的接入——已登录的订阅账号，或 `/provider` 配好且 key 真的在的路由——时，缺 DeepSeek
+key 不画成失败：凭证行改成"未配置 DEEPSEEK_API_KEY（只有 DeepSeek 官方 API 需要）"，余额检查
+改成"已跳过 DeepSeek 余额检查；已接入：…"，手工设置的兜底文案也一并收起。刚登录或刚配好的人
+不该看到"没有可用的凭证"。
 
 登出、改路由、删路由也会从这两个动作里跑出来（登录行选已登录账号、`/provider` 选"编辑"）。
 它们本意不是新增，结算时报流程自己的那一句（"已退出…"、"已删除…"），不说"没有新增可用模型"。
@@ -226,6 +237,8 @@ export function planModelAdoption(input: {
   路由 id 非法、OAuth 未挂载……），而整屏引导盖住了通知条。跑动作的实例在 `start()` 前
   记下最后一条通知的 id，结束后把它之后最新的那一条写进 `completed.notice`；结算时
   失败显示"这次配置没有完成：<原因>"，没有新通知才用通用文案。开跑前就在的旧通知不算。
+  提示行带语气：成功用 success、取消与"没有新增"用 warning、失败用 error；语气与文字一起存进
+  draft，重挂后不会变回成功色。
 - **登录失败/取消**：`runOAuthLogin` 已把 `UserQuestionError` 归一成 `'cancelled'`，
   其余错误归一成 `'failed'` 并 notify。取消/失败不读目录，只回到动作层。
 - **凭据写入**：引导不自己写凭据；`/provider` 的回滚语义（先凭据后 profile，profile
@@ -253,17 +266,15 @@ export function planModelAdoption(input: {
 - 第一步的动作行是 `ListItem`（既有鼠标悬停/点击契约），键盘 ↑/↓ 移焦点、Enter 触发。
   动作清单是异步长出来的（先有"重新检查/跳过"，状态读回后才有"登录/加 key"），所以焦点
   按**动作 id** 记与恢复，不按下标。
-- 内联接入层（N 分支）是引导自己的模态层，两个键各管一件事：**`Space` = 选择**
-  （模型区勾/去勾当前行；默认区把当前行标记为默认），**`Enter` = 确定**（模型区确认这批
-  勾选并进默认区；默认区把标记的那一个落成默认模型）。`↑`/`↓` 只移动焦点、不改标记，
-  `Tab` 换区，`Esc` 退一层（不关引导）。标记与焦点分开画（✓ = 已选中，❯ = 焦点），
-  所以"Enter 落的是 ✓ 那一行"是可读的；这与既有的工作区模态层同构。
-- 两个区都按 `listWindow` 窗口化：模型可能几十个，焦点行必须始终在视口内，否则 Space/Enter
-  就成了盲操作。
-- 鼠标点击与 `Space` 走**同一个**勾选函数（`toggleAdoptSelection`）：被点掉的若是"标记的默认"，
-  标记让给还选着的第一个。
+- 内联选默认层（N 分支）是引导自己的模态层，只有单选：`↑`/`↓` 移动，`Enter` 把焦点那一行
+  落成默认模型；末尾一行"保持当前模型"（附当前模型名）不动默认，`Esc` 与它同义（退一层，
+  不关引导）。焦点先落在预选上（当前路由在新增里就是它，否则第一个新增模型）。这与 `/provider`
+  切换题的"切换到 X / 保持当前模型"同形，与既有的工作区模态层同构。
+- 列表按 `listWindow` 窗口化：模型可能几十个，焦点行必须始终在视口内，否则 Enter 就成了盲操作；
+  "保持当前模型"固定在窗口之外。
+- 鼠标点击与 Enter 是同一个落点（`applyAdoption`）：点模型行设为默认，点"保持当前模型"不动默认。
 - 全局 Esc 仍然跳过引导；`Ctrl+C` 与 Esc 同义。
-- 底部提示行按当前子状态切换（动作列表 / 勾选 / 选默认），不写死一句话。
+- 底部提示行按当前子状态切换（动作列表 / 选账号 / 选默认），不写死一句话。
 
 ## 6. 门禁与契约影响
 
@@ -283,13 +294,17 @@ export function planModelAdoption(input: {
    基线差分的重复调用幂等、`defaultPick` 的当前路由优先、provider 过滤。
 2. `scripts/verify-onboarding-wizard.tsx`（真 Ink + headless xterm，假 channel + 假动作回调）：
    - 动作行按接缝出现，兜底文案不再有 `~/.deepseek/config.json`；
-   - 0/1/N 三分支、Space/Enter 分工、标记移交；
+   - 0/1/N 三分支；N 分支只有单选、不报"已接入 N 个"，"保持当前模型"不调 `switchModel`，
+     鼠标与键盘同一个落点（J4/J8/J10）；
    - draft：卸载-重挂后保持步骤与焦点，面板接管期间不早结算，迟到的完成只结算一次，
      两单交错时旧单不顶掉新单；
    - 加 key 只报结果，不推翻向导里的选择（J13）；
    - 失败原因与登出/删除结果在引导里可见（J14/J15）；
    - 关屏后迟到的目录读取不启动登录、不写回 draft，两单的目录都卡住时旧单作废（J16/J17）；
-   - 80×24 下 30 个新模型，接入层两个区的焦点行都在视口内（J18）。
+   - 80×24 下 30 个新模型，选默认层的焦点行与"保持当前模型"都在视口内（J18）；
+   - 已登录订阅账号或配好 key 路由时，缺 DeepSeek key 不报"没有可用的凭证"（J19/J20）；
+   - 登录行与执行同一接缝、晚到的 dsh-auth 不需要重新检查（J21）；
+   - 失败/取消/成功三种提示三种语气，draft 里也一样（J22）。
 3. `scripts/verify-provider-wizard.mjs`：切换题列出全部启用模型并以"保持当前模型"收尾，
    选中第二个时切到第二个（3b）。
 4. `scripts/verify-i18n.ts`、`scripts/verify-launchpad-onboarding-chat.tsx`（Chat 集成：

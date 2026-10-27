@@ -10,22 +10,19 @@
  *   D. provider 过滤：登录某个账号时只看它的模型，不把别的账号顺带算进来。
  *   E. 默认预选：当前路由若在新增里就选它（重新登录当前 provider 不该挪默认），
  *      否则取第一个。
- *   F. 勾选与落点：默认全选、toggle 返回新集合、`selectedModelRefs` 保序、
- *      `resolveDefaultPick` 在预选被取消后回退到第一个勾中的模型。
  *   G. 多 provider：`multiProvider` 与首现顺序分组。
+ *
+ * （没有 F 组：多个新增时引导只问"哪个当默认"，不做多选——登录后的模型全部可用，
+ * 没有可保存的"接入子集"。单选的落点由 verify-onboarding-wizard 的 J4/J8/J10/J18 钉住。）
  *
  * 运行：node --import tsx/esm scripts/verify-onboarding-provider-plan.ts
  */
 import {
   addedModelRefs,
   addedProviderOrder,
-  defaultSelection,
   modelRefKey,
   modelRefsOf,
   planModelAdoption,
-  resolveDefaultPick,
-  selectedModelRefs,
-  toggleModelRef,
   type ProviderModelRef,
 } from '../src/components/onboardingProviderPlan.js'
 
@@ -127,26 +124,6 @@ const ref = (provider: string, id: string, name = id): ProviderModelRef => ({ pr
     currentRoute: { provider: 'openai', id: 'gpt-5.6' },
   })
   check('E3 当前路由已不在目录里 → 仍回退第一个', inactive.defaultPick?.id === 'grok-3')
-}
-
-// ── F. 勾选与落点 ──────────────────────────────────────────────────────────
-{
-  const added = [ref('xai', 'grok-4'), ref('xai', 'grok-4-mini'), ref('xai', 'grok-3')]
-  const all = defaultSelection(added)
-  check('F1 默认全选（问句是"要不要接入"，默认答案是"要"）', all.size === 3)
-  const without = toggleModelRef(all, modelRefKey(added[1]!))
-  check('F2 toggle 返回新集合、原集合不动',
-    without.size === 2 && !without.has('xai/grok-4-mini') && all.size === 3
-    && toggleModelRef(without, 'xai/grok-4-mini').size === 3)
-  const picked = selectedModelRefs(added, without)
-  check('F3 selectedModelRefs 保持目录顺序',
-    picked.length === 2 && picked[0]!.id === 'grok-4' && picked[1]!.id === 'grok-3')
-  check('F4 预选仍在勾选里 → 保持预选',
-    resolveDefaultPick(picked, added[0])?.id === 'grok-4')
-  check('F5 预选被取消 → 回退到第一个勾中的模型',
-    resolveDefaultPick(picked, added[1])?.id === 'grok-4')
-  check('F6 一个都没勾 → 不给默认（调用方按"跳过选默认"处理）',
-    resolveDefaultPick([], added[0]) === undefined)
 }
 
 // ── G. 多 provider 分组 ────────────────────────────────────────────────────

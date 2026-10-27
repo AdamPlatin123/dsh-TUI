@@ -150,9 +150,8 @@ results back to the chat screen and add no new behavior.
   focused action row — sign in to a subscription / add a provider (API key) / check again / skip this step;
   both sign-in and key entry ride the shared question panel, which takes over the whole terminal and then
   remounts the guide exactly where it was (progress lives in `src/onboardingDraft.ts`); after a sign-in
-  with several new models an inline adoption layer appears: `Space` **selects**, `Enter` **confirms**
-  (in the model zone Space toggles what to adopt and Enter moves on to "which becomes the default"; in the
-  default zone Space marks a row and Enter writes it), `↑`/`↓` move, `Tab` switches zone, `Esc` only pops
+  with several new models an inline default picker (single choice) appears: `↑`/`↓` move, `Enter` sets the
+  default, the last row "Keep the current model" leaves it alone, and `Esc` means the same and only pops
   that layer. Step 3 = drill into a provider /
   switch model / open the workspace picker — **effort is not
   on Enter**, it is `←`/`→` only and applies as you move); the theme pane previews on cursor move while the

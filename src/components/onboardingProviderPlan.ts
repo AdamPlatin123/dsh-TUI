@@ -35,7 +35,10 @@ export interface ProviderModelRef {
  *   - `none` — nothing new; the caller only reports the action's outcome.
  *   - `auto` — exactly one new model; it becomes the default without asking
  *     (the product rule: one candidate needs no question).
- *   - `ask`  — several; the caller asks which to adopt and which is default.
+ *   - `ask`  — several; the caller asks which one becomes the default. All of
+ *     them are usable either way (the catalog is credential-gated, not
+ *     selection-gated), so there is nothing to adopt or leave out — only a
+ *     default to pick.
  */
 export type AdoptionDecision = 'none' | 'auto' | 'ask'
 
@@ -146,68 +149,4 @@ export function addedProviderOrder(added: readonly ProviderModelRef[]): readonly
   const order: string[] = []
   for (const row of added) if (!order.includes(row.provider)) order.push(row.provider)
   return order
-}
-
-/**
- * Toggle one row in a selection set, returning a new set (React state safe).
- *
- * @param selected - Current selection (model ref keys).
- * @param key - Row key to flip.
- * @returns A new set with the row toggled.
- */
-export function toggleModelRef(
-  selected: ReadonlySet<string>,
-  key: string,
-): ReadonlySet<string> {
-  const next = new Set(selected)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  return next
-}
-
-/**
- * The selection a fresh `ask` branch starts from: every added model is
- * adopted unless the user unchecks it (the question is "add these?", so the
- * default answer is yes).
- *
- * @param added - The plan's `added` rows.
- * @returns Their keys.
- */
-export function defaultSelection(added: readonly ProviderModelRef[]): ReadonlySet<string> {
-  return new Set(added.map(modelRefKey))
-}
-
-/**
- * The models a selection resolves to, in catalog order; an empty selection
- * stays empty (the caller decides whether that means "skip").
- *
- * @param added - The plan's `added` rows.
- * @param selected - Selected keys.
- * @returns Selected rows in `added` order.
- */
-export function selectedModelRefs(
-  added: readonly ProviderModelRef[],
-  selected: ReadonlySet<string>,
-): readonly ProviderModelRef[] {
-  return added.filter(row => selected.has(modelRefKey(row)))
-}
-
-/**
- * The default to apply for a resolved selection: the plan's preselection when
- * it survived the multi-select, else the first selected row. Keeping the
- * preselection stable is what stops "adopt several, keep the current route"
- * from silently changing the default.
- *
- * @param picked - Selected rows (catalog order).
- * @param preferred - The plan's `defaultPick`.
- * @returns The row to make default, or undefined when nothing is selected.
- */
-export function resolveDefaultPick(
-  picked: readonly ProviderModelRef[],
-  preferred: ProviderModelRef | undefined,
-): ProviderModelRef | undefined {
-  if (preferred !== undefined && picked.some(row => modelRefKey(row) === modelRefKey(preferred))) {
-    return preferred
-  }
-  return picked[0]
 }

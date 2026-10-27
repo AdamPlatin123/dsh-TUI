@@ -100,7 +100,17 @@ export interface OnboardingDraft {
    */
   readonly completed: OnboardingCompletion | undefined
   /** Notice line to restore after a remount. */
-  readonly notice: string | undefined
+  readonly notice: OnboardingNotice | undefined
+}
+
+/**
+ * The guide's one-line notice. The tone travels with the text: a failure or a
+ * cancellation restored after a remount must not come back in the success
+ * colour.
+ */
+export interface OnboardingNotice {
+  readonly text: string
+  readonly tone: 'success' | 'warning' | 'error'
 }
 
 /** What `readOnboardingDraft` answers when nothing is in flight. */

@@ -15,7 +15,7 @@ export const ONBOARDING_STEPS = ['access', 'look', 'model', 'keys'] as const
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 
 /**
- * 步骤条需要的**最小**尺寸：四步的标题横排（`❯ API Key 与连通性 · ...`）
+ * 步骤条需要的**最小**尺寸：四步的标题横排（`❯ 账号与模型接入 · ...`）
  * 在 76 列下会被截成残句，在 8 行下会把内容挤没——那时整条不画，进度改由
  * 头部那行"第 N / 4 步"承担（信息不丢，只是换了个地方）。
  */

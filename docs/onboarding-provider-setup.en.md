@@ -141,10 +141,10 @@ on finish/skip. It is in-process only and never serialized.
         └──────┬──────┘
                ▼   settle: by the mounted instance; the subscription delivers a late completion to it
         ┌─────────────┐
-        │  adopting   │  catalog diff: 0 → none (report only); 1 → auto; N → inline multi-select + default pick; key route → report only
+        │  adopting   │  catalog diff: 0 → none (report only); 1 → auto; N → inline default pick (single choice + keep current); key route → report only
         └──────┬──────┘
                ▼
-            ready ("adopted N models, default X")
+            ready (one result line: "Adopted X; default model set to Y", …)
 ```
 
 Esc semantics are unchanged: at any point Esc skips the whole guide (without recording); inside
@@ -156,7 +156,14 @@ the access sub-flow, Esc is consumed by the panel/inline layer and returns to `r
 
 1. The first frame reads `channel.oauthProviderStatuses()`. When `dsh-auth` is not mounted
    (`undefined` or empty) the sign-in row is **not drawn** rather than pretending to work; likewise
-   "Add a model provider" is not drawn without `providerSetup()`.
+   "Add a model provider" is not drawn without `providerSetup()`. The sign-in row's visibility
+   and its execution use the same seam: Chat signs in through `providerSetup()?.oauth`, so the row
+   is drawn only when that is present — a composition with dsh-auth but without the `/provider`
+   host services gets no dead row that reports "not mounted" when clicked, and the fallback only
+   says "subscription sign-in is not available in this composition" without guessing which plugin
+   is missing. The sign-in status is re-read on "check again", when the account picker opens, and
+   when the `oauth` seam appears after the first frame, so a late composition does not wait for
+   the user to press "check again".
 2. Enter on a row calls Chat's `onProviderSignIn(provider)` →
    `runOAuthLogin(deps, oauth, provider)` → the panel drives device codes / authorize URLs / the
    browser (`openInBrowser` in `src/dsh-adapter/oauth/opener.ts`; its win32 branch already handles
@@ -223,16 +230,26 @@ match:
 
 | Path | What is persisted | Copy in the guide |
 | --- | --- | --- |
-| OAuth sign-in | the provider credential (the plugin's own store); models are **usable as soon as you are signed in** (gated catalog) | one: "Adopted X; default model set to Y"; several: the adoption layer "X brought in N models" |
+| OAuth sign-in | the provider credential (the plugin's own store); models are **usable as soon as you are signed in** (gated catalog) | one: "Adopted X; default model set to Y"; several: the default picker "X brought in N models", then the same line |
 | `/provider` key route | the route profile (including the selected `models`) + the credential ref; the model picked on the switch question | "Added N models from X; default model: Y" |
 | Default model | `channel.switchModel(provider, id)` → `~/.dsh-tui/model.json` (`src/dsh-adapter/channel/model-switch.ts`) | "Default model: Y" |
 
 So the "add?" question becomes:
 - key routes: answered by `/provider`'s own model multi-select and switch question (real
   persistence) — the guide does not ask twice;
-- OAuth: **no pretend enable list**; with N>1 it first multi-selects (which ones enter the default
-  candidates) and then single-selects the default; with exactly one, nothing is asked and it is
-  defaulted directly.
+- OAuth: **no pretend enable list**. Once signed in, every one of those models is usable, and
+  `/model` and step 3 read the whole catalog; nothing stores "which ones were adopted", so a
+  multi-select would only make the user believe they had filtered something. With N>1 the guide
+  therefore asks only which one becomes the default (a single choice, ending in "Keep the current
+  model"); with exactly one, nothing is asked and it is defaulted directly.
+
+Step 1's credential row and balance check cover the DeepSeek official API only (`balanceInfo`
+reads `DEEPSEEK_API_KEY` and nothing else). When some other access already works — a signed-in
+subscription account, or a `/provider` route whose key is actually stored — a missing DeepSeek
+key is not drawn as a failure: the credential row becomes "DEEPSEEK_API_KEY is not set (only the
+DeepSeek official API needs it)", the balance check becomes "Skipped the DeepSeek balance check;
+connected: …", and the manual-setup fallback is folded away. Someone who just signed in or just
+added a provider must not be told there is "no usable credential".
 
 A sign-out, a route edit or a route delete can also come out of these two actions (picking a
 signed-in account on the sign-in row, "Edit" in `/provider`). They are not adds, so settling
@@ -253,6 +270,9 @@ reports the flow's own line ("Signed out of …", "Deleted …") instead of "no 
   `start()` and, when the action ends, writes the newest one after it into `completed.notice`;
   settling shows "That configuration did not complete: <cause>", and the generic copy only when no
   new notification arrived. A notification that was already there before the run does not count.
+  The notice line carries a tone — success for results, warning for a cancel or "nothing new",
+  error for a failure — and the tone is stored in the draft with the text, so a remount never
+  repaints a failure in the success colour.
 - **Sign-in fails/cancels**: `runOAuthLogin` already normalizes `UserQuestionError` to
   `'cancelled'` and everything else to `'failed'` with a notification. Cancel/failure reads no
   catalog and returns to the action layer.
@@ -290,17 +310,18 @@ reports the flow's own line ("Signed out of …", "Deleted …") instead of "no 
 - Step 1's action rows are `ListItem`s (existing hover/click contract): ↑/↓ move focus, Enter
   triggers. The list grows asynchronously ("check again / skip" first, "sign in / add key" once
   the status read lands), so focus is tracked and restored by **action id**, not by index.
-- The inline adoption layer (N branch) is the guide's own modal layer, and the two keys do one job
-  each: **`Space` selects** (in the model zone it toggles the focused row; in the default zone it
-  marks the focused row as the default) and **`Enter` confirms** (the model zone confirms this
-  batch and moves to the default pick; the default zone writes the marked row as the default
-  model). `↑`/`↓` only move the focus and never move the mark, `Tab` switches zone, `Esc` pops one
-  layer. Mark and focus are drawn separately (✓ = selected, ❯ = focused), so "Enter applies the ✓
-  row" is readable — isomorphic to the existing workspace modal.
-- Both zones are windowed with `listWindow`: there can be dozens of models, and the focused row
-  must stay inside the viewport, or Space/Enter become blind actions.
-- A mouse click and `Space` share one toggle function (`toggleAdoptSelection`): un-ticking the
-  marked default hands the mark to the first still-selected model.
+- The inline default picker (N branch) is the guide's own modal layer and is a single choice:
+  `↑`/`↓` move, `Enter` writes the focused row as the default model; the last row, "Keep the
+  current model" (with the current model's name), leaves the default alone, and `Esc` means the
+  same (it pops one layer, it does not close the guide). Focus starts on the preselection (the
+  live route when it is among the new models, else the first new model). It has the shape of
+  `/provider`'s "Switch to X / Keep the current model" question and is isomorphic to the existing
+  workspace modal.
+- The list is windowed with `listWindow`: there can be dozens of models, and the focused row must
+  stay inside the viewport, or Enter becomes a blind action; "Keep the current model" sits outside
+  the window.
+- A mouse click and Enter share one landing (`applyAdoption`): clicking a model row makes it the
+  default, clicking "Keep the current model" leaves the default alone.
 - Global Esc still skips the guide; `Ctrl+C` is synonymous.
 - The bottom hint line follows the current sub-state instead of one hard-coded sentence.
 
@@ -325,14 +346,21 @@ reports the flow's own line ("Signed out of …", "Deleted …") instead of "no 
 2. `scripts/verify-onboarding-wizard.tsx` (real Ink + headless xterm, fake channel + fake action
    callbacks):
    - action rows follow the seams, and the fallback no longer mentions `~/.deepseek/config.json`;
-   - the 0/1/N branches, the Space/Enter split, the mark hand-over;
+   - the 0/1/N branches; the N branch is a single choice that never reports "adopted N models",
+     "Keep the current model" calls no `switchModel`, and mouse and keyboard land the same way
+     (J4/J8/J10);
    - the draft: step and focus survive an unmount-remount, no early settle during a panel
      takeover, a late completion settles exactly once, and an old run never overwrites a new one;
    - adding a key only reports and never overrides the wizard's choice (J13);
    - failure causes and sign-out/delete results are visible inside the guide (J14/J15);
    - after closing, a late catalog read starts no sign-in and writes no draft, and with two
      blocked catalog reads the old run is voided (J16/J17);
-   - at 80×24 with 30 new models, the focused row of both adoption zones stays in the viewport (J18).
+   - at 80×24 with 30 new models, the default picker's focused row and "Keep the current model"
+     stay in the viewport (J18);
+   - with a signed-in subscription or a keyed route, a missing DeepSeek key is not reported as
+     "no usable credential" (J19/J20);
+   - the sign-in row uses the execution seam, and a late dsh-auth needs no "check again" (J21);
+   - failure, cancel and success notices carry three tones, in the draft as well (J22).
 3. `scripts/verify-provider-wizard.mjs`: the switch question lists every enabled model and ends
    with "Keep the current model", and picking the second switches to the second (3b).
 4. `scripts/verify-i18n.ts` and `scripts/verify-launchpad-onboarding-chat.tsx` (Chat

@@ -43,10 +43,11 @@ dsh-tui
    account browser sign-in, each annotated with its masked sign-in state), `Add a model provider
    (API key)` (the same wizard as `/provider`: a built-in catalog or a custom endpoint), `Check
    again`, `Skip this step`. After a subscription sign-in, the **newly available models are caught**:
-   none → just a report; exactly one → it becomes the default; several → an inline adoption layer
-   (`Space` **selects**, `Enter` **confirms**: in the model zone Space toggles what to adopt and Enter
-   moves on to "which becomes the default"; in the default zone Space marks a row and Enter writes it;
-   `↑`/`↓` move, `Tab` switches zone). Adding a provider leaves which models to enable and which of
+   none → just a report; exactly one → it becomes the default; several → an inline default picker:
+   all of them are usable once you are signed in, so it only picks the default (`↑`/`↓` move, `Enter`
+   sets the default; the last row "Keep the current model", or `Esc`, leaves it alone). With a
+   signed-in subscription or a keyed route, step 1 no longer reports a missing `DEEPSEEK_API_KEY` as a
+   failure — only the DeepSeek official API's balance check is skipped. Adding a provider leaves which models to enable and which of
    them to switch to (or keeping the current model) to the `/provider` wizard itself; back in the guide
    it only reports the result, without
    asking again or changing the default the wizard settled. When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
