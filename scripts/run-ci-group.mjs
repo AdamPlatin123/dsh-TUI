@@ -724,6 +724,9 @@ const GROUPS = {
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],
+// `~/` 补全与附加回归（issue #1706）：任意深度按 home 展开、`~\` 等价、cwd 里有
+// 字面 `~` 目录时 `~/` 仍指 home、模型侧拿到展开后的绝对路径。
+    ["verify-tilde-home-completion-e2e", ['node', '--import', 'tsx/esm', 'scripts/verify-tilde-home-completion-e2e.mjs']],
 // /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
 // 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
     ["verify-resume-manage", ['node', 'scripts/verify-resume-manage.mjs']],
