@@ -259,6 +259,13 @@ export function Onboarding({
   const [accessPhase, setAccessPhase] = React.useState<AccessPhase>('actions')
   const [signinIndex, setSigninIndex] = React.useState(0)
   const [adopt, setAdopt] = React.useState<AdoptState | undefined>(undefined)
+  /**
+   * 有一单接入动作在跑（draft 里有 `pending`）。问答面板会在两次提问之间关掉、
+   * 本屏重挂回动作列表；这时登录 / 加 key 两行再发起一单，会和在跑的那一单
+   * 并发提问、并发写盘，还会顶掉它的 `pending`，让它的结果无处结算。所以在跑
+   * 期间这两行不接 Enter / 点击，并说一句"配置进行中"。
+   */
+  const [inFlight, setInFlight] = React.useState(() => readOnboardingDraft()?.pending !== undefined)
   /** 目录刷新阀门：接入成功后让第三步重读模型/提供方。 */
   const [catalogNonce, setCatalogNonce] = React.useState(0)
   /**
@@ -467,12 +474,14 @@ export function Onboarding({
         case 'signin':
           return {
             label: t('onboarding-access-action-signin'),
-            desc: t('onboarding-access-action-signin-desc', { signed: signedIn, total }),
+            desc: inFlight
+              ? t('onboarding-access-action-busy-desc')
+              : t('onboarding-access-action-signin-desc', { signed: signedIn, total }),
           }
         case 'add':
           return {
             label: t('onboarding-access-action-add'),
-            desc: t('onboarding-access-action-add-desc'),
+            desc: inFlight ? t('onboarding-access-action-busy-desc') : t('onboarding-access-action-add-desc'),
           }
         case 'recheck':
           return {
@@ -487,7 +496,7 @@ export function Onboarding({
       }
     }
     return accessActionIds.map(id => ({ id, ...describe(id) }))
-  }, [accessActionIds, oauth])
+  }, [accessActionIds, inFlight, oauth])
 
   /**
    * 动作结束之后的唯一收口：读回动作前的目录基线 → 差分 → 0/1/N 决策（加 key 只报结果）。
@@ -590,6 +599,9 @@ export function Onboarding({
     /** 发起这一单的动作 id：重挂后按它把焦点放回同一行（不是按当时的行号）。 */
     focusId: AccessActionId,
   ): Promise<void> => {
+    // 一次只跑一单（见 `inFlight`）。这里现读 draft 再拦一次：同一帧里连按两下时，
+    // 第二下赶在重画之前，`inFlight` 还是旧值。
+    if (readOnboardingDraft()?.pending !== undefined) return
     // 每单一个 id：引导关掉再开、又发起新动作时，上一单迟到的回调不能把
     // 新一单的 `pending` 覆盖成它自己的完成态。
     const pending: OnboardingPendingAction = { ...intent, id: nextOnboardingActionId() }
@@ -644,6 +656,16 @@ export function Onboarding({
     void runProviderAction({ kind: 'add-provider' }, onProviderAddProvider, 'add')
   }, [onProviderAddProvider, runProviderAction])
 
+  /** 动作行的落点（键盘 Enter 与鼠标点击共用）。在跑期间登录 / 加 key 不接。 */
+  const runAccessAction = (id: AccessActionId): void => {
+    if (id === 'signin') {
+      if (!inFlight) openSignIn()
+    } else if (id === 'add') {
+      if (!inFlight) startAddProvider()
+    } else if (id === 'recheck') setCheckNonce(nonce => nonce + 1)
+    else advance()
+  }
+
   /**
    * 选默认层的落点：`pick` 落成默认模型（`switchModel` 与第三步同一条路，写
    * model.json）；`undefined` = 保持当前模型。两条路都不撤回已经登录的东西——
@@ -681,6 +703,8 @@ export function Onboarding({
   React.useEffect(() => {
     const settleIfReady = (): void => {
       const draft = readOnboardingDraft()
+      // "在跑"跟着 draft 走：开跑时写入 `pending`、结束时清掉，重挂的实例也看得到。
+      setInFlight(draft?.pending !== undefined)
       if (draft?.completed === undefined) return
       setAccessPhase('actions')
       void settlePendingAction()
@@ -927,10 +951,7 @@ export function Onboarding({
       }
       if (isPlainReturn(key)) {
         const action = accessActionIds[accessIndex]
-        if (action === 'signin') openSignIn()
-        else if (action === 'add') startAddProvider()
-        else if (action === 'recheck') setCheckNonce(nonce => nonce + 1)
-        else advance()
+        if (action !== undefined) runAccessAction(action)
         event.stopImmediatePropagation()
         return
       }
@@ -973,6 +994,11 @@ export function Onboarding({
         )}
         {step === 'access' && accessPhase === 'actions' && (
           <Box flexDirection="column" marginTop={1}>
+            {inFlight && (
+              <Box marginBottom={1}>
+                <LoadingState message={t('onboarding-access-in-flight')} dimColor />
+              </Box>
+            )}
             {accessRows.map((row, index) => (
               <Box key={row.id} flexDirection="column" onMouseEnter={() => setAccessFocusId(row.id)}>
                 <ListItem
@@ -981,10 +1007,7 @@ export function Onboarding({
                   onClick={(event: ClickEvent) => {
                     event.stopImmediatePropagation()
                     setAccessFocusId(row.id)
-                    if (row.id === 'signin') openSignIn()
-                    else if (row.id === 'add') startAddProvider()
-                    else if (row.id === 'recheck') setCheckNonce(nonce => nonce + 1)
-                    else advance()
+                    runAccessAction(row.id)
                   }}
                 >
                   {row.label}

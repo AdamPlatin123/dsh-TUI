@@ -2888,6 +2888,8 @@ const dict = {
   'onboarding-access-signin-hint': { zh: '**↑/↓** 选账号 · **Enter** 登录 · **Esc** 返回', en: '**↑/↓** pick · **Enter** sign in · **Esc** back' },
   'onboarding-access-oauth-row': { zh: '{{provider}} — {{state}}', en: '{{provider}} — {{state}}' },
   'onboarding-access-back': { zh: '← 返回', en: '← Back' },
+  'onboarding-access-in-flight': { zh: '上一项配置还在进行：接下来的问题会在问答面板里弹出，结束后这里显示结果', en: 'A configuration is still in progress: its next questions open in the question panel, and the result shows here when it ends' },
+  'onboarding-access-action-busy-desc': { zh: '上一项配置结束前不能再发起', en: 'Unavailable until the current configuration ends' },
   'onboarding-access-cancelled': { zh: '已取消，没有写入任何东西', en: 'Cancelled — nothing was written' },
   'onboarding-access-action-failed': { zh: '这次配置没有完成，可以重试或换一种方式', en: 'That configuration did not complete — retry, or use another route' },
   'onboarding-access-action-failed-reason': { zh: '这次配置没有完成：{{reason}}', en: 'That configuration did not complete: {{reason}}' },

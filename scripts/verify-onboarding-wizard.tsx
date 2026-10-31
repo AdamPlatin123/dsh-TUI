@@ -23,7 +23,8 @@
  *      在卸载-重挂后保持；流程的失败原因与登出/删除结果在整屏引导里看得见（J14/J15）；
  *      迟到的目录读取不复活已作废的动作、选默认层在 80×24 下窗口化（J16–J18）；
  *      有别的接入时 DeepSeek 专用检查不报失败（J19/J20）；登录行与执行同一接缝、
- *      晚到的 dsh-auth 不需要重新检查（J21）；失败/取消提示不用成功色（J22）。
+ *      晚到的 dsh-auth 不需要重新检查（J21）；失败/取消提示不用成功色（J22）；一单在跑时
+ *      登录 / 加 key 不能再发起第二单，重挂后也一样（J23）。
  *
  * 运行：node --import tsx/esm scripts/verify-onboarding-wizard.tsx
  */
@@ -1403,6 +1404,49 @@ const oauthRow = (provider: string) => ({
     && new Set([failedFg, cancelledFg, addedFg]).size === 3,
     JSON.stringify({ failedFg, cancelledFg, addedFg }))
   s.close()
+  draft.clearOnboardingDraft()
+}
+
+{
+  // J23（第二轮 review R1）：一单在跑时（draft 有 pending），登录 / 加 key 两行不能再
+  // 发起第二单——否则两套流程并发提问、并发写盘，第二单顶掉 pending，第一单的结果
+  // 无处结算。真实触发：问答面板在两次提问之间关掉，本屏重挂回动作列表。
+  const draft = await import('../src/onboardingDraft.js')
+  let release: ((outcome: 'added') => void) | undefined
+  let addCalls = 0
+  let catalog: readonly { provider: string; id: string; name: string }[] = MODELS
+  const channel = makeChannel({ providerSetup: () => ({}), listModels: async () => catalog })
+  const addProvider = (): Promise<'added'> => {
+    addCalls += 1
+    return new Promise((resolve) => { release = resolve })
+  }
+  const s = await openWizard([], { step: 0, channel, addProvider })
+  await settled(() => s.screen().includes('❯ 添加模型提供方'))
+  await s.send('\r')
+  check('J23 前置：第一单在跑（draft 有 pending，回调调了一次）',
+    await settled(() => draft.readOnboardingDraft()?.pending !== undefined && addCalls === 1),
+    JSON.stringify({ addCalls, pending: draft.readOnboardingDraft()?.pending }))
+  check('J23a 在跑时动作区说"配置进行中"，加 key 行写明暂不可用',
+    await settled(() => s.screen().includes('上一项配置还在进行') && s.screen().includes('上一项配置结束前不能再发起')),
+    s.screen())
+  await s.send('\r')
+  await s.click('添加模型提供方')
+  check('J23b 在跑时再按 Enter / 再点一次都不发起第二单', addCalls === 1, String(addCalls))
+  // 问答面板关掉后的重挂：新实例从 draft 读出"在跑"，同样不接。
+  s.close()
+  const again = await openWizard([], { step: 0, channel, addProvider, keepDraft: true })
+  await settled(() => again.screen().includes('上一项配置还在进行'))
+  await again.send('\r')
+  check('J23c 重挂之后仍然不接（回调还是只调过一次）', addCalls === 1, String(addCalls))
+  catalog = [...MODELS, { provider: 'demo', id: 'demo-1', name: 'demo-1' }]
+  release?.('added')
+  check('J23d 第一单的结果被重挂的实例接住（没有被吞掉）',
+    await settled(() => again.screen().includes('已接入') && !again.screen().includes('上一项配置还在进行')),
+    again.screen())
+  await again.send('\r')
+  check('J23e 结束后动作行恢复可用：再按 Enter 发起新的一单',
+    await settled(() => addCalls === 2), String(addCalls))
+  again.close()
   draft.clearOnboardingDraft()
 }
 

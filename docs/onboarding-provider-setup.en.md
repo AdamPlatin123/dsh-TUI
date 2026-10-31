@@ -69,7 +69,8 @@ elsewhere:
 - G1 Turn step 1 from a read-only check into an **access page**: subscription sign-in, API-key
   configuration and re-check happen inside the guide; stop pushing `DEEPSEEK_API_KEY`.
 - G2 Catch what a subscription sign-in produced: nothing new → no question; exactly one model →
-  auto-default; several → ask which to adopt and which becomes the default. A key route's
+  auto-default; several → pick one of the new models as the default (all of them are usable once
+  signed in, see 3.5). A key route's
   enablement and switch are asked by the `/provider` wizard itself (with several models it lists
   each one for the user to pick, or keeps the current model); the guide only reports (see 3.5).
 - G3 Keep step 3's default model consistent with the adoption result (no second picking pass).
@@ -132,8 +133,8 @@ on finish/skip. It is in-process only and never serialized.
                │   │   └────── check again ──────▶ checking
    sign-in/key │   │
                ▼   │
-        ┌──────────┴──┐   in flight: `pending` stays set; a mid-run remount restores progress and does **not** settle
-        │  in-flight  │
+        ┌──────────┴──┐   in flight: `pending` stays set; a mid-run remount restores progress and does **not** settle;
+        │  in-flight  │   the sign-in / add-key rows refuse and show "in progress" (one action at a time)
         └──────┬──────┘
                ▼   the action ends: write `draft.completed` (added / changed / cancelled / failed,
         ┌─────────────┐   plus the newest notification the flow raised meanwhile)
@@ -360,7 +361,9 @@ reports the flow's own line ("Signed out of …", "Deleted …") instead of "no 
    - with a signed-in subscription or a keyed route, a missing DeepSeek key is not reported as
      "no usable credential" (J19/J20);
    - the sign-in row uses the execution seam, and a late dsh-auth needs no "check again" (J21);
-   - failure, cancel and success notices carry three tones, in the draft as well (J22).
+   - failure, cancel and success notices carry three tones, in the draft as well (J22);
+   - while one action runs, sign-in / add-key cannot start a second one, also after a remount, and
+     the first action's result still settles (J23).
 3. `scripts/verify-provider-wizard.mjs`: the switch question lists every enabled model and ends
    with "Keep the current model", and picking the second switches to the second (3b).
 4. `scripts/verify-i18n.ts` and `scripts/verify-launchpad-onboarding-chat.tsx` (Chat
